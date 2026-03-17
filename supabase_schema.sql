@@ -21,12 +21,20 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE user_stats DISABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION supabase_realtime ADD TABLE user_stats;
 
--- ── 2. quests (퀘스트 완료 여부) ────────────────────────────────────
+-- ── 2. quests (퀘스트 완료 여부 + 사용자 생성 퀘스트 정의) ─────────────
 CREATE TABLE IF NOT EXISTS quests (
-  quest_id     TEXT        PRIMARY KEY,
-  completed    BOOLEAN     NOT NULL DEFAULT FALSE,
-  updated_at   TIMESTAMPTZ DEFAULT NOW()
+  quest_id         TEXT        PRIMARY KEY,
+  completed        BOOLEAN     NOT NULL DEFAULT FALSE,
+  title            TEXT,                      -- 사용자 생성 퀘스트 제목
+  category         TEXT        DEFAULT 'writing',  -- writing | business | health
+  is_user_created  BOOLEAN     NOT NULL DEFAULT FALSE,
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- 기존 테이블에 컬럼이 없는 경우 추가 (이미 생성된 DB용)
+ALTER TABLE quests ADD COLUMN IF NOT EXISTS title           TEXT;
+ALTER TABLE quests ADD COLUMN IF NOT EXISTS category        TEXT DEFAULT 'writing';
+ALTER TABLE quests ADD COLUMN IF NOT EXISTS is_user_created BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE quests DISABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION supabase_realtime ADD TABLE quests;

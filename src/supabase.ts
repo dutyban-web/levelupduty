@@ -103,6 +103,62 @@ export async function fetchAllJournals(): Promise<JournalRow[]> {
   } catch { return [] }
 }
 
+// ══════════════════════════════════════════════════════════════
+//  quests 테이블 — 사용자 직접 생성 퀘스트
+//  (is_user_created = true 인 행만 대상)
+// ══════════════════════════════════════════════════════════════
+export interface UserQuestRow {
+  quest_id:        string
+  title:           string
+  category:        string   // 'writing' | 'business' | 'health'
+  completed:       boolean
+}
+
+/** 사용자가 직접 만든 퀘스트 목록을 가져온다 */
+export async function fetchUserCreatedQuests(): Promise<UserQuestRow[]> {
+  if (!supabase) return []
+  try {
+    const { data, error } = await supabase
+      .from('quests')
+      .select('quest_id, title, category, completed')
+      .eq('is_user_created', true)
+      .order('updated_at', { ascending: true })
+    if (error || !data) return []
+    return data as UserQuestRow[]
+  } catch { return [] }
+}
+
+/** 새 사용자 퀘스트를 quests 테이블에 insert */
+export async function insertUserQuest(
+  questId: string,
+  title:   string,
+  category: string
+): Promise<void> {
+  if (!supabase) return
+  try {
+    await supabase.from('quests').insert({
+      quest_id:        questId,
+      title,
+      category,
+      completed:       false,
+      is_user_created: true,
+      updated_at:      new Date().toISOString(),
+    })
+  } catch (e) {
+    console.warn('[Supabase] insertUserQuest error:', e)
+  }
+}
+
+/** 사용자 퀘스트를 quests 테이블에서 삭제 */
+export async function deleteUserQuestRow(questId: string): Promise<void> {
+  if (!supabase) return
+  try {
+    await supabase.from('quests').delete().eq('quest_id', questId)
+  } catch (e) {
+    console.warn('[Supabase] deleteUserQuestRow error:', e)
+  }
+}
+
 /** 일지 전체 store를 Supabase에 일괄 upsert (fire-and-forget) */
 export async function syncJournals(
   store: Record<string, { content?: string; blocks?: unknown[] }>

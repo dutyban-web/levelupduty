@@ -4,6 +4,7 @@ import {
   fetchUserStats, upsertUserStats,
   fetchCompletedQuestIds, upsertQuest,
   fetchAllJournals, syncJournals,
+  fetchUserCreatedQuests, insertUserQuest, deleteUserQuestRow,
 } from './supabase'
 import { loadStatus, saveSelectedProjects, saveSelectedQuests, recordFocusSession } from './utils/storage'
 import {
@@ -216,6 +217,26 @@ const QUEST_CATEGORIES = [
   },
 ]
 const ALL_QUESTS = QUEST_CATEGORIES.flatMap(c => c.quests)
+
+// 퀘스트 추가 UI에서 사용하는 카테고리 옵션
+const CAT_OPTS = [
+  { id: 'writing',  label: '집필',         col: '#818cf8', emoji: '📋' },
+  { id: 'business', label: '비즈니스/공부', col: '#fbbf24', emoji: '💼' },
+  { id: 'health',   label: '자기관리',      col: '#34d399', emoji: '🏃' },
+] as const
+type CatId = 'writing' | 'business' | 'health'
+
+const USER_QUESTS_KEY = 'creative_os_user_quests_v1'
+
+function loadUserQuests(): Card[] {
+  try {
+    const raw = localStorage.getItem(USER_QUESTS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+function saveUserQuestsLocal(qs: Card[]) {
+  localStorage.setItem(USER_QUESTS_KEY, JSON.stringify(qs))
+}
 
 const DEFAULT_STATS: StatDef[] = [
   { id: 'words',   label: '오늘 작성', value: '0',         unit: '자',       memo: '', col: '#818cf8', emoji: '✍️', isText: false, hasMemo: false },
@@ -3005,6 +3026,12 @@ export default function App() {
   // ── 퀘스트 완료 상태 ──
   const [completedQuests, setCompletedQuests] = useState<string[]>([])
 
+  // ── 사용자 정의 퀘스트 ──
+  const [userQuests,     setUserQuests]     = useState<Card[]>(() => loadUserQuests())
+  const [newQuestTitle,  setNewQuestTitle]  = useState('')
+  const [newQuestCat,    setNewQuestCat]    = useState<CatId>('writing')
+  const [addingQuest,    setAddingQuest]    = useState(false)
+
   // ── XP / 레벨 ──
   const [xpState,       setXpState]       = useState<XpState>(() => loadXp())
   const [levelUpAnim,   setLevelUpAnim]   = useState(false)
@@ -3074,7 +3101,20 @@ export default function App() {
         localStorage.setItem(JOURNAL_KEY, JSON.stringify(store))
       }),
 
-      // ④ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
+      // ④ 사용자 직접 생성 퀘스트
+      fetchUserCreatedQuests().then(rows => {
+        if (!rows.length) return
+        const cards: Card[] = rows.map(r => ({
+          id:    r.quest_id,
+          name:  r.title,
+          sub:   CAT_OPTS.find(c => c.id === r.category)?.label ?? r.category,
+          emoji: CAT_OPTS.find(c => c.id === r.category)?.emoji ?? '✅',
+        }))
+        setUserQuests(cards)
+        saveUserQuestsLocal(cards)
+      }),
+
+      // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
       kvGetAll().then(all => {
         const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, GOURMET_KEY]
         passThrough.forEach(k => { if (all[k]) localStorage.setItem(k, JSON.stringify(all[k])) })
@@ -3152,6 +3192,39 @@ export default function App() {
       }
       return next
     })
+  }
+
+  // ── 사용자 퀘스트 추가 ──
+  async function addUserQuest() {
+    const title = newQuestTitle.trim()
+    if (!title) return
+    setAddingQuest(true)
+    const questId = `user_${Date.now()}`
+    const catOpt  = CAT_OPTS.find(c => c.id === newQuestCat) ?? CAT_OPTS[0]
+    const newCard: Card = { id: questId, name: title, sub: catOpt.label, emoji: catOpt.emoji }
+    setUserQuests(prev => {
+      const next = [...prev, newCard]
+      saveUserQuestsLocal(next)
+      return next
+    })
+    await insertUserQuest(questId, title, newQuestCat)
+    setNewQuestTitle('')
+    setAddingQuest(false)
+  }
+
+  // ── 사용자 퀘스트 삭제 ──
+  function removeUserQuest(questId: string) {
+    setUserQuests(prev => {
+      const next = prev.filter(q => q.id !== questId)
+      saveUserQuestsLocal(next)
+      return next
+    })
+    setCompletedQuests(prev => {
+      const next = prev.filter(id => id !== questId)
+      localStorage.setItem(COMPLETED_KEY, JSON.stringify(next))
+      return next
+    })
+    deleteUserQuestRow(questId)
   }
 
   // ── 스탯 업데이트 ──
@@ -3408,8 +3481,8 @@ export default function App() {
         {/* XP 게이지 바 */}
         <XpBar
           level={xpState.level} currentXp={xpState.currentXp} requiredXp={xpState.requiredXp}
-          doneCount={completedQuests.filter(id => ALL_QUESTS.some(q => q.id === id)).length}
-          totalCount={ALL_QUESTS.length}
+          doneCount={completedQuests.filter(id => [...ALL_QUESTS, ...userQuests].some(q => q.id === id)).length}
+          totalCount={ALL_QUESTS.length + userQuests.length}
         />
 
         {/* 갑술(甲戌) 오늘의 기운 */}
@@ -3458,15 +3531,16 @@ export default function App() {
                   </span>
                 )}
                 <span style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', backgroundColor: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', padding: '3px 10px', borderRadius: '999px' }}>
-                  {completedQuests.filter(id => ALL_QUESTS.some(q => q.id === id)).length} / {ALL_QUESTS.length} 완료
+                  {completedQuests.filter(id => [...ALL_QUESTS, ...userQuests].some(q => q.id === id)).length} / {ALL_QUESTS.length + userQuests.length} 완료
                 </span>
               </div>
             </div>
 
             {/* 전체 퀘스트 프로그레스 바 */}
             {(() => {
-              const doneCount = completedQuests.filter(id => ALL_QUESTS.some(q => q.id === id)).length
-              const pct = ALL_QUESTS.length > 0 ? (doneCount / ALL_QUESTS.length) * 100 : 0
+              const allQ = [...ALL_QUESTS, ...userQuests]
+              const doneCount = completedQuests.filter(id => allQ.some(q => q.id === id)).length
+              const pct = allQ.length > 0 ? (doneCount / allQ.length) * 100 : 0
               return (
                 <div style={{ marginBottom: '16px' }}>
                   <div style={{ height: '4px', backgroundColor: '#252535', borderRadius: '999px', overflow: 'hidden' }}>
@@ -3516,6 +3590,133 @@ export default function App() {
                 </div>
               )
             })}
+
+            {/* ── 사용자 추가 퀘스트 섹션 ─────────────────────────────── */}
+            {userQuests.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#a78bfa', boxShadow: '0 0 6px #a78bfa', flexShrink: 0 }} />
+                  <span style={{ fontSize: '11px', fontWeight: 800, color: '#a78bfa', letterSpacing: '0.08em', textTransform: 'uppercase' }}>내 퀘스트</span>
+                  <span style={{ fontSize: '10px', color: '#52525b' }}>
+                    {completedQuests.filter(id => userQuests.some(q => q.id === id)).length} / {userQuests.length} 완료
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '10px' }}>
+                  {userQuests.map(item => {
+                    const isDone = completedQuests.includes(item.id)
+                    return (
+                      <div key={item.id} style={{ position: 'relative', opacity: isDone ? 0.45 : 1, transition: 'opacity 0.3s' }}>
+                        <button
+                          onClick={() => !isDone && toggleQuest(item.id)}
+                          style={{
+                            width: '100%', textAlign: 'left',
+                            padding: '13px 14px 13px 46px',
+                            borderRadius: '14px', cursor: isDone ? 'default' : 'pointer',
+                            border: `2px solid ${selectedQuests.includes(item.id) ? '#6366f1' : isDone ? 'rgba(99,102,241,0.3)' : 'transparent'}`,
+                            backgroundColor: isDone ? 'rgba(99,102,241,0.08)' : '#252535',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: isDone ? '#6b7280' : '#e2e8f0', textDecoration: isDone ? 'line-through' : 'none' }}>
+                            {item.emoji} {item.name}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#52525b', marginTop: '2px' }}>{item.sub}</div>
+                        </button>
+                        {/* 완료 체크 버튼 */}
+                        <button
+                          onClick={e => { e.stopPropagation(); toggleComplete(item.id) }}
+                          title={isDone ? '완료 취소' : '완료 처리'}
+                          style={{
+                            position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                            width: '22px', height: '22px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: isDone ? '#6366f1' : 'rgba(99,102,241,0.15)',
+                            color: isDone ? '#fff' : '#6366f1',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <IcoCheck />
+                        </button>
+                        {/* 삭제 버튼 */}
+                        <button
+                          onClick={e => { e.stopPropagation(); removeUserQuest(item.id) }}
+                          title="퀘스트 삭제"
+                          style={{
+                            position: 'absolute', right: '8px', top: '8px',
+                            width: '18px', height: '18px', borderRadius: '50%', border: 'none', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: 'rgba(239,68,68,0.15)', color: '#f87171',
+                            fontSize: '10px', fontWeight: 900, lineHeight: 1,
+                            opacity: 0.7, transition: 'opacity 0.2s',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                          onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── 새 퀘스트 추가 폼 ────────────────────────────────────── */}
+            <div style={{ marginTop: '20px', padding: '18px', backgroundColor: '#13131f', borderRadius: '16px', border: '1px dashed rgba(99,102,241,0.3)' }}>
+              <p style={{ margin: '0 0 12px', fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.06em' }}>＋ 새 퀘스트 추가</p>
+
+              {/* 카테고리 선택 */}
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                {CAT_OPTS.map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setNewQuestCat(cat.id)}
+                    style={{
+                      padding: '5px 12px', borderRadius: '999px', border: 'none', cursor: 'pointer',
+                      fontSize: '11px', fontWeight: 700,
+                      backgroundColor: newQuestCat === cat.id ? cat.col : 'rgba(255,255,255,0.05)',
+                      color: newQuestCat === cat.id ? '#0f0f1a' : '#71717a',
+                      transition: 'all 0.18s',
+                    }}
+                  >
+                    {cat.emoji} {cat.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* 제목 입력 + 추가 버튼 */}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  value={newQuestTitle}
+                  onChange={e => setNewQuestTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addUserQuest() }}
+                  placeholder="퀘스트 제목 입력 (예: 마감 치기, 운동하기)"
+                  style={{
+                    flex: 1, padding: '10px 14px', borderRadius: '10px',
+                    backgroundColor: '#1e1e2e', border: '1px solid #303050',
+                    color: '#e2e8f0', fontSize: '13px', outline: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                  onFocus={e => (e.target.style.borderColor = '#6366f1')}
+                  onBlur={e  => (e.target.style.borderColor = '#303050')}
+                />
+                <button
+                  onClick={addUserQuest}
+                  disabled={addingQuest || !newQuestTitle.trim()}
+                  style={{
+                    padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                    backgroundColor: addingQuest || !newQuestTitle.trim() ? '#2a2a3a' : '#6366f1',
+                    color: addingQuest || !newQuestTitle.trim() ? '#52525b' : '#fff',
+                    fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap',
+                    transition: 'all 0.2s',
+                    boxShadow: addingQuest || !newQuestTitle.trim() ? 'none' : '0 0 16px rgba(99,102,241,0.35)',
+                  }}
+                >
+                  {addingQuest ? '저장 중…' : '추가'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
