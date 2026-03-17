@@ -1,4 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
+import { kvSet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
+import {
+  fetchUserStats, upsertUserStats,
+  fetchCompletedQuestIds, upsertQuest,
+  fetchAllJournals, syncJournals,
+} from './supabase'
 import { loadStatus, saveSelectedProjects, saveSelectedQuests, recordFocusSession } from './utils/storage'
 import {
   Trophy, BarChart3, BookOpen, Archive, CalendarDays,
@@ -139,6 +145,11 @@ function loadXp(): XpState {
 }
 function saveXp(s: XpState) {
   localStorage.setItem(XP_KEY, JSON.stringify(s))
+  kvSet(XP_KEY, s)
+  // 전용 테이블에도 upsert (스탯은 현재 localStorage 값 병합)
+  const rawStats = localStorage.getItem(STATS_KEY)
+  const stats_json = rawStats ? JSON.parse(rawStats) : {}
+  upsertUserStats({ level: s.level, current_xp: s.currentXp, required_xp: s.requiredXp, stats_json })
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────────
@@ -171,6 +182,8 @@ function loadJournal(): JournalStore {
 }
 function persistJournal(store: JournalStore) {
   localStorage.setItem(JOURNAL_KEY, JSON.stringify(store))
+  kvSet(JOURNAL_KEY, store)
+  syncJournals(store)
 }
 function formatDateKo(key: string, opts?: { full?: boolean }) {
   const d = new Date(key + 'T00:00:00')
@@ -239,6 +252,10 @@ function persistStats(stats: StatDef[]) {
   const payload: Record<string, { value: string; memo: string }> = {}
   stats.forEach(s => { payload[s.id] = { value: s.value, memo: s.memo } })
   localStorage.setItem(STATS_KEY, JSON.stringify(payload))
+  kvSet(STATS_KEY, payload)
+  // 전용 테이블에도 upsert (XP는 현재 localStorage 값 병합)
+  const xp = loadXp()
+  upsertUserStats({ level: xp.level, current_xp: xp.currentXp, required_xp: xp.requiredXp, stats_json: payload })
 }
 
 // ── StatCard 컴포넌트 ──
@@ -1018,6 +1035,7 @@ function saveWorldSection(worldId: string, sectionId: string, content: string) {
   if (!data[worldId]) data[worldId] = {}
   data[worldId][sectionId] = content
   localStorage.setItem(WORLDS_KEY, JSON.stringify(data))
+  kvSet(WORLDS_KEY, data)
 }
 
 function WorldsPage() {
@@ -1569,7 +1587,7 @@ function loadSaju(): SajuStore {
     return { cards: [...defaults, ...(saved.cards ?? [])], records: saved.records ?? [] }
   } catch { return DEFAULT_SAJU_STORE }
 }
-function saveSaju(data: SajuStore) { localStorage.setItem(SAJU_KEY, JSON.stringify(data)) }
+function saveSaju(data: SajuStore) { localStorage.setItem(SAJU_KEY, JSON.stringify(data)); kvSet(SAJU_KEY, data) }
 
 // ── SajuBigeupSection ────────────────────────────────────────────────────────
 function SajuBigeupSection() {
@@ -2189,7 +2207,7 @@ function loadCalendar(): CalStore {
     return { events: [...SAMPLE_EVENTS.filter(e => !existing.has(e.id)), ...saved.events] }
   } catch { return { events: SAMPLE_EVENTS } }
 }
-function saveCalendar(d: CalStore) { localStorage.setItem(CALENDAR_KEY, JSON.stringify(d)) }
+function saveCalendar(d: CalStore) { localStorage.setItem(CALENDAR_KEY, JSON.stringify(d)); kvSet(CALENDAR_KEY, d) }
 
 function buildCalGrid(year: number, month: number): string[][] {
   const firstDow = new Date(year, month, 1).getDay()
@@ -2514,7 +2532,7 @@ function loadTravel(): TravelStore {
     }
   } catch { return { packing: DEFAULT_PACKING, spotMemos: {} } }
 }
-function saveTravel(d: TravelStore) { localStorage.setItem(TRAVEL_KEY, JSON.stringify(d)) }
+function saveTravel(d: TravelStore) { localStorage.setItem(TRAVEL_KEY, JSON.stringify(d)); kvSet(TRAVEL_KEY, d) }
 
 // ── Gourmet & Diet ────────────────────────────────────────────────────────────
 const GOURMET_KEY = 'creative_os_gourmet_v1'
@@ -2570,7 +2588,7 @@ function loadGourmet(): GourmetStore {
     }
   } catch { return { restaurants: DEFAULT_RESTAURANTS, dietMenuNotes: {}, meals: {} } }
 }
-function saveGourmet(d: GourmetStore) { localStorage.setItem(GOURMET_KEY, JSON.stringify(d)) }
+function saveGourmet(d: GourmetStore) { localStorage.setItem(GOURMET_KEY, JSON.stringify(d)); kvSet(GOURMET_KEY, d) }
 
 // ── GourmetSection ────────────────────────────────────────────────────────────
 function GourmetSection() {
@@ -2997,6 +3015,10 @@ export default function App() {
   const [toastMsg,     setToastMsg]     = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ── Supabase 동기화 상태 ──
+  type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
+
   // 타이머 상태 (App 레벨 — 모달↔젠모드 전환 중에도 계속 실행됨)
   const [timerTotal,   setTimerTotal]   = useState(25 * 60)
   const [timerSec,     setTimerSec]     = useState(25 * 60)
@@ -3004,18 +3026,88 @@ export default function App() {
   const [timerDone,    setTimerDone]    = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // 초기 로드
+  // ── 초기 로드 (localStorage) ──
   useEffect(() => {
     const saved = loadStatus()
     if (saved.selected_projects.length) setSelectedProjects(saved.selected_projects)
     if (saved.selected_quests.length)   setSelectedQuests(saved.selected_quests)
-    // 스탯 복원
     setStats(loadStats())
-    // 완료 퀘스트 복원
     try {
       const raw = localStorage.getItem(COMPLETED_KEY)
       if (raw) setCompletedQuests(JSON.parse(raw))
     } catch { /* ignore */ }
+  }, [])
+
+  // ── Supabase 초기 동기화 ─────────────────────────────────────────────────
+  //    user_stats / quests / journals → 전용 테이블
+  //    worlds / saju / calendar / travel / gourmet → app_kv (KV 스토어)
+  useEffect(() => {
+    if (!isSupabaseReady) return
+    setSyncStatus('syncing')
+
+    Promise.all([
+      // ① user_stats 테이블에서 레벨·경험치·스탯 가져오기
+      fetchUserStats().then(row => {
+        if (!row) return
+        const xp: XpState = { level: row.level, currentXp: row.current_xp, requiredXp: row.required_xp }
+        localStorage.setItem(XP_KEY, JSON.stringify(xp))
+        setXpState(xp)
+        if (row.stats_json && Object.keys(row.stats_json).length) {
+          localStorage.setItem(STATS_KEY, JSON.stringify(row.stats_json))
+          setStats(loadStats())
+        }
+      }),
+
+      // ② quests 테이블에서 완료된 퀘스트 ID 가져오기
+      fetchCompletedQuestIds().then(ids => {
+        if (!ids.length) return
+        localStorage.setItem(COMPLETED_KEY, JSON.stringify(ids))
+        setCompletedQuests(ids)
+      }),
+
+      // ③ journals 테이블에서 일지 전체 가져오기
+      fetchAllJournals().then(rows => {
+        if (!rows.length) return
+        type JEntry = { date: string; content: string; blocks: unknown[] }
+        const store: Record<string, JEntry> = {}
+        rows.forEach(r => { store[r.date] = { date: r.date, content: r.content, blocks: r.blocks } })
+        localStorage.setItem(JOURNAL_KEY, JSON.stringify(store))
+      }),
+
+      // ④ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
+      kvGetAll().then(all => {
+        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, GOURMET_KEY]
+        passThrough.forEach(k => { if (all[k]) localStorage.setItem(k, JSON.stringify(all[k])) })
+      }),
+    ])
+      .then(() => { setSyncStatus('synced'); setTimeout(() => setSyncStatus('idle'), 3000) })
+      .catch(() => { setSyncStatus('error'); setTimeout(() => setSyncStatus('idle'), 5000) })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Supabase 실시간 구독 (다른 기기 변경 → 자동 반영) ──
+  useEffect(() => {
+    const channel = subscribeKv((key, value) => {
+      setSyncStatus('synced')
+      setTimeout(() => setSyncStatus('idle'), 2000)
+      if (key === STATS_KEY) {
+        localStorage.setItem(key, JSON.stringify(value))
+        setStats(loadStats())
+      } else if (key === COMPLETED_KEY) {
+        const c = value as string[]
+        localStorage.setItem(key, JSON.stringify(c))
+        setCompletedQuests(c)
+      } else if (key === XP_KEY) {
+        const x = value as XpState
+        localStorage.setItem(key, JSON.stringify(x))
+        setXpState(x)
+      } else {
+        // Journal, Worlds, Saju, Calendar, Travel, Gourmet
+        localStorage.setItem(key, JSON.stringify(value))
+      }
+    })
+    return () => { channel?.unsubscribe() }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Toast 트리거 ──
@@ -3052,6 +3144,8 @@ export default function App() {
       const isDone = prev.includes(id)
       const next = isDone ? prev.filter(x => x !== id) : [...prev, id]
       localStorage.setItem(COMPLETED_KEY, JSON.stringify(next))
+      kvSet(COMPLETED_KEY, next)
+      upsertQuest(id, !isDone)
       if (!isDone) {
         fireToast('Quest Clear! ✓  +20 XP')
         gainXp(XP_PER_QUEST)
@@ -3171,6 +3265,10 @@ export default function App() {
         0%   { transform: translateX(100%); opacity: 0; }
         100% { transform: translateX(0);    opacity: 1; }
       }
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
+      }
     `}</style>
     <div style={{ backgroundColor: '#14141e', minHeight: '100vh', color: '#cbd5e1', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
 
@@ -3219,6 +3317,18 @@ export default function App() {
               <p style={{ margin: 0, fontWeight: 800, fontSize: '13px', color: '#fff', lineHeight: 1 }}>창작 OS</p>
               <p style={{ margin: 0, fontSize: '9px', color: '#52525b', marginTop: '1px' }}>웹툰 작가 성장형 작업실</p>
             </div>
+            {/* Supabase 동기화 상태 표시 */}
+            {isSupabaseReady && syncStatus !== 'idle' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
+                <span style={{ fontSize: '9px', fontWeight: 700, color: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399' }}>
+                  {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'synced' ? 'Synced ✓' : 'Sync Error'}
+                </span>
+              </div>
+            )}
+            {isSupabaseReady && syncStatus === 'idle' && (
+              <div title="Supabase 연결됨" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399', boxShadow: '0 0 6px rgba(52,211,153,0.6)', flexShrink: 0 }} />
+            )}
           </div>
 
           {/* 페이지 탭 */}
