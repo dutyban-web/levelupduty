@@ -1,34 +1,46 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { kvSet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
+import { kvSet, kvGet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
 import {
   supabase as _sbClient,
   fetchUserStats, upsertUserStats,
   fetchAllJournals, syncJournals,
   fetchUserCreatedQuests,
-  updateQuestTitle,
+  updateQuestTitle, updateQuestDeadline, updateQuestIdentity, updateQuestStatus, updateQuestTags, updateQuestSortOrder,
   deleteUserQuestRow, addQuestTimeSpent, updateQuestRemainingTime, incrementQuestPomodoroCount,
-  fetchDailyLog, upsertDailyLog, updateDailyLogPomodoros, updateQuestPomodoroCount,
+  fetchDailyLog, upsertDailyLog, upsertDailyLogFortune, updateDailyLogPomodoros, updateQuestPomodoroCount, setDailyLogTime, updateDailyLogTimeScore,
+  fetchLevelRewards, insertLevelReward, claimLevelReward,
+  setAreaTimeSpent, setProjectTimeSpent, setQuestTimeSpent,
   signIn, signOut, getSession, onAuthStateChange,
   fetchJournalCategories, insertJournalCategory,
   updateJournalCategory, deleteJournalCategory,
   fetchJournalNotes, fetchJournalDates,
   insertJournalNote, updateJournalNote, deleteJournalNote,
   fetchProjects, insertProject, updateProject, deleteProject, addProjectTimeSpent,
-  fetchAreas, insertArea, updateArea, deleteArea, addAreaTimeSpent,
+  fetchAreas, insertArea, updateArea, deleteArea, addAreaTimeSpent, updateAreaSortOrder, updateProjectSortOrder,
+  fetchIdentities, insertIdentity, updateIdentity, deleteIdentity, addIdentityTimeAndXp,
+  type IdentityRow,
+  fetchFortuneDecks, fetchFortuneCards, insertFortuneDeck, updateFortuneDeck, deleteFortuneDeck,
+  type FortuneDeckRow, type FortuneCardRow,
+  insertReadingLog, fetchReadingLogs, fetchReadingLogsInRange, deleteReadingLog, updateReadingLog, type ReadingLogRow, type DrawnCardItem,
+  fetchDailyLogsInRange,
   fetchNoteContent, saveNoteContent, uploadImageToMedia,
   type Session,
   type JournalCategoryRow, type JournalNoteRow, type ProjectRow, type AreaRow,
 } from './supabase'
 import { loadStatus, recordFocusSession } from './utils/storage'
+import { useUndoRedo } from './contexts/UndoRedoContext'
+import Calendar from 'react-calendar'
+import 'react-calendar/dist/Calendar.css'
 import {
   Trophy, BarChart3, BookOpen, Archive, CalendarDays,
   CheckCircle2, PenLine,
-  Scroll, Sparkles, Plus, X, ChevronRight, ChevronLeft,
-  Utensils, Apple, Heart, Timer,
+  Scroll, Sparkles, Plus, X,   ChevronRight, ChevronLeft, ChevronUp, ChevronDown,
+  Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, MoreVertical, Image, CalendarRange, Move, Settings,
 } from 'lucide-react'
+import { Solar } from 'lunar-javascript'
 
 // ═══════════════════════════════════════ RESPONSIVE ═══════════════════════════
-type PageId = 'dashboard' | 'worlds' | 'journal' | 'library' | 'calendar' | 'travel'
+type PageId = 'identity' | 'dashboard' | 'worlds' | 'journal' | 'library' | 'calendar' | 'travel' | 'fortune'
 
 function useIsMobile(): boolean {
   const [mob, setMob] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
@@ -38,6 +50,112 @@ function useIsMobile(): boolean {
     return () => window.removeEventListener('resize', fn)
   }, [])
   return mob
+}
+
+// ── 수동 편집(Override) UI ──
+const EditIcon = ({ onClick, title = '수정' }: { onClick: () => void; title?: string }) => (
+  <button
+    type="button"
+    onClick={e => { e.stopPropagation(); onClick() }}
+    title={title}
+    style={{
+      padding: '2px', marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer',
+      color: '#AEAAA4', transition: 'color 0.15s', display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle',
+    }}
+    onMouseEnter={e => { e.currentTarget.style.color = '#6366f1' }}
+    onMouseLeave={e => { e.currentTarget.style.color = '#AEAAA4' }}
+  >
+    <Pencil size={12} strokeWidth={2} />
+  </button>
+)
+
+function EditableNumber({
+  value, onSave, min = 0, displaySuffix = '', displayOverride, inputPlaceholder = '',
+}: {
+  value: number
+  onSave: (v: number) => void
+  min?: number
+  displaySuffix?: string
+  displayOverride?: string
+  inputPlaceholder?: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [input, setInput] = useState(String(value))
+  useEffect(() => { if (editing) setInput(String(value)) }, [editing, value])
+  const commit = () => {
+    const n = parseInt(input, 10)
+    if (!Number.isNaN(n) && n >= min) onSave(n)
+    setEditing(false)
+  }
+  if (editing) {
+    return (
+      <input
+        type="number"
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') commit() }}
+        autoFocus
+        min={min}
+        placeholder={inputPlaceholder}
+        style={{
+          width: '72px', padding: '4px 8px', fontSize: '13px', border: '1px solid rgba(99,102,241,0.4)',
+          borderRadius: '6px', outline: 'none', backgroundColor: '#FFFFFF',
+        }}
+      />
+    )
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {displayOverride ?? `${value}${displaySuffix}`}
+      <EditIcon onClick={() => setEditing(true)} />
+    </span>
+  )
+}
+
+function EditableTimeMinutes({
+  totalSec, onSave, displayOverride,
+}: {
+  totalSec: number
+  onSave: (sec: number) => void
+  displayOverride?: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const minutes = Math.round(totalSec / 60)
+  const [input, setInput] = useState(String(minutes))
+  useEffect(() => { if (editing) setInput(String(minutes)) }, [editing, minutes])
+  const commit = () => {
+    const n = parseInt(input, 10)
+    if (!Number.isNaN(n) && n >= 0) onSave(n * 60)
+    setEditing(false)
+  }
+  if (editing) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+        <input
+          type="number"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') commit() }}
+          autoFocus
+          min={0}
+          placeholder="분"
+          style={{
+            width: '64px', padding: '4px 8px', fontSize: '13px', border: '1px solid rgba(99,102,241,0.4)',
+            borderRadius: '6px', outline: 'none', backgroundColor: '#FFFFFF',
+          }}
+        />
+        <span style={{ fontSize: '11px', color: '#9B9A97' }}>분</span>
+      </span>
+    )
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {displayOverride ?? `${minutes}분`}
+      <EditIcon onClick={() => setEditing(true)} title="분 단위로 수정" />
+    </span>
+  )
 }
 
 // ═══════════════════════════════════════ RICH EDITOR (WYSIWYG, Notion-style) ═══════════
@@ -197,12 +315,14 @@ function RichEditor({ value, onChange, placeholder, minHeight = 400, readOnly, c
 // ── MobileBottomNav ───────────────────────────────────────────────────────────
 function MobileBottomNav({ active, onNav }: { active: PageId; onNav: (p: PageId) => void }) {
   const ITEMS: { id: PageId; emoji: string; label: string }[] = [
-    { id: 'dashboard', emoji: '⚡',  label: 'Home'    },
-    { id: 'worlds',    emoji: '🌐',  label: 'Worlds'  },
+    { id: 'identity',  emoji: '🎭',  label: 'Identity' },
+    { id: 'dashboard', emoji: '⚡',  label: 'Home'     },
+    { id: 'worlds',    emoji: '🌐',  label: 'Worlds'   },
     { id: 'journal',   emoji: '📓',  label: 'Journal' },
     { id: 'library',   emoji: '📚',  label: 'Library' },
     { id: 'calendar',  emoji: '📅',  label: 'Cal'     },
-    { id: 'travel',    emoji: '✈️',   label: 'Travel'  },
+    { id: 'travel',    emoji: '✈️',  label: 'Travel'  },
+    { id: 'fortune',   emoji: '🔮',  label: 'Fortune' },
   ]
   return (
     <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 500, display: 'flex', backgroundColor: 'rgba(255,255,255,0.95)', borderTop: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
@@ -275,6 +395,10 @@ const IcoReset = () => (
 type Card = {
   id: string; name: string; sub: string; emoji?: string
   projectId?: string | null
+  identityId?: string | null
+  status?: string
+  tags?: string[]
+  sortOrder?: number
   priority?: number; deadline?: string
   timeSpentSec?: number; remainingTimeSec?: number | null
   pomodoroCount?: number
@@ -296,10 +420,69 @@ const COMPLETED_KEY  = 'creative_os_completed_quests'
 const XP_KEY         = 'creative_os_xp_v1'
 const XP_PER_QUEST   = 20
 
-type XpState = { level: number; currentXp: number; requiredXp: number }
+/** 단일 진실 공급원: total_xp만 저장 */
+type XpState = { totalXp: number }
 
+/** RPG 레벨업: 구간별 필요 XP (Lv.1~500) */
 function getRequiredXp(level: number): number {
-  return Math.floor(100 * (1 + (level - 1) * 0.5))
+  if (level <= 100) return 1_000
+  if (level <= 300) return 3_000
+  if (level <= 450) return 4_500
+  return 7_500
+}
+
+/** 레벨 L에 도달하는 데 필요한 누적 XP */
+function cumulativeXpToReachLevel(level: number): number {
+  if (level <= 1) return 0
+  if (level <= 100) return (level - 1) * 1_000
+  if (level <= 300) return 100_000 + (level - 101) * 3_000
+  if (level <= 450) return 700_000 + (level - 301) * 4_500
+  return 1_375_000 + (level - 451) * 7_500
+}
+
+const MAX_LEVEL = 500
+
+/** total_xp → RPG 레벨·진행도 (구간별 1k/3k/4.5k/7.5k XP) */
+function calculateLevel(totalXp: number): {
+  currentLevel: number
+  currentLevelXp: number
+  maxCurrentLevelXp: number
+  baseXpForCurrentLevel: number
+  totalXp: number
+  progressPct: number
+  progressPercentage: number
+} {
+  const clamped = Math.max(0, totalXp)
+  let level = 1
+  let acc = 0
+  for (;;) {
+    const req = getRequiredXp(level)
+    if (acc + req > clamped || level >= MAX_LEVEL) break
+    acc += req
+    level++
+  }
+  const baseXpForCurrentLevel = acc
+  const currentLevelXp = clamped - acc
+  const maxCurrentLevelXp = getRequiredXp(level)
+  const progressPct = maxCurrentLevelXp > 0 ? Math.min((currentLevelXp / maxCurrentLevelXp) * 100, 100) : 0
+  return {
+    currentLevel: level,
+    currentLevelXp,
+    maxCurrentLevelXp,
+    baseXpForCurrentLevel,
+    totalXp: clamped,
+    progressPct,
+    progressPercentage: progressPct,
+  }
+}
+
+/** 일일 작업 시간(분) → 초과근무 가중치 시간 점수(XP) */
+function calculateTimeScore(minutes: number): number {
+  const m = Math.max(0, Math.floor(minutes))
+  if (m <= 480) return Math.floor(m / 10)
+  if (m <= 600) return 48 + Math.floor((m - 480) / 10) * 2
+  if (m <= 720) return 72 + Math.floor((m - 600) / 10) * 3
+  return 108 + Math.floor((m - 720) / 10) * 4
 }
 
 const LEVEL_TITLES: Record<number, string> = {
@@ -314,17 +497,23 @@ function getLevelTitle(level: number): string {
 function loadXp(): XpState {
   try {
     const raw = localStorage.getItem(XP_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (typeof parsed.totalXp === 'number') return { totalXp: parsed.totalXp }
+      if (typeof parsed.level === 'number' && typeof parsed.currentXp === 'number') {
+        return { totalXp: cumulativeXpToReachLevel(parsed.level) + parsed.currentXp }
+      }
+    }
   } catch { /* ignore */ }
-  return { level: 1, currentXp: 0, requiredXp: 100 }
+  return { totalXp: 0 }
 }
 function saveXp(s: XpState) {
   localStorage.setItem(XP_KEY, JSON.stringify(s))
   kvSet(XP_KEY, s)
-  // 전용 테이블에도 upsert (스탯은 현재 localStorage 값 병합)
+  const { currentLevel, maxCurrentLevelXp } = calculateLevel(s.totalXp)
   const rawStats = localStorage.getItem(STATS_KEY)
   const stats_json = rawStats ? JSON.parse(rawStats) : {}
-  upsertUserStats({ level: s.level, current_xp: s.currentXp, required_xp: s.requiredXp, stats_json })
+  upsertUserStats({ level: currentLevel, current_xp: 0, required_xp: maxCurrentLevelXp, total_xp: s.totalXp, stats_json })
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────────
@@ -379,19 +568,42 @@ type CatId = 'writing' | 'business' | 'health'
 // ── QuestTable (Notion 스타일 퀘스트 시트) ──────────────────────────────────
 type ColDef = { key: string; label: string; hidden?: boolean; custom?: boolean; type?: 'text'|'number'|'date' }
 const DEFAULT_COLS: ColDef[] = [
+  { key:'sort',      label:'순서' },
+  { key:'area',      label:'Vision Area' },
+  { key:'project',   label:'Real Projects' },
   { key:'status',    label:'상태' },
   { key:'name',      label:'퀘스트명' },
-  { key:'area',      label:'Area' },
-  { key:'project',   label:'프로젝트' },
+  { key:'tags',      label:'태그' },
   { key:'category',  label:'카테고리' },
   { key:'priority',  label:'중요도' },
-  { key:'deadline',  label:'마감일' },
   { key:'timespent', label:'누적 집중' },
   { key:'pomodoro_count', label:'몰입 횟수' },
   { key:'pomodoro',  label:'타이머 선택' },
   { key:'delete',    label:'관리' },
+  { key:'deadline',  label:'마감일' },
 ]
-const QT_COLS_KEY = 'qt_cols_v3'  // v3: pomodoro_count 컬럼 추가
+const QT_COLS_KEY = 'qt_cols_v4'  // v4: 컬럼 순서 재배치 (Area→Project→Status→Name→...→Due Date)
+
+function TagInput({ tags, onChange, placeholder = '태그 입력 후 Enter' }: { tags: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [input, setInput] = useState('')
+  const addTag = () => {
+    const t = input.trim()
+    if (t && !tags.includes(t)) onChange([...tags, t])
+    setInput('')
+  }
+  return (
+    <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:'6px', padding:'6px 10px', borderRadius:'9px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'#F1F1EF', minWidth:'140px' }}>
+      {tags.map(t => (
+        <span key={t} style={{ display:'inline-flex', alignItems:'center', gap:'4px', fontSize:'11px', fontWeight:600, backgroundColor:'rgba(99,102,241,0.15)', color:'#6366f1', padding:'3px 8px', borderRadius:'999px' }}>
+          {t}
+          <button type="button" onClick={() => onChange(tags.filter(x => x !== t))} style={{ background:'none', border:'none', cursor:'pointer', padding:0, color:'#6366f1', fontSize:'12px', lineHeight:1 }}>×</button>
+        </span>
+      ))}
+      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); addTag() } }} placeholder={placeholder}
+        style={{ flex:1, minWidth:'60px', border:'none', backgroundColor:'transparent', fontSize:'12px', color:'#37352F', outline:'none' }} />
+    </div>
+  )
+}
 const QUEST_FILTER_TABS = ['전체','진행중','완료'] as const
 type QFilter = typeof QUEST_FILTER_TABS[number]
 
@@ -400,6 +612,19 @@ function fmtSec(sec?: number) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+/** D-day 계산: 오늘 기준 남은/지난 일수 → { label, type } */
+function getDDay(deadline: string): { label: string; type: 'future' | 'today' | 'past' } {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const due = new Date(deadline)
+  due.setHours(0, 0, 0, 0)
+  const diffMs = due.getTime() - today.getTime()
+  const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000))
+  if (diffDays === 0) return { label: 'Today', type: 'today' }
+  if (diffDays > 0) return { label: `D-${diffDays}`, type: 'future' }
+  return { label: `D+${Math.abs(diffDays)}`, type: 'past' }
 }
 // 포모도로 횟수 → ⏱️ 아이콘 시각화 (5개 초과 시 "⏱️ x N" 축약)
 function renderPomodoroIcons(count?: number, small = false): React.ReactNode {
@@ -466,16 +691,22 @@ type NoteTarget = {
 }
 
 function NoteModal({
-  target, onClose, onUpdateQuestPomodoroCount,
+  target, onClose, onUpdateQuestPomodoroCount, onUpdateTimeSpent, onUpdateQuestTitle,
 }: {
   target: NoteTarget
   onClose: () => void
   onUpdateQuestPomodoroCount?: (questId: string, newCount: number) => void
+  onUpdateTimeSpent?: (id: string, table: 'areas' | 'projects' | 'quests', sec: number) => void
+  onUpdateQuestTitle?: (id: string, newTitle: string) => void
 }) {
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(target.title)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => { setTitleDraft(target.title) }, [target.title])
 
   useEffect(() => {
     setLoading(true)
@@ -504,7 +735,7 @@ function NoteModal({
   }
 
   const tableLabel: Record<string, string> = {
-    areas: '🌐 Area', projects: '📁 Project', quests: '✅ Quest', journals: '📓 Journal',
+    areas: '🌐 Vision Area', projects: '📁 Real Projects', quests: '✅ Quest', journals: '📓 Journal',
   }
 
   return (
@@ -564,36 +795,85 @@ function NoteModal({
 
         {/* 본문 — 제목 + Properties + 에디터 */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '28px 40px 36px' }}>
-          {/* 큰 제목 */}
-          <h1 style={{
-            margin: '0 0 20px', padding: 0,
-            fontSize: '30px', fontWeight: 800,
-            color: '#37352F', lineHeight: 1.25,
-            wordBreak: 'break-word',
-          }}>
-            {target.title}
-          </h1>
+          {/* 큰 제목 (퀘스트는 클릭 시 편집) */}
+          {target.table === 'quests' && onUpdateQuestTitle ? (
+            editingTitle ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={e => setTitleDraft(e.target.value)}
+                onBlur={async () => {
+                  setEditingTitle(false)
+                  const t = titleDraft.trim()
+                  if (t && t !== target.title) {
+                    await onUpdateQuestTitle!(target.id, t)
+                  } else setTitleDraft(target.title)
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                  if (e.key === 'Escape') { setEditingTitle(false); setTitleDraft(target.title) }
+                }}
+                style={{
+                  margin: '0 0 20px', padding: '4px 10px',
+                  fontSize: '30px', fontWeight: 800,
+                  color: '#37352F', lineHeight: 1.25,
+                  width: '100%', border: '1px solid #6366f1', borderRadius: '8px',
+                  backgroundColor: '#F1F1EF', outline: 'none',
+                }}
+              />
+            ) : (
+              <h1
+                onClick={() => setEditingTitle(true)}
+                style={{
+                  margin: '0 0 20px', padding: 0,
+                  fontSize: '30px', fontWeight: 800,
+                  color: '#37352F', lineHeight: 1.25,
+                  wordBreak: 'break-word',
+                  cursor: 'pointer',
+                  transition: 'color 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#4F46E5' }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#37352F' }}
+                title="클릭하여 제목 수정"
+              >
+                {target.title}
+              </h1>
+            )
+          ) : (
+            <h1 style={{
+              margin: '0 0 20px', padding: 0,
+              fontSize: '30px', fontWeight: 800,
+              color: '#37352F', lineHeight: 1.25,
+              wordBreak: 'break-word',
+            }}>
+              {target.title}
+            </h1>
+          )}
 
           {/* ── Properties 패널 (Notion 스타일) ── */}
           {(target.meta || target.table !== 'journals') && (() => {
             const m = target.meta ?? {}
-            const rows: { icon: string; label: string; value: string }[] = []
+            const rows: { icon: string; label: string; value: string; isTimeRow?: boolean; timeSec?: number }[] = []
             if (target.table === 'quests' || target.table === 'projects' || target.table === 'areas') {
               if (target.table === 'quests') {
-                rows.push({ icon: '📁', label: 'Project', value: m.projectName ?? '—' })
-                rows.push({ icon: '🌐', label: 'Area',    value: m.areaName    ?? '—' })
+                rows.push({ icon: '📁', label: 'Real Projects', value: m.projectName ?? '—' })
+                rows.push({ icon: '🌐', label: 'Vision Area',    value: m.areaName    ?? '—' })
                 rows.push({ icon: '✅', label: '상태',     value: m.isCompleted ? '완료' : '진행 중' })
               }
               if (target.table === 'projects') {
-                rows.push({ icon: '🌐', label: 'Area',    value: m.areaName    ?? '—' })
+                rows.push({ icon: '🌐', label: 'Vision Area',    value: m.areaName    ?? '—' })
               }
-              if (m.timeSpentSec != null) {
-                const h = Math.floor(m.timeSpentSec / 3600)
-                const min = Math.floor((m.timeSpentSec % 3600) / 60)
+              if (target.table === 'quests' || target.table === 'projects' || target.table === 'areas') {
+                const sec = m.timeSpentSec ?? 0
+                const h = Math.floor(sec / 3600)
+                const min = Math.floor((sec % 3600) / 60)
                 const timeStr = h > 0
                   ? `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')} (${h}시간 ${min}분)`
                   : `${String(min).padStart(2,'0')}분`
-                rows.push({ icon: '⏱', label: '누적 집중', value: timeStr })
+                rows.push({ icon: '⏱', label: '누적 집중', value: timeStr, isTimeRow: true, timeSec: sec })
               }
               if (target.table === 'quests') {
                 rows.push({ icon: '🍅', label: '몰입 횟수', value: `__POMODORO_${m.pomodoroCount ?? 0}` })
@@ -612,6 +892,7 @@ function NoteModal({
                   const isPomodoro = r.value.startsWith('__POMODORO_')
                   const pomodoroN = isPomodoro ? parseInt(r.value.replace('__POMODORO_', ''), 10) : 0
                   const canEditPomodoro = isPomodoro && target.table === 'quests' && onUpdateQuestPomodoroCount
+                  const isTimeRow = r.isTimeRow && r.timeSec !== undefined && onUpdateTimeSpent && (target.table === 'areas' || target.table === 'projects' || target.table === 'quests')
                   return (
                     <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: '0' }}>
                       <span style={{
@@ -627,7 +908,13 @@ function NoteModal({
                         fontWeight: r.value !== '—' && r.value !== '진행 중' ? 600 : 400,
                         display: 'flex', alignItems: 'center', gap: '8px',
                       }}>
-                        {isPomodoro ? renderPomodoroIcons(pomodoroN) : r.value}
+                        {isTimeRow ? (
+                          <EditableTimeMinutes
+                            totalSec={r.timeSec ?? 0}
+                            displayOverride={r.value}
+                            onSave={sec => onUpdateTimeSpent!(target.id, target.table as 'areas' | 'projects' | 'quests', sec)}
+                          />
+                        ) : isPomodoro ? renderPomodoroIcons(pomodoroN) : r.value}
                         {canEditPomodoro && (
                           <span style={{ display: 'flex', gap: '4px', marginLeft: '4px' }}>
                             <button
@@ -690,30 +977,49 @@ function NoteModal({
 
 function QuestTable({
   quests, completed, activePomodoroId,
-  projects, areas,
+  projects, areas, identities,
   newTitle, onNewTitle, newCat, onNewCat,
   newQuestAreaId, onNewQuestAreaId,
   newProjectId, onNewProjectId,
-  adding, onAdd, onToggleComplete, onDelete, onSelectPomodoro, onOpenNote,
+  newQuestIdentityId, onNewQuestIdentityId,
+  newQuestTags, onNewQuestTags,
+  adding, onAdd, onToggleComplete, onDelete, onSelectPomodoro, onOpenNote, onQuestNameUpdate, onQuestDeadlineUpdate, onPushQuestNameUndo, onPushQuestDeadlineUndo,
 }: {
   quests: Card[]
   completed: string[]
   activePomodoroId: string | null
   projects: ProjectRow[]
   areas: AreaRow[]
+  identities: IdentityRow[]
   newTitle: string; onNewTitle: (v: string) => void
   newCat: string;   onNewCat:  (v: string) => void
   newQuestAreaId: string; onNewQuestAreaId: (v: string) => void
   newProjectId: string; onNewProjectId: (v: string) => void
+  newQuestIdentityId: string; onNewQuestIdentityId: (v: string) => void
+  newQuestTags: string[]; onNewQuestTags: (v: string[]) => void
   adding: boolean;  onAdd: () => void
   onToggleComplete: (id: string, done: boolean) => void
   onDelete: (id: string) => void
   onSelectPomodoro: (id: string) => void
   onOpenNote: (id: string, title: string, meta?: NoteMeta) => void
+  onQuestNameUpdate: (id: string, newName: string) => void
+  onQuestDeadlineUpdate: (id: string, deadline: string | null) => void
+  onQuestStatusUpdate?: (id: string, status: string) => void
+  onQuestTagsUpdate?: (id: string, tags: string[]) => void
+  onMoveQuestUp?: (id: string) => void
+  onMoveQuestDown?: (id: string) => void
+  onPushQuestNameUndo?: (id: string, oldName: string, newName: string) => void
+  onPushQuestDeadlineUndo?: (id: string, oldVal: string | null, newVal: string | null) => void
 }) {
+  type ViewMode = 'table' | 'kanban' | 'group_area' | 'group_project'
+  type SortBy = 'due_date' | 'custom' | 'priority'
+  const [viewMode, setViewMode]    = useState<ViewMode>('table')
+  const [sortBy, setSortBy]         = useState<SortBy>('custom')
+  const [tagFilter, setTagFilter]   = useState<string>('')
   const [filter, setFilter]         = useState<QFilter>('전체')
   const [editingId, setEditingId]   = useState<string | null>(null)
   const [editVal,   setEditVal]     = useState('')
+  const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null)
   const [cols, setCols]             = useState<ColDef[]>(() => {
     try { return JSON.parse(localStorage.getItem(QT_COLS_KEY) ?? '') } catch { return DEFAULT_COLS }
   })
@@ -721,11 +1027,28 @@ function QuestTable({
   const [newColLabel, setNewColLabel] = useState('')
   const [newColType,  setNewColType]  = useState<'text'|'number'|'date'>('text')
 
+  const allTags = useMemo(() => {
+    const set = new Set<string>()
+    quests.forEach(q => { (q.tags ?? []).forEach(t => set.add(t)) })
+    return Array.from(set).sort()
+  }, [quests])
+
   const filtered = useMemo(() => {
-    if (filter === '진행중') return quests.filter(q => !completed.includes(q.id))
-    if (filter === '완료')   return quests.filter(q =>  completed.includes(q.id))
-    return quests
-  }, [quests, completed, filter])
+    let list = quests
+    if (filter === '진행중') list = list.filter(q => !completed.includes(q.id))
+    else if (filter === '완료') list = list.filter(q => completed.includes(q.id))
+    if (tagFilter) list = list.filter(q => (q.tags ?? []).includes(tagFilter))
+    if (sortBy === 'due_date') {
+      list = [...list].sort((a, b) => {
+        const da = a.deadline ? new Date(a.deadline).getTime() : Infinity
+        const db = b.deadline ? new Date(b.deadline).getTime() : Infinity
+        return da - db
+      })
+    } else if (sortBy === 'priority') {
+      list = [...list].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+    }
+    return list
+  }, [quests, completed, filter, tagFilter, sortBy])
 
   function saveCols(next: ColDef[]) { setCols(next); localStorage.setItem(QT_COLS_KEY, JSON.stringify(next)) }
   function toggleColVisibility(key: string) {
@@ -742,8 +1065,25 @@ function QuestTable({
 
   function startEdit(q: Card) { setEditingId(q.id); setEditVal(q.name) }
   async function commitEdit(q: Card) {
-    if (editVal.trim() && editVal.trim() !== q.name) await updateQuestTitle(q.id, editVal.trim())
+    const trimmed = editVal.trim()
     setEditingId(null)
+    if (!trimmed || trimmed === q.name) return
+    const prevName = q.name
+    onQuestNameUpdate(q.id, trimmed)
+    const { success } = await updateQuestTitle(q.id, trimmed)
+    if (!success) onQuestNameUpdate(q.id, prevName)
+    else onPushQuestNameUndo?.(q.id, prevName, trimmed)
+  }
+
+  async function commitDeadline(q: Card, value: string) {
+    setEditingDeadlineId(null)
+    const next = value.trim() || null
+    const prev = q.deadline ?? null
+    if (next === prev) return
+    onQuestDeadlineUpdate(q.id, next)
+    const { success } = await updateQuestDeadline(q.id, next)
+    if (!success) onQuestDeadlineUpdate(q.id, prev)
+    else onPushQuestDeadlineUndo?.(q.id, prev, next)
   }
 
   const visibleCols = cols.filter(c => !c.hidden)
@@ -765,6 +1105,28 @@ function QuestTable({
           <div style={{ height:'100%', width:`${quests.length ? (doneCount/quests.length)*100 : 0}%`, backgroundColor:'#6366f1', transition:'width 0.4s', borderRadius:'999px' }} />
         </div>
         <span style={{ fontSize:'11px', color:'#787774', flexShrink:0 }}>{doneCount}/{quests.length} 완료</span>
+      </div>
+
+      {/* 보기 모드 + 정렬 + 태그 필터 */}
+      <div style={{ display:'flex', alignItems:'center', flexWrap:'wrap', gap:'10px', marginBottom:'12px' }}>
+        <div style={{ display:'flex', gap:'4px' }}>
+          {(['table','kanban','group_area','group_project'] as ViewMode[]).map(m => (
+            <button key={m} onClick={() => setViewMode(m)} style={{ padding:'5px 10px', borderRadius:'8px', border:'none', fontSize:'11px', fontWeight:600, cursor:'pointer', backgroundColor: viewMode===m ? '#6366f1' : '#FFFFFF', color: viewMode===m ? '#fff' : '#9B9A97', border:'1px solid rgba(0,0,0,0.06)' }}>
+              {m==='table'?'표':m==='kanban'?'칸반':m==='group_area'?'Area별':'Project별'}
+            </button>
+          ))}
+        </div>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value as SortBy)} style={{ padding:'5px 10px', borderRadius:'8px', border:'1px solid rgba(0,0,0,0.06)', fontSize:'11px', color:'#37352F', backgroundColor:'#FFFFFF' }}>
+          <option value="custom">커스텀 순</option>
+          <option value="due_date">마감일 순</option>
+          <option value="priority">중요도 순</option>
+        </select>
+        {allTags.length > 0 && (
+          <select value={tagFilter} onChange={e=>setTagFilter(e.target.value)} style={{ padding:'5px 10px', borderRadius:'8px', border:'1px solid rgba(0,0,0,0.06)', fontSize:'11px', color:'#37352F', backgroundColor:'#FFFFFF' }}>
+            <option value="">태그 필터</option>
+            {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        )}
       </div>
 
       {/* 필터 탭 + 컬럼 설정 */}
@@ -800,7 +1162,96 @@ function QuestTable({
         </div>
       </div>
 
+      {/* 칸반 뷰 */}
+      {viewMode === 'kanban' && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'16px', marginBottom:'20px' }}>
+          {[
+            { key: 'someday', label: '언젠가', color: '#9B9A97' },
+            { key: 'not_started', label: '시작전', color: '#787774' },
+            { key: 'in_progress', label: '진행중', color: '#6366f1' },
+            { key: 'done', label: '완료', color: '#34d399' },
+          ].map(col => (
+            <div key={col.key} style={{ backgroundColor:'#F8F8F6', borderRadius:'12px', border:`1px solid ${col.color}40`, padding:'12px', minHeight:'120px' }}>
+              <p style={{ margin:'0 0 10px', fontSize:'11px', fontWeight:700, color:col.color }}>{col.label}</p>
+              {filtered.filter(q => (q.status ?? 'someday') === col.key).map(q => {
+                const isDone = completed.includes(q.id)
+                const isActive = activePomodoroId === q.id
+                return (
+                  <div key={q.id} style={{ backgroundColor:'#FFFFFF', borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', border:'1px solid rgba(0,0,0,0.06)' }}>
+                    <p style={{ margin:0, fontSize:'13px', fontWeight:600, color:'#37352F', textDecoration: isDone?'line-through':'none', cursor:'pointer' }} onClick={() => onOpenNote(q.id, q.name, {})}>{q.name}</p>
+                    {(q.tags ?? []).length > 0 && (
+                      <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', marginTop:'6px' }}>
+                        {(q.tags ?? []).map(t => <span key={t} style={{ fontSize:'10px', backgroundColor:'rgba(99,102,241,0.1)', color:'#6366f1', padding:'2px 8px', borderRadius:'999px' }}>{t}</span>)}
+                      </div>
+                    )}
+                    <div style={{ display:'flex', gap:'6px', marginTop:'8px', flexWrap:'wrap' }}>
+                      <select value={q.status ?? 'someday'} onChange={e=>{ const v=e.target.value; onQuestStatusUpdate?.(q.id, v); if(v==='done') onToggleComplete(q.id, true); else if(isDone) onToggleComplete(q.id, false) }} onClick={e=>e.stopPropagation()} style={{ padding:'2px 6px', borderRadius:'6px', border:'1px solid rgba(0,0,0,0.08)', fontSize:'10px', cursor:'pointer' }}>
+                        <option value="someday">언젠가</option>
+                        <option value="not_started">시작전</option>
+                        <option value="in_progress">진행중</option>
+                        <option value="done">완료</option>
+                      </select>
+                      <button onClick={e=>{e.stopPropagation();onSelectPomodoro(q.id)}} style={{ padding:'3px 8px', borderRadius:'6px', border:'1px solid #6366f1', backgroundColor: isActive?'rgba(99,102,241,0.15)':'transparent', fontSize:'10px', color:'#6366f1', cursor:'pointer' }}>{isActive?'진행중':'▶'}</button>
+                      <button onClick={e=>{e.stopPropagation();onDelete(q.id)}} style={{ padding:'3px 8px', borderRadius:'6px', border:'1px solid #f87171', color:'#f87171', fontSize:'10px', cursor:'pointer' }}>삭제</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 그룹별 뷰 */}
+      {(viewMode === 'group_area' || viewMode === 'group_project') && (
+        <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+          {(viewMode === 'group_area' ? areas : projects).map(item => {
+            const groupQuests = viewMode === 'group_area'
+              ? filtered.filter(q => { const p = projects.find(x => String(x.id) === String(q.projectId)); return p && String(p.area_id) === String(item.id) })
+              : filtered.filter(q => String(q.projectId) === String(item.id))
+            if (groupQuests.length === 0) return null
+            const parentName = viewMode === 'group_project' && (item as ProjectRow).area_id ? areas.find(a => String(a.id) === String((item as ProjectRow).area_id))?.name : null
+            return (
+              <div key={item.id} style={{ backgroundColor:'#F8F8F6', borderRadius:'12px', border:'1px solid rgba(0,0,0,0.06)', overflow:'hidden' }}>
+                <div style={{ padding:'12px 16px', backgroundColor:'#F1F1EF', borderBottom:'1px solid rgba(0,0,0,0.06)', fontWeight:700, fontSize:'13px', color:'#37352F' }}>
+                  {viewMode === 'group_project' && parentName ? `${parentName} › ` : ''}{item.name}
+                </div>
+                <div style={{ padding:'12px' }}>
+                  {groupQuests.map(q => {
+                    const isDone = completed.includes(q.id)
+                    return (
+                      <div key={q.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'8px 0', borderBottom:'1px solid rgba(0,0,0,0.04)' }}
+                        onClick={() => onOpenNote(q.id, q.name, {})}>
+                        <input type="checkbox" checked={isDone} onChange={e=>onToggleComplete(q.id, e.target.checked)} style={{ accentColor:'#6366f1', cursor:'pointer' }} />
+                        <span style={{ flex:1, fontSize:'13px', color: isDone?'#787774':'#37352F', textDecoration: isDone?'line-through':'none' }}>{q.name}</span>
+                        {(q.tags ?? []).map(t => <span key={t} style={{ fontSize:'10px', backgroundColor:'rgba(99,102,241,0.1)', color:'#6366f1', padding:'2px 8px', borderRadius:'999px' }}>{t}</span>)}
+                        <button onClick={e=>{e.stopPropagation();onSelectPomodoro(q.id)}} style={{ padding:'3px 8px', borderRadius:'6px', border:'1px solid #6366f1', fontSize:'10px', color:'#6366f1', cursor:'pointer' }}>▶</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          {filtered.filter(q => !q.projectId).length > 0 && (
+            <div style={{ backgroundColor:'#F8F8F6', borderRadius:'12px', border:'1px solid rgba(0,0,0,0.06)', overflow:'hidden' }}>
+              <div style={{ padding:'12px 16px', backgroundColor:'#F1F1EF', borderBottom:'1px solid rgba(0,0,0,0.06)', fontWeight:700, fontSize:'13px', color:'#9B9A97' }}>미분류</div>
+              <div style={{ padding:'12px' }}>
+                {filtered.filter(q => !q.projectId).map(q => (
+                  <div key={q.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'8px 0', borderBottom:'1px solid rgba(0,0,0,0.04)' }} onClick={() => onOpenNote(q.id, q.name, {})}>
+                    <input type="checkbox" checked={completed.includes(q.id)} onChange={e=>onToggleComplete(q.id, e.target.checked)} style={{ accentColor:'#6366f1', cursor:'pointer' }} />
+                    <span style={{ flex:1, fontSize:'13px' }}>{q.name}</span>
+                    <button onClick={e=>{e.stopPropagation();onSelectPomodoro(q.id)}} style={{ padding:'3px 8px', borderRadius:'6px', border:'1px solid #6366f1', fontSize:'10px', color:'#6366f1', cursor:'pointer' }}>▶</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 테이블 */}
+      {viewMode === 'table' && (
       <div style={{ overflowX:'auto', borderRadius:'12px', border:'1px solid rgba(0,0,0,0.06)' }}>
         <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'600px' }}>
           <thead>
@@ -824,9 +1275,27 @@ function QuestTable({
                   onMouseLeave={e=>{e.currentTarget.style.backgroundColor=isActive?'rgba(99,102,241,0.08)':isDone?'rgba(52,211,153,0.04)':'transparent'}}
                 >
                   {visibleCols.map(col => {
+                    if (col.key === 'sort') return (
+                      <td key="sort" style={tdStyle}>
+                        <div style={{ display:'flex', flexDirection:'column', gap:'1px' }}>
+                          <button onClick={()=>onMoveQuestUp?.(q.id)} disabled={filtered.indexOf(q)===0} style={{ padding:'1px 2px', border:'none', background:'none', color:'#9B9A97', cursor:filtered.indexOf(q)===0?'default':'pointer', opacity:filtered.indexOf(q)===0?0.4:1 }}><ChevronUp size={12} /></button>
+                          <button onClick={()=>onMoveQuestDown?.(q.id)} disabled={filtered.indexOf(q)===filtered.length-1} style={{ padding:'1px 2px', border:'none', background:'none', color:'#9B9A97', cursor:filtered.indexOf(q)===filtered.length-1?'default':'pointer', opacity:filtered.indexOf(q)===filtered.length-1?0.4:1 }}><ChevronDown size={12} /></button>
+                        </div>
+                      </td>
+                    )
                     if (col.key === 'status') return (
                       <td key="status" style={tdStyle}>
-                        <input type="checkbox" checked={isDone} onChange={e => onToggleComplete(q.id, e.target.checked)} style={{ accentColor:'#6366f1', width:'16px', height:'16px', cursor:'pointer' }} />
+                        <select value={q.status ?? 'someday'} onChange={e => {
+                          const v = e.target.value as string
+                          onQuestStatusUpdate?.(q.id, v)
+                          if (v === 'done') onToggleComplete(q.id, true)
+                          else if (isDone) onToggleComplete(q.id, false)
+                        }} style={{ padding:'4px 8px', borderRadius:'6px', border:'1px solid rgba(0,0,0,0.08)', fontSize:'11px', backgroundColor:'#FFFFFF', cursor:'pointer' }}>
+                          <option value="someday">언젠가</option>
+                          <option value="not_started">시작전</option>
+                          <option value="in_progress">진행중</option>
+                          <option value="done">완료</option>
+                        </select>
                       </td>
                     )
                     if (col.key === 'name') return (
@@ -834,31 +1303,45 @@ function QuestTable({
                         {editingId === q.id ? (
                           <input autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)}
                             onBlur={() => commitEdit(q)}
-                            onKeyDown={e => { if (e.key==='Enter') commitEdit(q); if (e.key==='Escape') setEditingId(null) }}
+                            onKeyDown={e => { if (e.key==='Enter') { e.preventDefault(); commitEdit(q) } if (e.key==='Escape') { setEditingId(null) } }}
                             style={{ width:'100%', backgroundColor:'#F1F1EF', border:'1px solid #6366f1', borderRadius:'6px', padding:'4px 8px', fontSize:'13px', color:'#37352F', outline:'none' }} />
                         ) : (
                           <div style={{ display:'flex', alignItems:'center', gap:'5px' }}>
-                            <span onClick={() => startEdit(q)} style={{ cursor:'text', color: isDone ? '#787774' : '#37352F', textDecoration: isDone ? 'line-through' : 'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }} title={`${q.name} (더블클릭: 이름 수정)`}>{q.name}</span>
-                            <button onClick={e => {
-                              e.stopPropagation()
-                              const proj = projects.find(p => String(p.id) === String(q.projectId))
-                              const area = proj ? areas.find(a => String(a.id) === String(proj.area_id)) : undefined
-                              onOpenNote(q.id, q.name, {
-                                projectName: proj?.name,
-                                areaName: area?.name,
-                                timeSpentSec: q.timeSpentSec,
-                                pomodoroCount: q.pomodoroCount ?? 0,
-                                isCompleted: completed.includes(q.id),
-                              })
-                            }}
-                              style={{ flexShrink:0, background:'none', border:'none', cursor:'pointer', color:'#AEAAA4', padding:'2px 4px', borderRadius:'4px', fontSize:'12px', lineHeight:1 }}
-                              onMouseEnter={e=>(e.currentTarget.style.color='#6366f1')}
-                              onMouseLeave={e=>(e.currentTarget.style.color='#AEAAA4')}
-                              title="노트 열기"
-                            >📝</button>
+                            <span
+                              onClick={() => {
+                                const proj = projects.find(p => String(p.id) === String(q.projectId))
+                                const area = proj ? areas.find(a => String(a.id) === String(proj.area_id)) : undefined
+                                onOpenNote(q.id, q.name, {
+                                  projectName: proj?.name,
+                                  areaName: area?.name,
+                                  timeSpentSec: q.timeSpentSec,
+                                  pomodoroCount: q.pomodoroCount ?? 0,
+                                  isCompleted: completed.includes(q.id),
+                                })
+                              }}
+                              onDoubleClick={e => { e.stopPropagation(); startEdit(q) }}
+                              style={{
+                                cursor: 'pointer',
+                                color: isDone ? '#787774' : '#37352F',
+                                textDecoration: isDone ? 'line-through' : 'none',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                flex: 1,
+                                transition: 'color 0.15s, text-decoration 0.15s',
+                              }}
+                              onMouseEnter={e => { e.currentTarget.style.textDecoration = isDone ? 'line-through' : 'underline'; e.currentTarget.style.color = '#4F46E5' }}
+                              onMouseLeave={e => { e.currentTarget.style.textDecoration = isDone ? 'line-through' : 'none'; e.currentTarget.style.color = isDone ? '#787774' : '#37352F' }}
+                              title="클릭: 상세 노트 열기 · 더블클릭: 이름 수정"
+                            >{q.name}</span>
                           </div>
                         )}
                         {isActive && <span style={{ fontSize:'9px', backgroundColor:'rgba(99,102,241,0.2)', color:'#4F46E5', padding:'1px 6px', borderRadius:'999px', marginTop:'2px', display:'inline-block' }}>집중 중</span>}
+                      </td>
+                    )
+                    if (col.key === 'tags') return (
+                      <td key="tags" style={tdStyle}>
+                        <TagInput tags={q.tags ?? []} onChange={v => onQuestTagsUpdate?.(q.id, v)} placeholder="+" />
                       </td>
                     )
                     if (col.key === 'area') {
@@ -904,7 +1387,58 @@ function QuestTable({
                       <td key="priority" style={{ ...tdStyle, color:'#fbbf24', fontSize:'14px', letterSpacing:'-1px' }}>{priStar(q.priority)}</td>
                     )
                     if (col.key === 'deadline') return (
-                      <td key="deadline" style={tdStyle}>{q.deadline ? <span style={{ fontSize:'12px' }}>{q.deadline}</span> : <span style={{ color:'#AEAAA4', fontSize:'12px' }}>-</span>}</td>
+                      <td key="deadline" style={{ ...tdStyle, minWidth: '140px' }}>
+                        {editingDeadlineId === q.id ? (
+                          <input
+                            type="date"
+                            autoFocus
+                            defaultValue={q.deadline ?? ''}
+                            onBlur={e => commitDeadline(q, e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') { e.preventDefault(); commitDeadline(q, (e.target as HTMLInputElement).value) }
+                              if (e.key === 'Escape') setEditingDeadlineId(null)
+                            }}
+                            style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #6366f1', outline: 'none', backgroundColor: '#F1F1EF' }}
+                          />
+                        ) : (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <div
+                              onClick={() => setEditingDeadlineId(q.id)}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '2px 0' }}
+                              onMouseEnter={e => { e.currentTarget.style.opacity = '0.8' }}
+                              onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+                              title="클릭하여 마감일 설정/수정"
+                            >
+                              {q.deadline ? (
+                                <>
+                                  <span style={{ fontSize: '12px', color: '#37352F' }}>{q.deadline}</span>
+                                  {(() => {
+                                    const d = getDDay(q.deadline)
+                                    const dStyle: React.CSSProperties = {
+                                      fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
+                                      ...(d.type === 'future' ? { backgroundColor: '#DBEAFE', color: '#1D4ED8' } : {}),
+                                      ...(d.type === 'today' ? { backgroundColor: '#FED7AA', color: '#C2410C', fontWeight: 800 } : {}),
+                                      ...(d.type === 'past' ? { backgroundColor: '#FEE2E2', color: '#DC2626' } : {}),
+                                    }
+                                    return <span style={dStyle}>{d.label}</span>
+                                  })()}
+                                </>
+                              ) : (
+                                <span style={{ color: '#AEAAA4', fontSize: '12px' }}>날짜 선택</span>
+                              )}
+                            </div>
+                            {q.deadline && (
+                              <button
+                                onClick={e => { e.stopPropagation(); commitDeadline(q, '') }}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: '11px', color: '#9B9A97' }}
+                                onMouseEnter={e => { e.currentTarget.style.color = '#DC2626' }}
+                                onMouseLeave={e => { e.currentTarget.style.color = '#9B9A97' }}
+                                title="마감일 지우기"
+                              >×</button>
+                            )}
+                          </div>
+                        )}
+                      </td>
                     )
                     if (col.key === 'timespent') return (
                       <td key="timespent" style={tdStyle}>
@@ -943,6 +1477,7 @@ function QuestTable({
           </tbody>
         </table>
       </div>
+      )}
 
       {/* 새 퀘스트 추가 폼 */}
       <div style={{ display:'flex', flexDirection:'column', gap:'10px', marginTop:'14px' }}>
@@ -961,7 +1496,7 @@ function QuestTable({
             onChange={e => { onNewQuestAreaId(e.target.value); onNewProjectId('') }}
             style={{ padding:'9px 12px', borderRadius:'9px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'#F1F1EF', color: newQuestAreaId ? '#37352F' : '#9B9A97', fontSize:'13px', outline:'none' }}
           >
-            <option value="">{areas.length === 0 ? 'Area를 먼저 생성해주세요' : 'Area 선택 (필수)'}</option>
+            <option value="">{areas.length === 0 ? 'Vision Area를 먼저 생성해주세요' : 'Vision Area 선택 (필수)'}</option>
             {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
           <select
@@ -970,7 +1505,7 @@ function QuestTable({
             disabled={!newQuestAreaId}
             style={{ padding:'9px 12px', borderRadius:'9px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor: newQuestAreaId ? '#F1F1EF' : '#EBEBEA', color: newProjectId ? '#37352F' : '#9B9A97', fontSize:'13px', outline:'none' }}
           >
-            <option value="">{!newQuestAreaId ? 'Area를 먼저 선택하세요' : 'Project 선택 (필수)'}</option>
+            <option value="">{!newQuestAreaId ? 'Vision Area를 먼저 선택하세요' : 'Real Projects 선택 (필수)'}</option>
             {projects.filter(p => p.area_id != null && String(p.area_id) === String(newQuestAreaId)).map(p => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
@@ -984,6 +1519,15 @@ function QuestTable({
             <option value="business">비즈니스/공부</option>
             <option value="health">자기관리</option>
           </select>
+          <select
+            value={newQuestIdentityId}
+            onChange={e => onNewQuestIdentityId(e.target.value)}
+            style={{ padding:'9px 12px', borderRadius:'9px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'#F1F1EF', color: newQuestIdentityId ? '#37352F' : '#9B9A97', fontSize:'13px', outline:'none' }}
+          >
+            <option value="">Identity (선택)</option>
+            {identities.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <TagInput tags={newQuestTags} onChange={onNewQuestTags} placeholder="태그 (엔터)" />
           <button
             onClick={onAdd}
             disabled={adding || !newTitle.trim() || !newQuestAreaId || !newProjectId}
@@ -1033,9 +1577,9 @@ function persistStats(stats: StatDef[]) {
   stats.forEach(s => { payload[s.id] = { value: s.value, memo: s.memo } })
   localStorage.setItem(STATS_KEY, JSON.stringify(payload))
   kvSet(STATS_KEY, payload)
-  // 전용 테이블에도 upsert (XP는 현재 localStorage 값 병합)
   const xp = loadXp()
-  upsertUserStats({ level: xp.level, current_xp: xp.currentXp, required_xp: xp.requiredXp, stats_json: payload })
+  const { currentLevel, maxCurrentLevelXp } = calculateLevel(xp.totalXp)
+  upsertUserStats({ level: currentLevel, current_xp: 0, required_xp: maxCurrentLevelXp, total_xp: xp.totalXp, stats_json: payload })
 }
 
 // ── LoginView ──────────────────────────────────────────────────────────────
@@ -1301,12 +1845,19 @@ function LevelUpScreen({ level, onDone }: { level: number; onDone: () => void })
   )
 }
 
-// ═══════════════════════════════════════ XP BAR ════════════════════════════════
-function XpBar({ level, currentXp, requiredXp, doneCount, totalCount }: {
-  level: number; currentXp: number; requiredXp: number
+// ═══════════════════════════════════════ XP BAR (투 트랙: 현재 레벨 XP / 총 누적 XP) ════════════════════════════════
+function XpBar({
+  currentLevelXp, maxCurrentLevelXp, totalXp, doneCount, totalCount,
+  onEditCurrentLevelXp, onEditTotalXp,
+}: {
+  currentLevelXp: number; maxCurrentLevelXp: number; totalXp: number
   doneCount: number; totalCount: number
+  onEditCurrentLevelXp?: (v: number) => void
+  onEditTotalXp?: (v: number) => void
 }) {
-  const pct = requiredXp > 0 ? Math.min((currentXp / requiredXp) * 100, 100) : 0
+  const level = calculateLevel(totalXp).currentLevel
+  const pct = maxCurrentLevelXp > 0 ? Math.min((currentLevelXp / maxCurrentLevelXp) * 100, 100) : 0
+  const totalFormatted = totalXp.toLocaleString()
   return (
     <div style={{
       backgroundColor: '#F1F1EF', border: '1px solid rgba(99,102,241,0.18)',
@@ -1330,11 +1881,22 @@ function XpBar({ level, currentXp, requiredXp, doneCount, totalCount }: {
         </div>
       </div>
 
-      {/* XP 게이지 */}
+      {/* XP 게이지 — 상단: 현재 레벨 진행도 / 하단: 총 누적 XP */}
       <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '7px' }}>
-          <span style={{ fontSize: '11px', color: '#787774' }}>경험치 (XP)</span>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: '#4F46E5' }}>{currentXp} / {requiredXp} XP</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <span style={{ fontSize: '11px', color: '#787774' }}>현재 레벨 진행도</span>
+          {onEditCurrentLevelXp ? (
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4F46E5', display: 'inline-flex', alignItems: 'center' }}>
+              <EditableNumber
+                value={currentLevelXp}
+                onSave={onEditCurrentLevelXp}
+                displayOverride={`${currentLevelXp} / ${maxCurrentLevelXp} XP`}
+                inputPlaceholder="현재 레벨 XP"
+              />
+            </span>
+          ) : (
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#4F46E5' }}>{currentLevelXp} / {maxCurrentLevelXp} XP</span>
+          )}
         </div>
         <div style={{ height: '7px', backgroundColor: '#EBEBEA', borderRadius: '999px', overflow: 'hidden' }}>
           <div style={{
@@ -1343,6 +1905,21 @@ function XpBar({ level, currentXp, requiredXp, doneCount, totalCount }: {
             borderRadius: '999px', transition: 'width 0.6s ease-out',
             boxShadow: '0 0 10px rgba(99,102,241,0.55)',
           }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+          {onEditTotalXp ? (
+            <span style={{ fontSize: '10px', color: '#9B9A97', display: 'inline-flex', alignItems: 'center' }}>
+              총 누적 경험치 Total{' '}
+              <EditableNumber
+                value={totalXp}
+                onSave={onEditTotalXp}
+                displayOverride={`${totalFormatted} XP`}
+                inputPlaceholder="Total XP"
+              />
+            </span>
+          ) : (
+            <span style={{ fontSize: '10px', color: '#9B9A97' }}>총 누적 경험치 Total {totalFormatted} XP</span>
+          )}
         </div>
       </div>
 
@@ -1399,21 +1976,23 @@ function AdjustRow({ totalSec, onAdjust }: { totalSec: number; onAdjust: (deltaS
 // ═══════════════════════════════════════ ZEN MODE ════════════════════════════
 function ZenView({
   seconds, totalSec, running, finished,
+  isOvertime, overtimeSec,
   focusQuestName,
-  onPlayPause, onStop, onEarlyFinish, onExtend,
+  onPlayPause, onStop, onComplete, onExtend,
 }: {
   seconds: number; totalSec: number; running: boolean; finished: boolean
+  isOvertime: boolean; overtimeSec: number
   focusQuestName: string | null
   onPlayPause: () => void; onStop: () => void
-  onEarlyFinish: () => void; onExtend: () => void
+  onComplete: () => void; onExtend: () => void
 }) {
   const isMobile = useIsMobile()
-  const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
-  const ss = String(seconds % 60).padStart(2, '0')
+  const displaySec = isOvertime ? overtimeSec : seconds
+  const mm = String(Math.floor(displaySec / 60)).padStart(2, '0')
+  const ss = String(displaySec % 60).padStart(2, '0')
   const r = isMobile ? 140 : 120
   const circ = 2 * Math.PI * r
-  // 시작(full)→끝(empty): offset = 0→circ
-  const dashOffset = totalSec > 0 ? circ * (1 - seconds / totalSec) : circ
+  const dashOffset = isOvertime ? 0 : (totalSec > 0 ? circ * (1 - seconds / totalSec) : circ)
   const svgSize = isMobile ? 330 : 290
   const cx = svgSize / 2
 
@@ -1453,13 +2032,13 @@ function ZenView({
         <svg width={svgSize} height={svgSize} style={{ transform: 'rotate(-90deg)' }}>
           <circle cx={cx} cy={cx} r={r} fill="none" stroke="rgba(99,102,241,0.08)" strokeWidth="5" />
           <circle cx={cx} cy={cx} r={r} fill="none"
-            stroke={finished ? '#34d399' : '#6366f1'}
+            stroke={finished ? '#34d399' : isOvertime ? '#ef4444' : '#6366f1'}
             strokeWidth="5" strokeLinecap="round"
             strokeDasharray={circ}
             strokeDashoffset={dashOffset}
             style={{
               transition: 'stroke-dashoffset 0.95s linear, stroke 0.4s',
-              filter: `drop-shadow(0 0 10px ${finished ? 'rgba(52,211,153,0.6)' : 'rgba(99,102,241,0.55)'})`,
+              filter: `drop-shadow(0 0 10px ${finished ? 'rgba(52,211,153,0.6)' : isOvertime ? 'rgba(239,68,68,0.55)' : 'rgba(99,102,241,0.55)'})`,
             }}
           />
         </svg>
@@ -1467,15 +2046,16 @@ function ZenView({
           <span style={{
             fontSize: isMobile ? '96px' : '82px', fontWeight: 900, letterSpacing: '-5px',
             fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-            color: finished ? '#34d399' : '#fff',
+            color: finished ? '#34d399' : isOvertime ? '#f87171' : '#fff',
             textShadow: finished
               ? '0 0 60px rgba(52,211,153,0.5)'
+              : isOvertime ? '0 0 60px rgba(239,68,68,0.4)'
               : '0 0 60px rgba(99,102,241,0.35), 0 0 120px rgba(99,102,241,0.15)',
           }}>
-            {mm}:{ss}
+            {isOvertime ? `+ ${mm}:${ss}` : `${mm}:${ss}`}
           </span>
           <span style={{ fontSize: '12px', color: '#374151', marginTop: '8px', letterSpacing: '0.08em' }}>
-            {finished ? '세션 완료 🎉' : running ? '집중 중...' : '일시정지'}
+            {finished ? '세션 완료 🎉' : isOvertime ? '초과 몰입 중...' : running ? '집중 중...' : '일시정지'}
           </span>
         </div>
       </div>
@@ -1534,15 +2114,15 @@ function ZenView({
         </button>
       </div>
 
-      {/* 미리완료 / 연장 버튼 (젠 모드용) */}
+      {/* 완료 / 연장 버튼 (젠 모드용) */}
       <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-        {(running || (!finished)) && (
+        {(running || isOvertime || (!finished && seconds < totalSec)) && (
           <button
-            onClick={onEarlyFinish}
+            onClick={onComplete}
             style={{ padding:'7px 20px', borderRadius:'8px', border:'1px solid rgba(234,179,8,0.4)', backgroundColor:'rgba(254,249,195,0.12)', color:'#FDE047', fontSize:'12px', fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}
             onMouseEnter={e=>{e.currentTarget.style.backgroundColor='rgba(234,179,8,0.18)'}}
             onMouseLeave={e=>{e.currentTarget.style.backgroundColor='rgba(254,249,195,0.12)'}}
-          >✅ 미리 완료</button>
+          >완료 (Complete)</button>
         )}
         {finished && (
           <button
@@ -1564,26 +2144,29 @@ function ZenView({
 // ═══════════════════════════════════════ POMODORO MODAL ══════════════════════
 function PomodoroModal({
   seconds, totalSec, running, finished,
+  isOvertime, overtimeSec,
   quests, areas, projects,
   focusQuestId, onSelectQuest,
   onPlayPause, onReset, onAdjust, onSetDefault, onClose, onEnterZen,
-  onEarlyFinish, onExtend,
+  onComplete, onExtend,
 }: {
   seconds: number; totalSec: number; running: boolean; finished: boolean
+  isOvertime: boolean; overtimeSec: number
   quests: Card[]; areas: AreaRow[]; projects: ProjectRow[]
   focusQuestId: string | null
   onSelectQuest: (id: string) => void
   onPlayPause: () => void; onReset: () => void
   onAdjust: (deltaSec: number) => void; onSetDefault: () => void
   onClose: () => void; onEnterZen: () => void
-  onEarlyFinish: () => void; onExtend: () => void
+  onComplete: () => void; onExtend: () => void
 }) {
-  const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
-  const ss = String(seconds % 60).padStart(2, '0')
+  const displaySec = isOvertime ? overtimeSec : seconds
+  const mm = String(Math.floor(displaySec / 60)).padStart(2, '0')
+  const ss = String(displaySec % 60).padStart(2, '0')
   const r = 80
   const circ = 2 * Math.PI * r
-  const dashOffset = totalSec > 0 ? circ * (1 - seconds / totalSec) : circ
-  const isReady = !running && !finished && seconds === totalSec
+  const dashOffset = isOvertime ? 0 : (totalSec > 0 ? circ * (1 - seconds / totalSec) : circ)
+  const isReady = !running && !finished && !isOvertime && seconds === totalSec
 
   // Quest 옵션 라벨: [Area > Project] 퀘스트명 또는 [미분류] 퀘스트명
   function getQuestLabel(q: { id: string; name: string; projectId?: string | null }) {
@@ -1653,13 +2236,13 @@ function PomodoroModal({
             <svg width="210" height="210" style={{ transform: 'rotate(-90deg)' }}>
               <circle cx="105" cy="105" r={r} fill="none" stroke="rgba(99,102,241,0.09)" strokeWidth="7" />
               <circle cx="105" cy="105" r={r} fill="none"
-                stroke={finished ? '#34d399' : '#6366f1'}
+                stroke={finished ? '#34d399' : isOvertime ? '#ef4444' : '#6366f1'}
                 strokeWidth="7" strokeLinecap="round"
                 strokeDasharray={circ}
                 strokeDashoffset={dashOffset}
                 style={{
                   transition: 'stroke-dashoffset 0.95s linear, stroke 0.3s',
-                  filter: `drop-shadow(0 0 7px ${finished ? '#34d399' : '#6366f1'})`,
+                  filter: `drop-shadow(0 0 7px ${finished ? '#34d399' : isOvertime ? 'rgba(239,68,68,0.6)' : '#6366f1'})`,
                 }}
               />
             </svg>
@@ -1667,12 +2250,12 @@ function PomodoroModal({
               <span style={{
                 fontSize: '48px', fontWeight: 900, letterSpacing: '-2.5px',
                 fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-                color: finished ? '#22c55e' : '#37352F',
+                color: finished ? '#22c55e' : isOvertime ? '#dc2626' : '#37352F',
               }}>
-                {mm}:{ss}
+                {isOvertime ? `+ ${mm}:${ss}` : `${mm}:${ss}`}
               </span>
               <span style={{ fontSize: '11px', color: '#787774', letterSpacing: '0.05em' }}>
-                {finished ? '완료! 🎉' : running ? '집중 중...' : isReady ? '준비됨' : '일시정지'}
+                {finished ? '완료! 🎉' : isOvertime ? '초과 몰입 중...' : running ? '집중 중...' : isReady ? '준비됨' : '일시정지'}
               </span>
             </div>
           </div>
@@ -1728,10 +2311,10 @@ function PomodoroModal({
             <div style={{ width: '46px' }} />
           </div>
 
-          {/* ── 미리 완료 / 연장하기 ── */}
-          {(running || (!isReady && !finished)) && (
+          {/* ── 완료 / 연장하기 ── */}
+          {(running || isOvertime || (!isReady && !finished)) && (
             <button
-              onClick={onEarlyFinish}
+              onClick={onComplete}
               style={{
                 padding: '8px 24px', borderRadius: '9px', border: '1px solid rgba(234,179,8,0.35)',
                 backgroundColor: 'rgba(254,249,195,0.7)', color: '#92400E',
@@ -1740,7 +2323,7 @@ function PomodoroModal({
               onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(253,224,71,0.35)' }}
               onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(254,249,195,0.7)' }}
             >
-              ✅ 미리 완료 (지금까지 기록)
+              완료 (Complete)
             </button>
           )}
 
@@ -2265,7 +2848,7 @@ function JournalPage({ completedQuests, xpState, userQuests }: {
               </span>
               <span style={{ width: '1px', height: '12px', backgroundColor: '#EBEBEA' }} />
               <span style={{ fontSize: '12px', color: '#787774' }}>
-                현재 <strong style={{ color: '#7C3AED' }}>Lv.{xpState.level}</strong> ({xpState.currentXp}/{xpState.requiredXp} XP)
+                현재 <strong style={{ color: '#7C3AED' }}>Lv.{calculateLevel(xpState.totalXp).currentLevel}</strong> ({calculateLevel(xpState.totalXp).currentLevelXp}/{calculateLevel(xpState.totalXp).maxCurrentLevelXp} XP)
               </span>
             </div>
           </div>
@@ -2711,13 +3294,13 @@ function LibraryPage({ xpState, completedQuestsCount, onNavigate }: {
 
   const heroStats = [
     {
-      label: '현재 레벨', value: `Lv.${xpState.level}`,
-      sub: getLevelTitle(xpState.level), col: '#818cf8',
+      label: '현재 레벨', value: `Lv.${calculateLevel(xpState.totalXp).currentLevel}`,
+      sub: getLevelTitle(calculateLevel(xpState.totalXp).currentLevel), col: '#818cf8',
       icon: <Trophy size={20} color="#818cf8" />,
     },
     {
-      label: '누적 경험치', value: `${xpState.currentXp} XP`,
-      sub: `다음 레벨까지 ${xpState.requiredXp - xpState.currentXp} XP`,
+      label: '누적 경험치', value: `${xpState.totalXp.toLocaleString()} XP`,
+      sub: `다음 레벨까지 ${calculateLevel(xpState.totalXp).maxCurrentLevelXp - calculateLevel(xpState.totalXp).currentLevelXp} XP`,
       col: '#fbbf24', icon: <BarChart3 size={20} color="#fbbf24" />,
     },
     {
@@ -3012,6 +3595,328 @@ function getWeekEvents(week: string[], events: CalEvent[]): WeekEvent[] {
     slots[lv] = ev.ec
     return { ...ev, level: lv }
   })
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  UNIFIED CALENDAR — 퀘스트 마감일 + 데일리 저널 + 운세/기운 기록 통합
+// ══════════════════════════════════════════════════════════════════════════════
+type UnifiedEventType = 'quest' | 'journal' | 'fortune'
+type UnifiedEvent = { id: string; date: string; type: UnifiedEventType; title: string; meta?: unknown }
+
+function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpenNote: (id: string, title: string) => void; userQuests: Card[]; refreshTrigger?: number }) {
+  const isMobile = useIsMobile()
+  const todayStr = toYMD(new Date())
+  const [viewDate, setViewDate] = useState(new Date())
+  const [selectedDate, setSelectedDate] = useState<string | null>(todayStr)
+  const [filterQuest, setFilterQuest] = useState(true)
+  const [filterJournal, setFilterJournal] = useState(true)
+  const [filterFortune, setFilterFortune] = useState(true)
+  const [dailyLogs, setDailyLogs] = useState<{ log_date: string; fortune_feedback?: string | null }[]>([])
+  const [journalNotes, setJournalNotes] = useState<JournalNoteRow[]>([])
+  const [readingLogs, setReadingLogs] = useState<ReadingLogRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedReading, setSelectedReading] = useState<ReadingLogRow | null>(null)
+
+  const startStr = toYMD(new Date(viewDate.getFullYear(), viewDate.getMonth(), 1))
+  const endDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0)
+  const endStr = toYMD(endDate)
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      const [logs, notes, readings] = await Promise.all([
+        fetchDailyLogsInRange(startStr, endStr),
+        fetchJournalNotes(),
+        fetchReadingLogsInRange(startStr, endStr),
+      ])
+      setDailyLogs(logs)
+      setJournalNotes(notes)
+      setReadingLogs(readings)
+      setLoading(false)
+    })()
+  }, [startStr, endStr, refreshTrigger])
+
+  const mergedEvents = useMemo((): UnifiedEvent[] => {
+    const out: UnifiedEvent[] = []
+    if (filterQuest) {
+      for (const q of userQuests) {
+        if (q.deadline) out.push({ id: `q-${q.id}`, date: q.deadline, type: 'quest', title: q.name, meta: q })
+      }
+    }
+    if (filterJournal) {
+      for (const n of journalNotes) {
+        out.push({ id: `j-${n.id}`, date: n.record_date, type: 'journal', title: n.title, meta: n })
+      }
+    }
+    if (filterFortune) {
+      for (const l of dailyLogs) {
+        if (l.fortune_feedback && l.fortune_feedback.trim()) {
+          out.push({ id: `f-dl-${l.log_date}`, date: l.log_date, type: 'fortune', title: '운세 기록', meta: l })
+        }
+      }
+      for (const r of readingLogs) {
+        const d = new Date(r.created_at)
+        const dateKey = toYMD(d)
+        const cardsStr = (r.drawn_cards ?? []).map(c => `${c.emoji} ${c.name_ko}${c.name_en ? ` (${c.name_en})` : ''}`).join(' | ')
+        const title = cardsStr ? `[🔮 운세] ${cardsStr}` : '[🔮 운세]'
+        out.push({ id: `r-${r.id}`, date: dateKey, type: 'fortune', title, meta: r })
+      }
+    }
+    return out
+  }, [userQuests, journalNotes, dailyLogs, readingLogs, filterQuest, filterJournal, filterFortune])
+
+  const eventsByDate = useMemo(() => {
+    const m: Record<string, UnifiedEvent[]> = {}
+    for (const e of mergedEvents) {
+      if (!m[e.date]) m[e.date] = []
+      m[e.date].push(e)
+    }
+    return m
+  }, [mergedEvents])
+
+  const dayDots = useCallback((date: Date) => {
+    const dk = toYMD(date)
+    const evs = eventsByDate[dk] ?? []
+    const hasQuest = evs.some(e => e.type === 'quest')
+    const hasJournal = evs.some(e => e.type === 'journal')
+    const hasFortune = evs.some(e => e.type === 'fortune')
+    return (
+      <div style={{ display: 'flex', gap: '3px', justifyContent: 'center', marginTop: '2px' }}>
+        {hasQuest && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'block' }} title="퀘스트 마감일" />}
+        {hasJournal && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', display: 'block' }} title="데일리 저널" />}
+        {hasFortune && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#7C3AED', display: 'block' }} title="운세/기운 기록" />}
+      </div>
+    )
+  }, [eventsByDate])
+
+  const dayEvents = selectedDate ? (eventsByDate[selectedDate] ?? []) : []
+  const dayQuests = dayEvents.filter(e => e.type === 'quest').map(e => e.meta as Card)
+  const dayJournals = dayEvents.filter(e => e.type === 'journal').map(e => e.meta as JournalNoteRow)
+  const dayFortuneLog = dayEvents.find(e => e.type === 'fortune' && e.id.startsWith('f-dl-'))?.meta as { fortune_feedback?: string } | undefined
+  const dayReadings = dayEvents.filter(e => e.type === 'fortune' && e.id.startsWith('r-')).map(e => e.meta as ReadingLogRow)
+
+  function fmtDateKo(dk: string) {
+    const d = new Date(dk + 'T00:00:00')
+    return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })
+  }
+
+  async function handleDeleteReadingFromCalendar(id: string) {
+    if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
+    const ok = await deleteReadingLog(id)
+    if (ok) {
+      setReadingLogs(prev => prev.filter(r => r.id !== id))
+      setSelectedReading(null)
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 44px' }}>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>📅 통합 캘린더</h1>
+        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세 기록을 한눈에 확인하세요</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: '24px', alignItems: 'start' }}>
+        {/* 캘린더 + 필터 */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          {/* 필터 */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '20px', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#9B9A97', letterSpacing: '0.1em' }}>표시할 항목</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterQuest} onChange={e => setFilterQuest(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444' }} /> 퀘스트 마감일
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterJournal} onChange={e => setFilterJournal(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#3b82f6' }} /> 데일리 저널
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterFortune} onChange={e => setFilterFortune(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#7C3AED' }} /> 운세/기운 기록
+            </label>
+          </div>
+
+          {loading ? (
+            <div style={{ height: '360px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#787774', fontSize: '14px' }}>데이터 불러오는 중…</div>
+          ) : (
+            <div style={{ fontSize: '14px' }} className="unified-calendar-wrapper">
+              <Calendar
+                value={viewDate}
+                onChange={(v) => { const d = v as Date; setSelectedDate(toYMD(d)) }}
+                onActiveStartDateChange={({ activeStartDate }) => activeStartDate && setViewDate(activeStartDate)}
+                tileContent={({ date }) => dayDots(date)}
+                locale="ko-KR"
+                formatShortWeekday={(_, d) => ['일','월','화','수','목','금','토'][d.getDay()]}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* 날짜별 요약 패널 */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', position: isMobile ? 'relative' : 'sticky', top: isMobile ? 0 : 24 }}>
+          <h3 style={{ margin: '0 0 16px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>
+            {selectedDate ? fmtDateKo(selectedDate) : '날짜를 선택하세요'}
+          </h3>
+          {!selectedDate ? (
+            <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>캘린더에서 날짜를 클릭하면 해당 날짜의 퀘스트, 저널, 운세 기록을 볼 수 있습니다.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {dayQuests.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#ef4444', letterSpacing: '0.05em' }}>퀘스트 마감일</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                    {dayQuests.map(q => (
+                      <li key={q.id} style={{ marginBottom: '4px', fontSize: '13px', color: '#37352F' }}>{q.name}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dayJournals.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#3b82f6', letterSpacing: '0.05em' }}>데일리 저널</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
+                    {dayJournals.map(n => (
+                      <li key={n.id} style={{ marginBottom: '6px' }}>
+                        <button onClick={() => onOpenNote(String(n.id), n.title)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left' }}>{n.title}</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dayFortuneLog?.fortune_feedback && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#7C3AED', letterSpacing: '0.05em' }}>운세 피드백 (Fortune Journal)</p>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#6B6B6B', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{dayFortuneLog.fortune_feedback}</p>
+                </div>
+              )}
+              {dayReadings.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#7C3AED', letterSpacing: '0.05em' }}>타로 점괘 기록</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
+                    {dayReadings.map(r => {
+                      const drawn = r.drawn_cards ?? []
+                      return (
+                        <li key={r.id} style={{ marginBottom: '8px' }}>
+                          <button
+                            onClick={() => setSelectedReading(r)}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '10px 14px',
+                              borderRadius: '10px',
+                              border: '1px solid rgba(124,58,237,0.2)',
+                              backgroundColor: 'rgba(124,58,237,0.04)',
+                              fontSize: '13px',
+                              color: '#37352F',
+                              lineHeight: 1.5,
+                              cursor: 'pointer',
+                              transition: 'background-color 0.2s, border-color 0.2s',
+                            }}
+                            onMouseEnter={e => {
+                              e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.1)'
+                              e.currentTarget.style.borderColor = 'rgba(124,58,237,0.35)'
+                            }}
+                            onMouseLeave={e => {
+                              e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.04)'
+                              e.currentTarget.style.borderColor = 'rgba(124,58,237,0.2)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', rowGap: '4px' }}>
+                              <span style={{ color: '#7C3AED', fontWeight: 600 }}>[🔮 운세]</span>
+                              <span>{r.question}</span>
+                              {drawn.length > 0 && (
+                                <span style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                  {drawn.map((c, i) => (
+                                    <span key={i} style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                      padding: '2px 8px', borderRadius: '6px',
+                                      backgroundColor: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.25)',
+                                      fontSize: '11px', fontWeight: 600, color: '#7C3AED',
+                                    }}>
+                                      <span style={{ fontSize: '12px' }}>{c.emoji}</span>
+                                      {c.name_ko}
+                                    </span>
+                                  ))}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+              {dayQuests.length === 0 && dayJournals.length === 0 && !dayFortuneLog?.fortune_feedback && dayReadings.length === 0 && (
+                <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>이 날짜에 기록된 내용이 없습니다.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 점괘 상세 모달 */}
+      {selectedReading && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }}
+          onClick={() => setSelectedReading(null)}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: '16px',
+              padding: '24px',
+              maxWidth: '420px',
+              width: '90%',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#7C3AED' }}>🔮 타로 점괘 상세</h3>
+              <button onClick={() => setSelectedReading(null)} style={{ padding: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#9B9A97' }}><X size={20} /></button>
+            </div>
+            <p style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: 700, color: '#9B9A97' }}>질문</p>
+            <p style={{ margin: '0 0 16px', fontSize: '14px', color: '#37352F', lineHeight: 1.6 }}>{selectedReading.question}</p>
+            <p style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: 700, color: '#9B9A97' }}>뽑은 카드</p>
+            <div style={{ marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+              {(selectedReading.drawn_cards ?? []).length > 0
+                ? renderDrawnCards(selectedReading.drawn_cards)
+                : <span style={{ fontSize: '14px', color: '#9B9A97' }}>없음</span>}
+            </div>
+            <p style={{ margin: '0 0 20px', fontSize: '11px', color: '#9B9A97' }}>
+              {new Date(selectedReading.created_at).toLocaleString('ko-KR')}
+            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => handleDeleteReadingFromCalendar(selectedReading.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '10px 16px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(239,68,68,0.4)',
+                  backgroundColor: 'rgba(239,68,68,0.08)',
+                  color: '#ef4444',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                <Trash2 size={16} /> 삭제
+              </button>
+              <button onClick={() => setSelectedReading(null)} style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid #ddd', background: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3669,14 +4574,1106 @@ function CalendarPage() {
   )
 }
 
+// ═══════════════════════════════════════ IDENTITY PAGE ══════════════════════════
+function IdentityPage({ identities, onRefresh }: { identities: IdentityRow[]; onRefresh: () => void }) {
+  const isMobile = useIsMobile()
+  const [newName, setNewName] = useState('')
+  const [newRoleModel, setNewRoleModel] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editRoleModel, setEditRoleModel] = useState('')
+
+  async function handleAdd() {
+    const name = newName.trim()
+    if (!name) return
+    const row = await insertIdentity(name, newRoleModel.trim() || null)
+    if (row) {
+      setNewName('')
+      setNewRoleModel('')
+      onRefresh()
+    }
+  }
+
+  async function handleSave(id: string) {
+    const name = editName.trim()
+    if (!name) return
+    await updateIdentity(id, name, editRoleModel.trim() || null)
+    setEditingId(null)
+    onRefresh()
+  }
+
+  async function handleDelete(id: string) {
+    await deleteIdentity(id)
+    onRefresh()
+  }
+
+  function fmtTime(sec: number): string {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+  }
+
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
+      <div style={{ marginBottom: '28px' }}>
+        <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em', textTransform: 'uppercase' }}>🎭 Identity</span>
+        <h1 style={{ margin: '8px 0 0', fontSize: '28px', fontWeight: 900, color: '#37352F' }}>정체성 (우디르 태세)</h1>
+        <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>작업할 때 어떤 정체성으로 몰입하는지 정의하고, 누적 시간과 XP를 확인하세요</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+        {identities.map(idn => (
+          <div
+            key={idn.id}
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              border: '1px solid rgba(0,0,0,0.06)',
+              padding: '24px 22px',
+              boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+              transition: 'transform 0.2s, box-shadow 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)' }}
+          >
+            {editingId === idn.id ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="이름" style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #6366f1', outline: 'none', fontSize: '14px' }} />
+                <input value={editRoleModel} onChange={e => setEditRoleModel(e.target.value)} placeholder="롤모델" style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', outline: 'none', fontSize: '13px' }} />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => handleSave(idn.id)} style={{ flex: 1, padding: '8px', borderRadius: '8px', border: 'none', backgroundColor: '#6366f1', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>저장</button>
+                  <button onClick={() => setEditingId(null)} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', backgroundColor: 'transparent', fontSize: '12px', cursor: 'pointer' }}>취소</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#37352F' }}>{idn.name}</h3>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button onClick={() => { setEditingId(idn.id); setEditName(idn.name); setEditRoleModel(idn.role_model ?? '') }} style={{ padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: 'rgba(99,102,241,0.1)', color: '#6366f1', fontSize: '11px', cursor: 'pointer' }}>수정</button>
+                    <button onClick={() => handleDelete(idn.id)} style={{ padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontSize: '11px', cursor: 'pointer' }}>삭제</button>
+                  </div>
+                </div>
+                {idn.role_model && <p style={{ margin: '0 0 16px', fontSize: '12px', color: '#787774' }}>롤모델: {idn.role_model}</p>}
+                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{ backgroundColor: 'rgba(99,102,241,0.08)', padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(99,102,241,0.2)' }}>
+                    <p style={{ margin: 0, fontSize: '10px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.08em' }}>누적 시간</p>
+                    <p style={{ margin: '4px 0 0', fontSize: '16px', fontWeight: 800, color: '#37352F' }}>{fmtTime(idn.time_spent_sec)}</p>
+                  </div>
+                  <div style={{ backgroundColor: 'rgba(52,211,153,0.08)', padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(52,211,153,0.2)' }}>
+                    <p style={{ margin: 0, fontSize: '10px', fontWeight: 700, color: '#34d399', letterSpacing: '0.08em' }}>XP</p>
+                    <p style={{ margin: '4px 0 0', fontSize: '16px', fontWeight: 800, color: '#37352F' }}>{idn.xp}</p>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+        <div
+          style={{
+            backgroundColor: 'rgba(0,0,0,0.02)',
+            borderRadius: '16px',
+            border: '2px dashed rgba(0,0,0,0.12)',
+            padding: '24px 22px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            cursor: 'pointer',
+            transition: 'border-color 0.2s, background 0.2s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.35)'; e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.06)' }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.12)'; e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.02)' }}
+        >
+          <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#787774' }}>+ 새 정체성 추가</p>
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="예: 소설가" style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', outline: 'none', fontSize: '13px' }} />
+          <input value={newRoleModel} onChange={e => setNewRoleModel(e.target.value)} placeholder="롤모델 (선택)" style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', outline: 'none', fontSize: '13px' }} />
+          <button onClick={handleAdd} disabled={!newName.trim()} style={{ padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: newName.trim() ? '#6366f1' : '#EBEBEA', color: newName.trim() ? '#fff' : '#9B9A97', fontSize: '13px', fontWeight: 700, cursor: newName.trim() ? 'pointer' : 'default' }}>추가</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════ FORTUNE PAGE ══════════════════════════
+type TarotCardDisplay = { id: string; name_ko: string; name_en: string; emoji: string; meaning: string }
+
+const TAROT_DECK: TarotCardDisplay[] = [
+  { id: '0',  name_ko: '바보',       name_en: 'The Fool',           emoji: '🃏', meaning: '새로운 시작, 순수함, 자유' },
+  { id: '1',  name_ko: '마법사',     name_en: 'The Magician',       emoji: '✨', meaning: '의지, 창의력, 가능성' },
+  { id: '2',  name_ko: '여사제',     name_en: 'The High Priestess', emoji: '🌙', meaning: '직관, 비밀, 내면의 지혜' },
+  { id: '3',  name_ko: '여황제',     name_en: 'The Empress',        emoji: '👑', meaning: '풍요, 창조, 모성' },
+  { id: '4',  name_ko: '황제',       name_en: 'The Emperor',        emoji: '⚜️', meaning: '질서, 권위, 구조' },
+  { id: '5',  name_ko: '교황',       name_en: 'The Hierophant',     emoji: '📿', meaning: '전통, 가르침, 영성' },
+  { id: '6',  name_ko: '연인',       name_en: 'The Lovers',         emoji: '💕', meaning: '선택, 사랑, 조화' },
+  { id: '7',  name_ko: '전차',       name_en: 'The Chariot',        emoji: '🏹', meaning: '의지력, 승리, 전진' },
+  { id: '8',  name_ko: '힘',         name_en: 'Strength',          emoji: '🦁', meaning: '용기, 인내, 부드러운 힘' },
+  { id: '9',  name_ko: '은둔자',     name_en: 'The Hermit',         emoji: '🕯️', meaning: '성찰, 고독, 내면 탐구' },
+  { id: '10', name_ko: '운명의 수레바퀴', name_en: 'Wheel of Fortune', emoji: '☸️', meaning: '변화, 순환, 운명' },
+  { id: '11', name_ko: '정의',       name_en: 'Justice',            emoji: '⚖️', meaning: '공정함, 균형, 진실' },
+  { id: '12', name_ko: '매달린 사람', name_en: 'The Hanged Man',    emoji: '🙃', meaning: '전환, 포기, 새로운 시각' },
+  { id: '13', name_ko: '사신',       name_en: 'Death',              emoji: '🦋', meaning: '끝과 시작, 변신, 재탄생' },
+  { id: '14', name_ko: '절제',       name_en: 'Temperance',         emoji: '🕊️', meaning: '조화, 인내, 중용' },
+  { id: '15', name_ko: '악마',       name_en: 'The Devil',          emoji: '🔗', meaning: '속박, 유혹, 해방' },
+  { id: '16', name_ko: '탑',         name_en: 'The Tower',          emoji: '⚡', meaning: '붕괴, 계시, 재건' },
+  { id: '17', name_ko: '별',         name_en: 'The Star',           emoji: '⭐', meaning: '희망, 치유, 영감' },
+  { id: '18', name_ko: '달',         name_en: 'The Moon',           emoji: '🌜', meaning: '직관, 꿈, 무의식' },
+  { id: '19', name_ko: '태양',       name_en: 'The Sun',            emoji: '☀️', meaning: '기쁨, 성공, 활력' },
+  { id: '20', name_ko: '심판',       name_en: 'Judgement',          emoji: '📯', meaning: '재탄생, 용서, 소명' },
+  { id: '21', name_ko: '세계',       name_en: 'The World',          emoji: '🌍', meaning: '완성, 성취, 통합' },
+]
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const out = [...arr]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
+
+const FORTUNE_QUICK_LINKS = [
+  { id: 'naver', title: '네이버 운세', url: 'https://search.naver.com/search.naver?query=오늘의+운세', emoji: '🍀' },
+  { id: 'marie', title: '마리끌레르', url: 'https://www.marieclairekorea.com/horoscope/', emoji: '✨' },
+  { id: 'elle', title: '엘르 별자리', url: 'https://www.elle.co.kr/astro', emoji: '🌙' },
+  { id: 'saju', title: '만세력', url: 'https://pro.sajuplus.net/', emoji: '📜' },
+]
+
+function TarotCardFace({ card, isFront }: { card: TarotCardDisplay; isFront: boolean }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '12px',
+        transform: isFront ? 'rotateY(180deg)' : 'rotateY(0deg)',
+        transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+        ...(isFront
+          ? { background: 'linear-gradient(160deg, #fafaf8 0%, #f5f5f0 100%)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9)' }
+          : { background: 'linear-gradient(160deg, #1e1b4b 0%, #312e81 40%, #4c1d95 100%)', border: '1px solid rgba(139,92,246,0.3)', boxShadow: 'inset 0 0 30px rgba(0,0,0,0.3)' }),
+      }}
+    >
+      {isFront ? (
+        <>
+          <span style={{ fontSize: 'clamp(24px, 4vw, 36px)', lineHeight: 1, marginBottom: '8px' }}>{card.emoji}</span>
+          <span style={{ fontSize: 'clamp(11px, 2vw, 13px)', fontWeight: 800, color: '#37352F', textAlign: 'center' }}>{card.name_ko}</span>
+          <span style={{ fontSize: 'clamp(9px, 1.5vw, 10px)', color: '#787774', marginTop: '2px' }}>{card.name_en}</span>
+          <span style={{ fontSize: 'clamp(9px, 1.2vw, 10px)', color: '#9B9A97', marginTop: '8px', textAlign: 'center', lineHeight: 1.4 }}>{card.meaning}</span>
+        </>
+      ) : (
+        <>
+          <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 30% 70%, rgba(167,139,250,0.2) 0%, transparent 50%), radial-gradient(circle at 70% 30%, rgba(99,102,241,0.15) 0%, transparent 40%)', pointerEvents: 'none' }} />
+          <span style={{ fontSize: '18px', opacity: 0.9, position: 'relative', zIndex: 1 }}>✨</span>
+          <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)', marginTop: '6px', letterSpacing: '0.2em', position: 'relative', zIndex: 1 }}>TAROT</span>
+          <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', position: 'relative', zIndex: 1 }}>✦ ✧ ✦</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function renderDrawnCards(cards: DrawnCardItem[]) {
+  if (!cards || cards.length === 0) return null
+  return (
+    <span style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+      {cards.map((c, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '13px', color: '#37352F' }}>
+          {i > 0 && <span style={{ color: '#9B9A97', marginRight: '4px' }}>|</span>}
+          <span>{c.emoji}</span>
+          <span>{c.name_ko}{c.name_en ? ` (${c.name_en})` : ''}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function fortuneCardToDisplay(c: FortuneCardRow): TarotCardDisplay {
+  return {
+    id: c.id,
+    name_ko: c.name_ko,
+    name_en: c.name_en ?? '',
+    emoji: c.emoji ?? '🃏',
+    meaning: c.meaning ?? '',
+  }
+}
+
+/** 통합 덱 폼 모달: editingDeckId가 null이면 INSERT(추가), 있으면 UPDATE(수정) */
+function DeckFormModal({
+  editingDeckId,
+  initialName,
+  initialDescription,
+  initialCoverImageUrl,
+  onClose,
+  onSaved,
+}: {
+  editingDeckId: string | null
+  initialName: string
+  initialDescription: string
+  initialCoverImageUrl: string
+  onClose: () => void
+  onSaved: (deck: FortuneDeckRow) => void
+}) {
+  const [name, setName] = useState(initialName)
+  const [description, setDescription] = useState(initialDescription)
+  const [coverImageUrl, setCoverImageUrl] = useState(initialCoverImageUrl)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setName(initialName)
+    setDescription(initialDescription)
+    setCoverImageUrl(initialCoverImageUrl)
+    setError(null)
+  }, [editingDeckId, initialName, initialDescription, initialCoverImageUrl])
+
+  const handleSubmit = async () => {
+    const trimmed = name.trim()
+    if (!trimmed) { setError('덱 이름을 입력해 주세요.'); return }
+    setSaving(true)
+    setError(null)
+    if (editingDeckId === null) {
+      const deck = await insertFortuneDeck(trimmed, description || undefined, coverImageUrl || undefined)
+      setSaving(false)
+      if (deck) {
+        onSaved(deck)
+        onClose()
+      } else {
+        setError('덱 추가에 실패했습니다.')
+      }
+    } else {
+      const updated = await updateFortuneDeck(editingDeckId, { name: trimmed, description: description || undefined, cover_image_url: coverImageUrl || undefined })
+      setSaving(false)
+      if (updated) {
+        onSaved(updated)
+        onClose()
+      } else {
+        setError('수정에 실패했습니다.')
+      }
+    }
+  }
+
+  const isAddMode = editingDeckId === null
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', maxWidth: '420px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 16px', fontSize: '18px', fontWeight: 800, color: '#37352F' }}>{isAddMode ? '새 덱 추가' : '덱 수정'}</h3>
+        <input
+          type="text"
+          value={name}
+          onChange={e => { setName(e.target.value); setError(null) }}
+          placeholder={isAddMode ? '덱 이름 (예: 기본 타로 카드)' : '덱 이름'}
+          style={{ width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '14px', marginBottom: '10px' }}
+        />
+        <input
+          type="text"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="설명 (선택)"
+          style={{ width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '14px', marginBottom: '10px' }}
+        />
+        <input
+          type="url"
+          value={coverImageUrl}
+          onChange={e => setCoverImageUrl(e.target.value)}
+          placeholder="표지 이미지 URL (선택)"
+          style={{ width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '14px', marginBottom: '16px' }}
+        />
+        {error && <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#ef4444' }}>{error}</p>}
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid #ddd', background: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>취소</button>
+          <button onClick={handleSubmit} disabled={saving} style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', background: '#7C3AED', color: '#fff', cursor: saving ? 'default' : 'pointer', fontSize: '13px', fontWeight: 600, opacity: saving ? 0.7 : 1 }}>{saving ? '저장 중…' : '저장'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const FALLBACK_DECK: FortuneDeckRow = { id: '__fallback__', name: '기본 타로 카드', sort_order: 0 }
+
+function FortuneReadingCalendar({ readingLogs, selectedDate, onSelectDate }: {
+  readingLogs: ReadingLogRow[]
+  selectedDate: string | null
+  onSelectDate: (date: string | null) => void
+}) {
+  const [viewDate, setViewDate] = useState(new Date())
+  const datesWithReadings = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of readingLogs) {
+      const d = new Date(r.created_at)
+      set.add(toYMD(d))
+    }
+    return set
+  }, [readingLogs])
+
+  const dayDots = useCallback((date: Date) => {
+    const dk = toYMD(date)
+    if (!datesWithReadings.has(dk)) return null
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1px' }}>
+        <span style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: '#7C3AED', display: 'block' }} title="운세 기록" />
+      </div>
+    )
+  }, [datesWithReadings])
+
+  const calValue = selectedDate ? new Date(selectedDate + 'T12:00:00') : null
+
+  return (
+    <div className="fortune-calendar-wrapper" style={{ fontSize: '11px' }}>
+      <Calendar
+        value={calValue ?? viewDate}
+        onChange={(v) => {
+          const d = v as Date
+          const key = toYMD(d)
+          onSelectDate(selectedDate === key ? null : key)
+        }}
+        onActiveStartDateChange={({ activeStartDate }) => activeStartDate && setViewDate(activeStartDate)}
+        tileContent={({ date }) => dayDots(date)}
+        calendarType="gregory"
+        locale="ko-KR"
+        showWeekNumbers
+        formatShortWeekday={(_, d) => ['일','월','화','수','목','금','토'][d.getDay()]}
+        formatDay={(_locale, date) => date.getDate().toString()}
+      />
+      {selectedDate && (
+        <button onClick={() => onSelectDate(null)} style={{ marginTop: '6px', width: '100%', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}>필터 해제</button>
+      )}
+    </div>
+  )
+}
+
+function toDatetimeLocal(iso: string): string {
+  const d = new Date(iso)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day}T${h}:${min}`
+}
+
+function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
+  log: ReadingLogRow
+  onClose: () => void
+  onSaved: (updated: ReadingLogRow) => void
+  onDeleted: () => void
+}) {
+  const [question, setQuestion] = useState(log.question)
+  const [notes, setNotes] = useState(log.notes ?? '')
+  const [createdAt, setCreatedAt] = useState(toDatetimeLocal(log.created_at))
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  useEffect(() => {
+    setQuestion(log.question)
+    setNotes(log.notes ?? '')
+    setCreatedAt(toDatetimeLocal(log.created_at))
+  }, [log.id, log.question, log.notes, log.created_at])
+
+  async function handleSave() {
+    if (!question.trim()) return
+    setSaving(true)
+    const updated = await updateReadingLog(log.id, {
+      question: question.trim(),
+      notes: notes.trim() || undefined,
+      created_at: new Date(createdAt).toISOString(),
+    })
+    setSaving(false)
+    if (updated) {
+      setSaved(true)
+      onSaved(updated)
+      setTimeout(() => setSaved(false), 1500)
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
+    const ok = await deleteReadingLog(log.id)
+    if (ok) {
+      onDeleted()
+      onClose()
+    }
+  }
+
+  const drawn = log.drawn_cards ?? []
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', backgroundColor: 'rgba(0,0,0,0.4)' }} onClick={onClose}>
+      <div style={{ maxWidth: '520px', width: '100%', maxHeight: '90vh', overflow: 'auto', backgroundColor: '#fff', borderRadius: '16px', boxShadow: '0 2px 24px rgba(0,0,0,0.2)', padding: '24px' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#37352F' }}>✏️ 기록 수정</h3>
+          <button onClick={onClose} style={{ padding: '6px', border: 'none', background: 'rgba(0,0,0,0.06)', borderRadius: '8px', cursor: 'pointer', color: '#787774' }}>✕</button>
+        </div>
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>날짜 및 시간</label>
+          <input type="datetime-local" value={createdAt} onChange={e => setCreatedAt(e.target.value)}
+            style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: '14px', color: '#37352F', outline: 'none' }}
+          />
+        </div>
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>질문 / 타이틀</label>
+          <textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="질문이나 운세 내용..."
+            style={{ width: '100%', minHeight: '80px', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '14px', color: '#37352F', lineHeight: 1.5, resize: 'vertical', outline: 'none' }}
+          />
+        </div>
+        {drawn.length > 0 && (
+          <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+            {drawn.map((c, i) => (
+              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', borderRadius: '8px', backgroundColor: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', fontSize: '12px', color: '#37352F', fontWeight: 600 }}>
+                <span>{c.emoji}</span>
+                {c.name_ko ?? c.name_en}
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>나의 해석 / 코멘트</label>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="점괘에 대한 피드백, 해석, 느낀 점을 적어보세요..."
+            style={{ width: '100%', minHeight: '100px', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '14px', color: '#37352F', lineHeight: 1.6, resize: 'vertical', outline: 'none' }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button onClick={handleDelete} style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.3)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>🗑️ 삭제</button>
+          <button onClick={handleSave} disabled={saving} style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', backgroundColor: saved ? '#34d399' : '#7C3AED', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+            {saving ? '저장 중…' : saved ? '저장됨 ✓' : '수정 ✏️'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
+  decks: FortuneDeckRow[]
+  onSelectDeck: (d: FortuneDeckRow) => void
+  onDecksChange: (decks: FortuneDeckRow[]) => void
+  onReadingSaved?: () => void
+}) {
+  const isMobile = useIsMobile()
+  const [decksMenuOpen, setDecksMenuOpen] = useState<string | null>(null)
+  /** null=모달 닫힘, 'add'=추가 모드, FortuneDeckRow=수정 모드 */
+  const [deckFormState, setDeckFormState] = useState<null | 'add' | FortuneDeckRow>(null)
+  const [fortuneFeedback, setFortuneFeedback] = useState('')
+  const [savingFeedback, setSavingFeedback] = useState(false)
+  const [savedFeedback, setSavedFeedback] = useState(false)
+  const [readingLogs, setReadingLogs] = useState<ReadingLogRow[]>([])
+  const [detailLog, setDetailLog] = useState<ReadingLogRow | null>(null)
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null)
+
+  const filteredReadingLogs = useMemo(() => {
+    if (!selectedCalendarDate) return readingLogs
+    const sel = selectedCalendarDate
+    return readingLogs.filter(r => {
+      const d = new Date(r.created_at)
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}` === sel
+    })
+  }, [readingLogs, selectedCalendarDate])
+
+  useEffect(() => {
+    fetchReadingLogs().then(setReadingLogs)
+  }, [])
+
+  useEffect(() => {
+    if (!decksMenuOpen) return
+    const close = () => setDecksMenuOpen(null)
+    const id = setTimeout(() => document.addEventListener('click', close), 0)
+    return () => { clearTimeout(id); document.removeEventListener('click', close) }
+  }, [decksMenuOpen])
+
+  const displayDecks = decks.length > 0 ? decks : [FALLBACK_DECK]
+
+  const todaySolar = Solar.fromDate(new Date())
+  const lunar = todaySolar.getLunar()
+  const eightChar = lunar.getEightChar()
+  const todayGanzhi = `${eightChar.getYear()}년 ${eightChar.getMonth()}월 ${eightChar.getDay()}일`
+  const solarDateStr = `${todaySolar.getYear()}년 ${todaySolar.getMonth()}월 ${todaySolar.getDay()}일`
+
+  async function handleDeleteDeck(d: FortuneDeckRow) {
+    if (d.id === '__fallback__') return
+    if (!window.confirm(`"${d.name}" 덱을 정말 삭제하시겠습니까?`)) return
+    const ok = await deleteFortuneDeck(d.id)
+    if (ok) {
+      onDecksChange(decks.filter(x => x.id !== d.id))
+      setDecksMenuOpen(null)
+    }
+  }
+
+  async function handleDeleteReading(log: ReadingLogRow) {
+    if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
+    const ok = await deleteReadingLog(log.id)
+    if (ok) {
+      setReadingLogs(prev => prev.filter(r => r.id !== log.id))
+      if (detailLog?.id === log.id) setDetailLog(null)
+      onReadingSaved?.()
+    }
+  }
+
+  async function saveFortuneFeedback() {
+    const text = fortuneFeedback.trim()
+    if (!text) return
+    setSavingFeedback(true)
+    const row = await insertReadingLog(text, [])
+    setSavingFeedback(false)
+    if (row) {
+      setReadingLogs(prev => [row, ...prev])
+      setFortuneFeedback('')
+      setSavedFeedback(true)
+      setTimeout(() => setSavedFeedback(false), 2000)
+      onReadingSaved?.()
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: '1400px', margin: '0 auto', padding: isMobile ? '12px' : '16px' }}>
+      <div style={{ marginBottom: '12px' }}>
+        <span style={{ fontSize: '9px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.15em', textTransform: 'uppercase' }}>🔮 Fortune</span>
+        <h1 style={{ margin: '4px 0 0', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>Fortune 메인 대시보드</h1>
+      </div>
+
+      {/* ── TOP: 캘린더 (좌 30%) + 통합 기록 리스트 (우 70%), 고정 높이 ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '3fr 7fr', gap: '16px', marginBottom: '16px', alignItems: 'stretch' }}>
+        <div style={{ padding: '12px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+          <h3 style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 800, color: '#7C3AED' }}>📅 운세 기록</h3>
+          <FortuneReadingCalendar
+            readingLogs={readingLogs}
+            selectedDate={selectedCalendarDate}
+            onSelectDate={setSelectedCalendarDate}
+          />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : '250px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+          <h3 style={{ margin: 0, padding: '12px 16px 8px', fontSize: '11px', fontWeight: 800, color: '#37352F', flexShrink: 0 }}>통합 운세 & 점괘 기록</h3>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px 16px', minHeight: 0 }}>
+            {filteredReadingLogs.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '12px', color: '#9B9A97', padding: '24px 8px', textAlign: 'center' }}>
+                {selectedCalendarDate ? '선택한 날짜에 기록이 없습니다.' : '아직 기록이 없습니다.'}
+              </p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {filteredReadingLogs.map(log => {
+                  const d = new Date(log.created_at)
+                  const dateStr = d.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })
+                  const timeStr = d.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
+                  const drawn = log.drawn_cards ?? []
+                  const hasCards = drawn.length > 0
+                  const preview = log.question.length > 45 ? log.question.slice(0, 45) + '…' : log.question
+                  const notesPreview = (log.notes ?? '').length > 50 ? (log.notes ?? '').slice(0, 50) + '…' : (log.notes ?? '')
+                  return (
+                    <li
+                      key={log.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        borderRadius: '8px',
+                        backgroundColor: '#F8F8F6',
+                        border: '1px solid rgba(0,0,0,0.06)',
+                        fontSize: '12px',
+                        color: '#37352F',
+                        lineHeight: 1.4,
+                        transition: 'background-color 0.2s, border-color 0.2s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.06)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.2)' }}
+                      onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#F8F8F6'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.06)' }}
+                    >
+                      <span style={{ fontSize: '14px', flexShrink: 0 }}>{hasCards ? '🃏' : '📝'}</span>
+                      <div style={{ flex: 1, minWidth: 0, cursor: 'pointer', padding: '1px 0' }} onClick={() => setDetailLog(log)}>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px', rowGap: '4px' }}>
+                          <span style={{ fontWeight: 700, color: '#7C3AED', marginRight: '2px', flexShrink: 0 }}>[{dateStr} {timeStr}]</span>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto', minWidth: 0 }}>{preview}</span>
+                          {drawn.length > 0 && (
+                            <span style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', flexShrink: 0 }}>
+                              {drawn.map((c, i) => (
+                                <span key={i} style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                  padding: '2px 8px', borderRadius: '6px',
+                                  backgroundColor: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.25)',
+                                  fontSize: '10px', fontWeight: 600, color: '#7C3AED',
+                                }}>
+                                  <span style={{ fontSize: '11px' }}>{c.emoji}</span>
+                                  {c.name_ko}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                        {notesPreview && (
+                          <div style={{ marginTop: '2px', fontSize: '11px', color: '#9B9A97', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{notesPreview}</div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                        <button onClick={e => { e.stopPropagation(); setDetailLog(log) }} title="수정" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', cursor: 'pointer', fontSize: '10px' }}>✏️</button>
+                        <button onClick={e => { e.stopPropagation(); handleDeleteReading(log) }} title="삭제" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: '10px' }}>🗑️</button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── MIDDLE: 만세력 위젯 & 퀵링크 (좌) + 운세 피드백 입력창 (우) ── 얇은 바 형태 */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', borderRadius: '12px', background: 'linear-gradient(135deg, rgba(124,58,237,0.08) 0%, rgba(99,102,241,0.06) 100%)', border: '1px solid rgba(124,58,237,0.15)' }}>
+          <div style={{ flexShrink: 0, textAlign: 'center' }}>
+            <p style={{ margin: 0, fontSize: '9px', fontWeight: 700, color: '#9B9A97' }}>{solarDateStr}</p>
+            <p style={{ margin: '2px 0 0', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>🔮 {todayGanzhi}</p>
+          </div>
+          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+            {FORTUNE_QUICK_LINKS.map(link => (
+              <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: '#F4F4F2', color: '#37352F', fontSize: '11px', fontWeight: 500, textDecoration: 'none' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.08)'; e.currentTarget.style.borderColor = 'rgba(99,102,241,0.25)' }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#F4F4F2'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)' }}
+              >
+                <span>{link.emoji}</span>{link.title}
+              </a>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', borderRadius: '12px', backgroundColor: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+          <textarea value={fortuneFeedback} onChange={e => setFortuneFeedback(e.target.value)}
+            placeholder="운세 피드백 (Fortune Journal)..."
+            style={{ flex: 1, minHeight: '48px', maxHeight: '64px', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: '#F8F8F6', fontSize: '12px', color: '#37352F', lineHeight: 1.5, resize: 'none', outline: 'none' }}
+          />
+          <button onClick={saveFortuneFeedback} disabled={savingFeedback || !fortuneFeedback.trim()} style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', backgroundColor: savedFeedback ? '#34d399' : '#6366f1', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: savingFeedback ? 'default' : 'pointer', opacity: savingFeedback ? 0.7 : 1, flexShrink: 0 }}>{savingFeedback ? '저장 중…' : savedFeedback ? '저장됨 ✓' : '저장'}</button>
+        </div>
+      </div>
+
+      {/* ── BOTTOM: 나의 오라클 덱 ── 한 줄 가로 스크롤 */}
+      <div>
+        <h2 style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: 800, color: '#37352F' }}>나의 오라클 덱</h2>
+        <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '8px', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+          {displayDecks.map(d => (
+            <div
+              key={d.id}
+              style={{
+                position: 'relative',
+                flexShrink: 0,
+                width: isMobile ? '140px' : '160px',
+                borderRadius: '12px',
+                overflow: 'hidden',
+                border: '1px solid rgba(124,58,237,0.2)',
+                background: 'linear-gradient(135deg, rgba(124,58,237,0.06) 0%, rgba(99,102,241,0.04) 100%)',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(124,58,237,0.4)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(124,58,237,0.12)' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(124,58,237,0.2)'; e.currentTarget.style.boxShadow = 'none' }}
+            >
+              <div
+                onClick={() => onSelectDeck(d)}
+                style={{ padding: '12px', minHeight: '100px' }}
+              >
+                {d.id !== '__fallback__' && (
+                  <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 2 }}>
+                    <button
+                      onClick={e => { e.stopPropagation(); setDecksMenuOpen(prev => prev === d.id ? null : d.id) }}
+                      style={{ padding: '4px', borderRadius: '6px', border: 'none', background: 'rgba(0,0,0,0.06)', color: '#787774', cursor: 'pointer' }}
+                    >
+                      <MoreVertical size={14} />
+                    </button>
+                    {decksMenuOpen === d.id && (
+                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: '#fff', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', padding: '4px 0', minWidth: '80px' }}>
+                        <button onClick={e => { e.stopPropagation(); setDeckFormState(d); setDecksMenuOpen(null) }} style={{ display: 'block', width: '100%', padding: '6px 12px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '12px', textAlign: 'left', color: '#37352F' }}>수정</button>
+                        <button onClick={e => { e.stopPropagation(); handleDeleteDeck(d) }} style={{ display: 'block', width: '100%', padding: '6px 12px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '12px', textAlign: 'left', color: '#ef4444' }}>삭제</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {d.cover_image_url ? (
+                  <div style={{ width: '100%', aspectRatio: '4/3', borderRadius: '8px', overflow: 'hidden', marginBottom: '8px', background: 'rgba(0,0,0,0.06)' }}>
+                    <img src={d.cover_image_url} alt={d.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                  </div>
+                ) : (
+                  <div style={{ width: '100%', aspectRatio: '4/3', borderRadius: '8px', marginBottom: '8px', background: 'linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(99,102,241,0.1) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>🃏</div>
+                )}
+                <h3 style={{ margin: '0 0 2px', fontSize: '13px', fontWeight: 800, color: '#37352F' }}>{d.name}</h3>
+                {d.description && <p style={{ margin: 0, fontSize: '10px', color: '#787774', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{d.description}</p>}
+                <ChevronRight size={14} color="#7C3AED" style={{ position: 'absolute', bottom: '12px', right: '12px' }} />
+              </div>
+            </div>
+          ))}
+          <button
+            onClick={() => {
+              setDeckFormState('add')
+            }}
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '16px 20px',
+              borderRadius: '12px',
+              border: '2px dashed rgba(124,58,237,0.4)',
+              background: 'rgba(124,58,237,0.04)',
+              color: '#7C3AED',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              minWidth: isMobile ? '100px' : '120px',
+              minHeight: '100px',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.08)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.6)' }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.04)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.4)' }}
+          >
+            <Plus size={24} />
+            [+ 덱 추가]
+          </button>
+        </div>
+      </div>
+
+      {deckFormState && (
+        <DeckFormModal
+          editingDeckId={deckFormState === 'add' ? null : deckFormState.id}
+          initialName={deckFormState === 'add' ? '' : deckFormState.name}
+          initialDescription={deckFormState === 'add' ? '' : (deckFormState.description ?? '')}
+          initialCoverImageUrl={deckFormState === 'add' ? '' : (deckFormState.cover_image_url ?? '')}
+          onClose={() => setDeckFormState(null)}
+          onSaved={updated => {
+            if (deckFormState === 'add') {
+              onDecksChange([...decks, updated])
+            } else {
+              onDecksChange(decks.map(d => d.id === updated.id ? updated : d))
+            }
+            setDeckFormState(null)
+          }}
+        />
+      )}
+      {detailLog && (
+        <ReadingLogEditModal
+          log={detailLog}
+          onClose={() => setDetailLog(null)}
+          onSaved={updated => { setReadingLogs(prev => prev.map(r => r.id === updated.id ? updated : r)); setDetailLog(updated); fetchReadingLogs().then(setReadingLogs) }}
+          onDeleted={() => { setReadingLogs(prev => prev.filter(r => r.id !== detailLog.id)); setDetailLog(null); onReadingSaved?.() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function FortuneSpreadView({
+  deck,
+  cards,
+  onBack,
+  onReadingSaved,
+}: { deck: FortuneDeckRow; cards: TarotCardDisplay[]; onBack: () => void; onReadingSaved?: () => void }) {
+  const isMobile = useIsMobile()
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`
+
+  const [tarotQuestion, setTarotQuestion] = useState('')
+  const [shuffledDeck, setShuffledDeck] = useState<TarotCardDisplay[]>(() => shuffleArray(cards))
+  const [flippedCards, setFlippedCards] = useState<TarotCardDisplay[]>([])
+  const [cardSize, setCardSize] = useState(80)
+
+  useEffect(() => {
+    setShuffledDeck(shuffleArray(cards))
+    setFlippedCards([])
+  }, [deck.id, cards])
+
+  function reshuffleDeck() {
+    setShuffledDeck(shuffleArray(cards))
+    setFlippedCards([])
+  }
+
+  function toggleCard(id: string) {
+    const card = shuffledDeck.find(c => c.id === id)
+    if (!card) return
+    const idx = flippedCards.findIndex(c => c.id === id)
+    if (idx >= 0) {
+      setFlippedCards(prev => prev.filter(c => c.id !== id))
+    } else {
+      setFlippedCards(prev => [...prev, card])
+    }
+  }
+
+  async function handleSaveReading() {
+    const question = tarotQuestion.trim()
+    if (!question) {
+      alert('질문을 입력하고 카드를 먼저 뽑아주세요!')
+      return
+    }
+    if (flippedCards.length === 0) {
+      alert('질문을 입력하고 카드를 먼저 뽑아주세요!')
+      return
+    }
+    const drawnCards = flippedCards.map(c => ({ emoji: c.emoji, name_ko: c.name_ko, name_en: c.name_en }))
+    const row = await insertReadingLog(question, drawnCards)
+    if (row) {
+      setFlippedCards([])
+      onReadingSaved?.()
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
+      <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#37352F' }}>
+          <ChevronLeft size={16} /> 뒤로 가기 (Fortune 메인으로)
+        </button>
+        <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em', textTransform: 'uppercase' }}>🔮 Fortune</span>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 900, color: '#37352F' }}>{deck.name}</h1>
+        <p style={{ margin: 0, fontSize: '14px', color: '#787774', fontWeight: 500 }}>{dateStr}</p>
+      </div>
+
+      <div style={{
+        marginBottom: '24px',
+        padding: '24px',
+        borderRadius: '16px',
+        background: 'linear-gradient(135deg, rgba(124,58,237,0.06) 0%, rgba(99,102,241,0.04) 100%)',
+        border: '1px solid rgba(124,58,237,0.12)',
+      }}>
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            type="text"
+            value={tarotQuestion}
+            onChange={e => setTarotQuestion(e.target.value)}
+            placeholder="오늘의 질문이나 주제를 적어보세요..."
+            style={{
+              flex: 1,
+              minWidth: '200px',
+              padding: '14px 18px',
+              borderRadius: '12px',
+              border: '1px solid rgba(0,0,0,0.08)',
+              backgroundColor: '#FFFFFF',
+              fontSize: '14px',
+              color: '#37352F',
+              outline: 'none',
+            }}
+          />
+          <button
+            onClick={handleSaveReading}
+            style={{
+              padding: '14px 20px',
+              borderRadius: '12px',
+              border: 'none',
+              backgroundColor: '#7C3AED',
+              color: '#fff',
+              fontSize: '14px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              boxShadow: '0 2px 8px rgba(124,58,237,0.3)',
+              transition: 'background-color 0.2s, transform 0.15s, box-shadow 0.2s',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.backgroundColor = '#6D28D9'
+              e.currentTarget.style.transform = 'translateY(-1px)'
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(124,58,237,0.4)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.backgroundColor = '#7C3AED'
+              e.currentTarget.style.transform = 'translateY(0)'
+              e.currentTarget.style.boxShadow = '0 2px 8px rgba(124,58,237,0.3)'
+            }}
+          >
+            💾 점괘 기록하기
+          </button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+          <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>🃏 {cards.length}장 — 카드를 클릭해 뒤집어 보세요</p>
+          <button onClick={reshuffleDeck} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(124,58,237,0.3)', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>다시 섞기</button>
+        </div>
+        {/* 카드 크기 조절 슬라이더 */}
+        <div className="flex flex-col gap-2 mb-4">
+          <label className="text-xs font-bold text-[#7C3AED] tracking-wide uppercase flex items-center gap-2">
+            <span>카드 크기 조절</span>
+            <span className="text-[#9B9A97] font-medium normal-case tracking-normal">({cardSize}px)</span>
+          </label>
+          <input
+            type="range"
+            min={80}
+            max={350}
+            value={cardSize}
+            onChange={e => setCardSize(Number(e.target.value))}
+            className="fortune-card-size-slider w-full max-w-[280px]"
+          />
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(auto-fill, minmax(${cardSize}px, 1fr))`,
+            gap: '12px',
+          }}
+        >
+          {shuffledDeck.map(card => (
+            <div
+              key={card.id}
+              onClick={() => toggleCard(card.id)}
+              style={{
+                aspectRatio: '2/3',
+                cursor: 'pointer',
+                perspective: '1000px',
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                  width: '100%',
+                  height: '100%',
+                  transformStyle: 'preserve-3d',
+                  WebkitTransformStyle: 'preserve-3d',
+                  transform: flippedCards.some(c => c.id === card.id) ? 'rotateY(180deg)' : 'rotateY(0deg)',
+                  transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+                }}
+              >
+                <TarotCardFace card={card} isFront={false} />
+                <TarotCardFace card={card} isFront={true} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FortunePage({ onReadingSaved }: { onReadingSaved?: () => void }) {
+  const isMobile = useIsMobile()
+  const [decks, setDecks] = useState<FortuneDeckRow[]>([])
+  const [selectedDeck, setSelectedDeck] = useState<FortuneDeckRow | null>(null)
+  const [spreadCards, setSpreadCards] = useState<TarotCardDisplay[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    fetchFortuneDecks().then(d => {
+      setDecks(d)
+      setLoading(false)
+    })
+  }, [])
+
+  async function handleSelectDeck(deck: FortuneDeckRow) {
+    setLoading(true)
+    if (deck.id === '__fallback__') {
+      setSpreadCards(TAROT_DECK)
+      setSelectedDeck(deck)
+    } else {
+      const rows = await fetchFortuneCards(deck.id)
+      const display = rows.length > 0 ? rows.map(fortuneCardToDisplay) : TAROT_DECK
+      setSpreadCards(display)
+      setSelectedDeck(deck)
+    }
+    setLoading(false)
+  }
+
+  function handleBack() {
+    setSelectedDeck(null)
+    setSpreadCards([])
+  }
+
+  if (loading && !selectedDeck) {
+    return (
+      <div style={{ maxWidth: '800px', margin: '0 auto', padding: '48px 24px', textAlign: 'center' }}>
+        <p style={{ color: '#787774', fontSize: '14px' }}>덱 목록을 불러오는 중…</p>
+      </div>
+    )
+  }
+
+  if (selectedDeck && spreadCards.length > 0) {
+    return (
+      <>
+        <FortuneSpreadView deck={selectedDeck} cards={spreadCards} onBack={handleBack} onReadingSaved={onReadingSaved} />
+      </>
+    )
+  }
+
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
+      <FortuneHub
+        decks={decks}
+        onSelectDeck={handleSelectDeck}
+        onDecksChange={setDecks}
+        onReadingSaved={onReadingSaved}
+      />
+    </div>
+  )
+}
+
 // ═══════════════════════════════════════ TRAVEL ══════════════════════════════
 const TRAVEL_KEY = 'creative_os_travel_v1'
+const TRAVEL_TRIPS_KEY = 'creative_os_travel_trips_v1'
+
+type TravelTrip = { id: string; title: string; startDate: string; endDate: string; color: string; note: string; countryFlag?: string }
+const DEFAULT_TRAVEL_TRIPS: TravelTrip[] = [
+  { id: 'osaka-2026', title: '오사카 여행', startDate: '2026-04-27', endDate: '2026-04-30', color: '#f97316', note: '오사카성 · 만화박물관 · 도톤보리 거리 탐방', countryFlag: '🇯🇵' },
+]
+
+const TRIP_COLORS = ['#f97316', '#6366f1', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#7C3AED']
+
+function loadTravelTrips(): TravelTrip[] {
+  try {
+    const raw = localStorage.getItem(TRAVEL_TRIPS_KEY)
+    if (!raw) return DEFAULT_TRAVEL_TRIPS
+    const saved = JSON.parse(raw) as TravelTrip[]
+    const defaultIds = new Set(DEFAULT_TRAVEL_TRIPS.map(t => t.id))
+    return [...DEFAULT_TRAVEL_TRIPS, ...saved.filter(t => !defaultIds.has(t.id))]
+  } catch { return DEFAULT_TRAVEL_TRIPS }
+}
+function saveTravelTrips(trips: TravelTrip[]) {
+  const defaultIds = new Set(DEFAULT_TRAVEL_TRIPS.map(t => t.id))
+  const custom = trips.filter(t => !defaultIds.has(t.id))
+  localStorage.setItem(TRAVEL_TRIPS_KEY, JSON.stringify(custom))
+  kvSet(TRAVEL_TRIPS_KEY, custom)
+}
+
+/** 2026.04.27 ~ 2026.04.30 형식 (년도 포함) */
+function fmtTripDateRange(start: string, end: string): string {
+  const s = start.split('-'), e = end.split('-')
+  return `${s[0]}.${s[1]}.${s[2]} ~ ${e[0]}.${e[1]}.${e[2]}`
+}
+
+/** 2026.4.27 ~ 2026.4.30 형식 (년도.월.일, 앞자리 0 제거) */
+function fmtTripDateShort(start: string, end: string): string {
+  const s = start.split('-'), e = end.split('-')
+  return `${s[0]}.${Number(s[1])}.${Number(s[2])} ~ ${e[0]}.${Number(e[1])}.${Number(e[2])}`
+}
+
+/** 여행 기간 박/일 계산 (예: 3박 4일) */
+function calcTripNights(start: string, end: string): string {
+  const [y1, m1, d1] = start.split('-').map(Number)
+  const [y2, m2, d2] = end.split('-').map(Number)
+  const startD = new Date(y1, m1 - 1, d1)
+  const endD = new Date(y2, m2 - 1, d2)
+  const diffMs = endD.getTime() - startD.getTime()
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1
+  const nights = days - 1
+  return `${nights}박 ${days}일`
+}
+
+/** D-Day 자동 계산: 여행 시작일과 오늘 비교 */
+function calcDDay(startDate: string): { text: string; isPast: boolean } {
+  const [y, m, d] = startDate.split('-').map(Number)
+  const startD = new Date(y, m - 1, d)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  startD.setHours(0, 0, 0, 0)
+  const diffMs = startD.getTime() - today.getTime()
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24))
+  if (days > 0) return { text: `D-${days}`, isPast: false }
+  if (days === 0) return { text: 'D-Day', isPast: false }
+  return { text: '여행완료', isPast: true }
+}
 
 type PackItem     = { id: string; label: string; checked: boolean }
 type PackCategory = { id: string; label: string; emoji: string; items: PackItem[] }
 type TravelStore  = { packing: PackCategory[]; spotMemos: Record<string, string> }
-
-const OSAKA_START = new Date(2026, 3, 27)
 
 const DEFAULT_PACKING: PackCategory[] = [
   { id: 'essential', label: '필수', emoji: '🛂', items: [
@@ -3699,11 +5696,372 @@ const DEFAULT_PACKING: PackCategory[] = [
   ]},
 ]
 
-const TRAVEL_SPOTS = [
+const DEFAULT_TRAVEL_SPOTS = [
   { id: 'osaka_castle',  name: '오사카성',               emoji: '🏯', tag: '역사적 영감 & 풍경 촬영', desc: '도요토미 히데요시의 천하통일 성채. 거대한 돌벽과 황금 지붕이 만드는 압도적 스케일 — 웹툰 배경 레퍼런스로 반드시 촬영.' },
   { id: 'tezuka_museum', name: '테즈카 오사무 만화 박물관', emoji: '✒️', tag: '만화의 신께 바치는 순례', desc: '아톰, 블랙잭의 아버지 테즈카 오사무가 남긴 창작의 유산. 작화와 스토리텔링의 근원을 직접 느끼는 창작 성지.' },
   { id: 'kyoto_day',     name: '교토 당일치기',          emoji: '⛩️', tag: '전통미 & 정적인 충전',   desc: '후시미이나리의 붉은 도리이, 아라시야마 대나무 숲. 한국 웹툰에서 보기 드문 동양 판타지 세계관을 흡수하는 감성 코스.' },
 ]
+
+// ── 여행별 상세 데이터 (커스텀 가능) ──
+type TravelSpot = { id: string; name: string; emoji: string; tag: string; desc: string }
+type ScheduleItem = { id: string; date: string; title: string; note: string; time?: string }
+type PhotoItem = { id: string; url: string; caption?: string }
+type ItineraryStep = { id: string; title?: string; imageUrl?: string; note?: string }
+type ExpenseCategory = { id: string; label: string; emoji: string; sort_order: number }
+type RetroRatingItem = { id: string; label: string; emoji: string; sort_order: number }
+type RetroTextQuestion = { id: string; label: string; placeholder?: string; sort_order: number }
+type RetrospectiveTemplates = { ratingItems: RetroRatingItem[]; textQuestions: RetroTextQuestion[] }
+
+type TravelExpense = { id: string; date: string; category: string; usage: string; amount: number }
+type TravelReview = { ratings: Record<string, number>; textAnswers: Record<string, string> }
+type TripDetailData = {
+  packing: PackCategory[]
+  spots: TravelSpot[]
+  spotMemos: Record<string, string>
+  schedule: ScheduleItem[]
+  photos: PhotoItem[]
+  tips?: { icon: string; text: string }[]
+  coverImageUrl?: string
+  coverImagePosition?: string
+  heroIcon?: string
+  heroMemo?: string
+  itinerarySteps?: ItineraryStep[]
+  expenses?: TravelExpense[]
+  review?: TravelReview | null
+}
+const TRAVEL_TRIP_DETAIL_KEY = 'creative_os_travel_trip_detail_v1'
+const TRAVEL_EXPENSE_CATEGORIES_KEY = 'creative_os_travel_expense_categories_v1'
+const TRAVEL_RETROSPECTIVE_TEMPLATES_KEY = 'creative_os_travel_retrospective_templates_v1'
+
+const DEFAULT_ITINERARY_STEPS: ItineraryStep[] = Array.from({ length: 10 }, (_, i) => ({ id: `step_${i}`, title: '', imageUrl: '', note: '' }))
+
+function getDefaultExpenseCategories(): ExpenseCategory[] {
+  return [
+    { id: 'food', label: '식비', emoji: '🍽️', sort_order: 0 },
+    { id: 'transport', label: '교통', emoji: '🚆', sort_order: 1 },
+    { id: 'shopping', label: '쇼핑', emoji: '🛍️', sort_order: 2 },
+    { id: 'accommodation', label: '숙박', emoji: '🛏️', sort_order: 3 },
+    { id: 'other', label: '기타', emoji: '🎫', sort_order: 4 },
+  ]
+}
+
+function getDefaultRetrospectiveTemplates(): RetrospectiveTemplates {
+  return {
+    ratingItems: [
+      { id: 'satisfaction', label: '만족도 (총평)', emoji: '⭐', sort_order: 0 },
+      { id: 'food', label: '식도락 (음식)', emoji: '🍣', sort_order: 1 },
+      { id: 'weather', label: '날씨와 운', emoji: '☀️', sort_order: 2 },
+    ],
+    textQuestions: [
+      { id: 'bestMoment', label: '이번 여행에서 가장 좋았던 순간은?', placeholder: '감상을 자유롭게 적어보세요...', sort_order: 0 },
+      { id: 'inspiration', label: '새로운 스토리나 작업에 적용할 만한 영감이 있었나요?', placeholder: '창작에 도움이 된 아이디어나 메모를 적어보세요...', sort_order: 1 },
+    ],
+  }
+}
+
+async function loadExpenseCategories(): Promise<ExpenseCategory[]> {
+  try {
+    const fromKv = await kvGet<ExpenseCategory[]>(TRAVEL_EXPENSE_CATEGORIES_KEY)
+    if (fromKv && Array.isArray(fromKv) && fromKv.length > 0) return fromKv
+    const raw = localStorage.getItem(TRAVEL_EXPENSE_CATEGORIES_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as ExpenseCategory[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch { /* ignore */ }
+  return getDefaultExpenseCategories()
+}
+
+function saveExpenseCategories(cats: ExpenseCategory[]) {
+  try {
+    localStorage.setItem(TRAVEL_EXPENSE_CATEGORIES_KEY, JSON.stringify(cats))
+    kvSet(TRAVEL_EXPENSE_CATEGORIES_KEY, cats)
+  } catch { /* ignore */ }
+}
+
+async function loadRetrospectiveTemplates(): Promise<RetrospectiveTemplates> {
+  try {
+    const fromKv = await kvGet<RetrospectiveTemplates>(TRAVEL_RETROSPECTIVE_TEMPLATES_KEY)
+    if (fromKv && fromKv.ratingItems && fromKv.textQuestions) return fromKv
+    const raw = localStorage.getItem(TRAVEL_RETROSPECTIVE_TEMPLATES_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as RetrospectiveTemplates
+      if (parsed.ratingItems && parsed.textQuestions) return parsed
+    }
+  } catch { /* ignore */ }
+  return getDefaultRetrospectiveTemplates()
+}
+
+function saveRetrospectiveTemplates(t: RetrospectiveTemplates) {
+  try {
+    localStorage.setItem(TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, JSON.stringify(t))
+    kvSet(TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, t)
+  } catch { /* ignore */ }
+}
+
+// ── 여행 설정 편집 모달 (카테고리/회고록 항목 CRUD + 정렬) ────────────────────────
+function TravelSettingsEditModal({
+  open,
+  onClose,
+  expenseCategories,
+  retrospectiveTemplates,
+  onSaveExpenseCategories,
+  onSaveRetrospectiveTemplates,
+  inputBase,
+}: {
+  open: boolean
+  onClose: () => void
+  expenseCategories: ExpenseCategory[]
+  retrospectiveTemplates: RetrospectiveTemplates
+  onSaveExpenseCategories: (c: ExpenseCategory[]) => void
+  onSaveRetrospectiveTemplates: (t: RetrospectiveTemplates) => void
+  inputBase: React.CSSProperties
+}) {
+  const [tab, setTab] = useState<'expense' | 'retro'>('expense')
+  const [cats, setCats] = useState<ExpenseCategory[]>(() => expenseCategories)
+  const [templates, setTemplates] = useState<RetrospectiveTemplates>(() => retrospectiveTemplates)
+
+  useEffect(() => {
+    if (open) {
+      setCats([...expenseCategories].sort((a, b) => a.sort_order - b.sort_order))
+      setTemplates({
+        ratingItems: [...retrospectiveTemplates.ratingItems].sort((a, b) => a.sort_order - b.sort_order),
+        textQuestions: [...retrospectiveTemplates.textQuestions].sort((a, b) => a.sort_order - b.sort_order),
+      })
+    }
+  }, [open, expenseCategories, retrospectiveTemplates])
+
+  const moveCat = (idx: number, dir: -1 | 1) => {
+    const next = [...cats]
+    const ni = idx + dir
+    if (ni < 0 || ni >= next.length) return
+    ;[next[idx], next[ni]] = [next[ni], next[idx]]
+    next.forEach((c, i) => { c.sort_order = i })
+    setCats(next)
+  }
+  const addCat = () => {
+    const id = `cat_${Date.now()}`
+    setCats([...cats, { id, label: '새 카테고리', emoji: '📦', sort_order: cats.length }])
+  }
+  const updateCat = (idx: number, patch: Partial<ExpenseCategory>) => {
+    const next = [...cats]
+    next[idx] = { ...next[idx], ...patch }
+    setCats(next)
+  }
+  const removeCat = (idx: number) => {
+    if (cats.length <= 1) return
+    const next = cats.filter((_, i) => i !== idx)
+    next.forEach((c, i) => { c.sort_order = i })
+    setCats(next)
+  }
+
+  const moveRating = (idx: number, dir: -1 | 1) => {
+    const next = [...templates.ratingItems]
+    const ni = idx + dir
+    if (ni < 0 || ni >= next.length) return
+    ;[next[idx], next[ni]] = [next[ni], next[idx]]
+    next.forEach((r, i) => { r.sort_order = i })
+    setTemplates({ ...templates, ratingItems: next })
+  }
+  const addRating = () => {
+    const id = `rating_${Date.now()}`
+    const items = [...templates.ratingItems, { id, label: '새 평가 항목', emoji: '⭐', sort_order: templates.ratingItems.length }]
+    setTemplates({ ...templates, ratingItems: items })
+  }
+  const updateRating = (idx: number, patch: Partial<RetroRatingItem>) => {
+    const next = [...templates.ratingItems]
+    next[idx] = { ...next[idx], ...patch }
+    setTemplates({ ...templates, ratingItems: next })
+  }
+  const removeRating = (idx: number) => {
+    const next = templates.ratingItems.filter((_, i) => i !== idx)
+    next.forEach((r, i) => { r.sort_order = i })
+    setTemplates({ ...templates, ratingItems: next })
+  }
+
+  const moveText = (idx: number, dir: -1 | 1) => {
+    const next = [...templates.textQuestions]
+    const ni = idx + dir
+    if (ni < 0 || ni >= next.length) return
+    ;[next[idx], next[ni]] = [next[ni], next[idx]]
+    next.forEach((q, i) => { q.sort_order = i })
+    setTemplates({ ...templates, textQuestions: next })
+  }
+  const addText = () => {
+    const id = `text_${Date.now()}`
+    const items = [...templates.textQuestions, { id, label: '새 질문', placeholder: '답변을 입력하세요...', sort_order: templates.textQuestions.length }]
+    setTemplates({ ...templates, textQuestions: items })
+  }
+  const updateText = (idx: number, patch: Partial<RetroTextQuestion>) => {
+    const next = [...templates.textQuestions]
+    next[idx] = { ...next[idx], ...patch }
+    setTemplates({ ...templates, textQuestions: next })
+  }
+  const removeText = (idx: number) => {
+    const next = templates.textQuestions.filter((_, i) => i !== idx)
+    next.forEach((q, i) => { q.sort_order = i })
+    setTemplates({ ...templates, textQuestions: next })
+  }
+
+  const handleSave = () => {
+    onSaveExpenseCategories(cats)
+    onSaveRetrospectiveTemplates(templates)
+    onClose()
+  }
+
+  if (!open) return null
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div style={{ background: '#fff', borderRadius: 20, maxWidth: 520, width: '90%', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 48px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#37352F' }}>⚙️ 항목 편집</h3>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(0,0,0,0.06)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={18} /></button>
+        </div>
+        <div style={{ display: 'flex', gap: 4, padding: '12px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', background: 'rgba(0,0,0,0.02)' }}>
+          <button onClick={() => setTab('expense')} style={{ flex: 1, padding: '10px 16px', borderRadius: 10, border: 'none', background: tab === 'expense' ? '#fff' : 'transparent', color: tab === 'expense' ? '#37352F' : '#787774', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: tab === 'expense' ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>💰 가계부 카테고리</button>
+          <button onClick={() => setTab('retro')} style={{ flex: 1, padding: '10px 16px', borderRadius: 10, border: 'none', background: tab === 'retro' ? '#fff' : 'transparent', color: tab === 'retro' ? '#37352F' : '#787774', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: tab === 'retro' ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>📝 회고록 항목</button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {tab === 'expense' && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#787774' }}>지출 카테고리 (이모지 + 이름)</span>
+                <button onClick={addCat} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}><Plus size={12} />추가</button>
+              </div>
+              {cats.map((c, i) => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '12px 14px', background: '#F4F4F2', borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <button onClick={() => moveCat(i, -1)} disabled={i === 0} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.3 : 1 }}><ChevronUp size={16} /></button>
+                    <button onClick={() => moveCat(i, 1)} disabled={i === cats.length - 1} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === cats.length - 1 ? 'default' : 'pointer', opacity: i === cats.length - 1 ? 0.3 : 1 }}><ChevronDown size={16} /></button>
+                  </div>
+                  <input value={c.emoji} onChange={e => updateCat(i, { emoji: e.target.value || '📦' })} style={{ width: 40, textAlign: 'center', fontSize: 18, border: 'none', background: 'transparent', outline: 'none' }} maxLength={2} />
+                  <input value={c.label} onChange={e => updateCat(i, { label: e.target.value })} style={{ ...inputBase, flex: 1, padding: '8px 10px' }} placeholder="카테고리 이름" />
+                  <button onClick={() => removeCat(i)} disabled={cats.length <= 1} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: cats.length <= 1 ? 'default' : 'pointer', opacity: cats.length <= 1 ? 0.4 : 1 }}><Trash2 size={14} color="#ef4444" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          {tab === 'retro' && (
+            <div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#787774' }}>5점 평가 항목</span>
+                  <button onClick={addRating} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}><Plus size={12} />추가</button>
+                </div>
+                {templates.ratingItems.map((r, i) => (
+                  <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '12px 14px', background: '#F4F4F2', borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <button onClick={() => moveRating(i, -1)} disabled={i === 0} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.3 : 1 }}><ChevronUp size={16} /></button>
+                      <button onClick={() => moveRating(i, 1)} disabled={i === templates.ratingItems.length - 1} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === templates.ratingItems.length - 1 ? 'default' : 'pointer', opacity: i === templates.ratingItems.length - 1 ? 0.3 : 1 }}><ChevronDown size={16} /></button>
+                    </div>
+                    <input value={r.emoji} onChange={e => updateRating(i, { emoji: e.target.value || '⭐' })} style={{ width: 40, textAlign: 'center', fontSize: 18, border: 'none', background: 'transparent', outline: 'none' }} maxLength={2} />
+                    <input value={r.label} onChange={e => updateRating(i, { label: e.target.value })} style={{ ...inputBase, flex: 1, padding: '8px 10px' }} placeholder="평가 항목 이름" />
+                    <button onClick={() => removeRating(i)} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Trash2 size={14} color="#ef4444" /></button>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#787774' }}>텍스트 질문</span>
+                  <button onClick={addText} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}><Plus size={12} />추가</button>
+                </div>
+                {templates.textQuestions.map((q, i) => (
+                  <div key={q.id} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10, padding: '12px 14px', background: '#F4F4F2', borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <button onClick={() => moveText(i, -1)} disabled={i === 0} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.3 : 1 }}><ChevronUp size={16} /></button>
+                        <button onClick={() => moveText(i, 1)} disabled={i === templates.textQuestions.length - 1} style={{ width: 28, height: 20, padding: 0, border: 'none', background: 'transparent', cursor: i === templates.textQuestions.length - 1 ? 'default' : 'pointer', opacity: i === templates.textQuestions.length - 1 ? 0.3 : 1 }}><ChevronDown size={16} /></button>
+                      </div>
+                      <input value={q.label} onChange={e => updateText(i, { label: e.target.value })} style={{ ...inputBase, flex: 1, padding: '8px 10px' }} placeholder="질문 내용" />
+                      <button onClick={() => removeText(i)} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Trash2 size={14} color="#ef4444" /></button>
+                    </div>
+                    <input value={q.placeholder ?? ''} onChange={e => updateText(i, { placeholder: e.target.value })} style={{ ...inputBase, padding: '8px 10px', marginLeft: 44 }} placeholder="placeholder (선택)" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(0,0,0,0.08)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{ padding: '10px 20px', borderRadius: 10, border: '1px solid rgba(0,0,0,0.12)', background: 'transparent', color: '#787774', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>취소</button>
+          <button onClick={handleSave} style={{ padding: '10px 24px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>저장</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function getDefaultTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
+  const isOsaka = tripId === 'osaka-2026' || trip?.title?.includes('오사카')
+  return {
+    packing: DEFAULT_PACKING.map(cat => ({ ...cat, items: cat.items.map(i => ({ ...i, checked: false })) })),
+    spots: isOsaka ? [...DEFAULT_TRAVEL_SPOTS] : [],
+    spotMemos: {},
+    schedule: [],
+    photos: [],
+    itinerarySteps: DEFAULT_ITINERARY_STEPS,
+    tips: isOsaka ? [
+      { icon: '🚇', text: 'IC 카드(ICOCA) 첫날 바로 구매 → 지하철·버스 올인원 교통' },
+      { icon: '🍜', text: '도톤보리 타코야키 & 라멘 → 창작 에너지 보충 필수' },
+      { icon: '📸', text: '오사카성 & 만화박물관 → 웹툰 배경 레퍼런스 대량 촬영' },
+      { icon: '🕐', text: '교토 당일치기 → 아침 일찍 출발해 후시미이나리 인파 피하기' },
+    ] : [],
+  }
+}
+
+function loadTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
+  try {
+    const raw = localStorage.getItem(TRAVEL_TRIP_DETAIL_KEY)
+    if (!raw) return getDefaultTripDetail(tripId, trip)
+    const all: Record<string, TripDetailData> = JSON.parse(raw)
+    const saved = all[tripId]
+    if (!saved) return getDefaultTripDetail(tripId, trip)
+    const def = getDefaultTripDetail(tripId, trip)
+    return {
+      packing: (saved.packing?.length ? saved.packing : def.packing).map(cat => ({
+        ...cat,
+        items: cat.items.map(item => ({ ...item, checked: item.checked ?? false })),
+      })),
+      spots: saved.spots?.length ? saved.spots : def.spots,
+      spotMemos: saved.spotMemos ?? {},
+      schedule: saved.schedule ?? [],
+      photos: saved.photos ?? [],
+      tips: saved.tips?.length ? saved.tips : def.tips,
+      coverImageUrl: saved.coverImageUrl ?? def.coverImageUrl,
+      coverImagePosition: saved.coverImagePosition ?? def.coverImagePosition ?? 'center center',
+      heroIcon: saved.heroIcon ?? def.heroIcon ?? '✈️',
+      heroMemo: saved.heroMemo ?? def.heroMemo ?? '',
+      itinerarySteps: (saved.itinerarySteps?.length ? saved.itinerarySteps : def.itinerarySteps ?? DEFAULT_ITINERARY_STEPS).map((s, i) => ({ ...s, id: s.id || `step_${i}` })),
+      expenses: (saved.expenses ?? []).map(e => ({ ...e, category: typeof e.category === 'string' ? e.category : String(e.category) })),
+      review: migrateReview(saved.review),
+    }
+  } catch { return getDefaultTripDetail(tripId, trip) }
+}
+
+function migrateReview(r: unknown): TravelReview | null {
+  if (!r || typeof r !== 'object') return null
+  const o = r as Record<string, unknown>
+  if (o.ratings && o.textAnswers && typeof o.ratings === 'object' && typeof o.textAnswers === 'object') return r as TravelReview
+  const ratings: Record<string, number> = {}
+  const textAnswers: Record<string, string> = {}
+  if (typeof o.satisfaction === 'number') ratings.satisfaction = o.satisfaction
+  if (typeof o.food === 'number') ratings.food = o.food
+  if (typeof o.weather === 'number') ratings.weather = o.weather
+  if (typeof o.bestMoment === 'string') textAnswers.bestMoment = o.bestMoment
+  if (typeof o.inspiration === 'string') textAnswers.inspiration = o.inspiration
+  if (Object.keys(ratings).length === 0 && Object.keys(textAnswers).length === 0) return null
+  return { ratings, textAnswers }
+}
+
+function saveTripDetail(tripId: string, data: TripDetailData) {
+  try {
+    const raw = localStorage.getItem(TRAVEL_TRIP_DETAIL_KEY)
+    const all: Record<string, TripDetailData> = raw ? JSON.parse(raw) : {}
+    all[tripId] = data
+    localStorage.setItem(TRAVEL_TRIP_DETAIL_KEY, JSON.stringify(all))
+    kvSet(TRAVEL_TRIP_DETAIL_KEY, all)
+  } catch { /* ignore */ }
+}
 
 function loadTravel(): TravelStore {
   try {
@@ -3780,6 +6138,315 @@ function loadGourmet(): GourmetStore {
   } catch { return { restaurants: DEFAULT_RESTAURANTS, dietMenuNotes: {}, meals: {} } }
 }
 function saveGourmet(d: GourmetStore) { localStorage.setItem(GOURMET_KEY, JSON.stringify(d)); kvSet(GOURMET_KEY, d) }
+
+// ── 여행 가계부 (Expense Ledger) ────────────────────────────────────────────────
+function ExpenseLedger({
+  expenses,
+  categories,
+  onAdd,
+  onUpdate,
+  onRemove,
+  onOpenSettings,
+  inputBase,
+  isCompact,
+}: {
+  expenses: TravelExpense[]
+  categories: ExpenseCategory[]
+  onAdd: (e: TravelExpense) => void
+  onUpdate: (id: string, patch: Partial<TravelExpense>) => void
+  onRemove: (id: string) => void
+  onOpenSettings?: () => void
+  inputBase: React.CSSProperties
+  isCompact?: boolean
+}) {
+  const sortedCats = [...categories].sort((a, b) => a.sort_order - b.sort_order)
+  const firstCatId = sortedCats[0]?.id ?? 'other'
+  const [form, setForm] = useState({ date: new Date().toISOString().slice(0, 10), category: firstCatId, usage: '', amount: '' })
+  const [editingId, setEditingId] = useState<string | null>(null)
+
+  const total = expenses.reduce((s, e) => s + e.amount, 0)
+  const byCat = expenses.reduce((acc, e) => {
+    acc[e.category] = (acc[e.category] ?? 0) + e.amount
+    return acc
+  }, {} as Record<string, number>)
+
+  const handleSubmit = () => {
+    const amount = parseInt( String(form.amount).replace(/\D/g, ''), 10 )
+    if (!form.usage.trim() || isNaN(amount) || amount <= 0) return
+    onAdd({ id: `exp_${Date.now()}`, date: form.date, category: form.category, usage: form.usage.trim(), amount })
+    setForm({ ...form, usage: '', amount: '' })
+  }
+
+  const grouped = expenses.reduce((acc, e) => {
+    if (!acc[e.date]) acc[e.date] = []
+    acc[e.date].push(e)
+    return acc
+  }, {} as Record<string, TravelExpense[]>)
+  const sortedDates = Object.keys(grouped).sort()
+
+  const formatAmount = (n: number) => n.toLocaleString() + '원'
+
+  useEffect(() => {
+    if (!sortedCats.some(c => c.id === form.category)) setForm(f => ({ ...f, category: firstCatId }))
+  }, [sortedCats, firstCatId, form.category])
+
+  return (
+    <div style={{ width: '100%', padding: isCompact ? 20 : 0 }}>
+      {/* 섹션 헤더 + 설정 버튼 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#37352F' }}>💰 여행 가계부</h3>
+        {onOpenSettings && (
+          <button onClick={onOpenSettings} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', color: '#787774', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} title="항목 편집">
+            <Settings size={16} />항목 편집
+          </button>
+        )}
+      </div>
+      {/* 대시보드 */}
+      <div style={{ background: isCompact ? '#F4F4F2' : 'rgba(255,255,255,0.6)', backdropFilter: isCompact ? 'none' : 'blur(20px)', WebkitBackdropFilter: isCompact ? 'none' : 'blur(20px)', borderRadius: 14, border: '1px solid rgba(0,0,0,0.06)', padding: isCompact ? 18 : 28, marginBottom: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase' }}>총 지출</p>
+        <p style={{ margin: '8px 0 16px', fontSize: 36, fontWeight: 900, color: '#37352F', letterSpacing: '-0.02em' }}>{formatAmount(total)}</p>
+        {total > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {sortedCats.map(({ id, emoji, label }) => {
+              const amt = byCat[id] ?? 0
+              const pct = total > 0 ? (amt / total) * 100 : 0
+              return (
+                <div key={id}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#37352F' }}>{emoji} {label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#37352F' }}>{formatAmount(amt)} ({pct.toFixed(0)}%)</span>
+                  </div>
+                  <div style={{ height: 6, backgroundColor: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, borderRadius: 3, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', transition: 'width 0.3s ease' }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 입력 폼 */}
+      <div style={{ background: isCompact ? '#F4F4F2' : 'rgba(255,255,255,0.6)', borderRadius: 14, border: '1px solid rgba(0,0,0,0.06)', padding: isCompact ? 16 : 20, marginBottom: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+          <div style={{ flex: isCompact ? '1 1 calc(50% - 5px)' : '1 1 120px', minWidth: isCompact ? 80 : 100 }}>
+            <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: '#787774', marginBottom: 4 }}>날짜</label>
+            <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={{ ...inputBase, width: '100%', padding: '10px 12px' }} />
+          </div>
+          <div style={{ flex: isCompact ? '1 1 calc(50% - 5px)' : '1 1 140px', minWidth: isCompact ? 80 : 100 }}>
+            <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: '#787774', marginBottom: 4 }}>카테고리</label>
+            <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={{ ...inputBase, width: '100%', padding: '10px 12px', cursor: 'pointer' }}>
+              {sortedCats.map(c => (
+                <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ flex: isCompact ? '1 1 100%' : '2 1 180px', minWidth: isCompact ? '100%' : 120 }}>
+            <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: '#787774', marginBottom: 4 }}>사용처</label>
+            <input value={form.usage} onChange={e => setForm(f => ({ ...f, usage: e.target.value }))} placeholder="도톤보리 타코야키, 오사카역 전철" style={{ ...inputBase, width: '100%', padding: '10px 12px' }} />
+          </div>
+          <div style={{ flex: isCompact ? '1 1 calc(50% - 5px)' : '1 1 100px', minWidth: isCompact ? 80 : 90 }}>
+            <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: '#787774', marginBottom: 4 }}>금액</label>
+            <input type="text" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',') }))} placeholder="50,000" style={{ ...inputBase, width: '100%', padding: '10px 12px' }} />
+          </div>
+          <button onClick={handleSubmit} style={{ padding: '10px 20px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flex: isCompact ? '1 1 calc(50% - 5px)' : 'none', justifyContent: 'center', minWidth: isCompact ? 80 : undefined }}>
+            <Plus size={16} />추가
+          </button>
+        </div>
+      </div>
+
+      {/* 리스트 (compact 시 스크롤 영역) */}
+      {expenses.length === 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 32, background: 'rgba(99,102,241,0.04)', borderRadius: 14, border: '1px dashed rgba(99,102,241,0.25)', color: '#787774', fontSize: 14, minHeight: isCompact ? 120 : 180 }}>
+          <span style={{ fontSize: 40, marginBottom: 8, opacity: 0.6 }}>💰</span>
+          <p style={{ margin: 0, fontWeight: 600 }}>아직 기록된 지출이 없어요</p>
+          <p style={{ margin: '4px 0 0', fontSize: 12 }}>위 폼에서 지출을 추가해보세요</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: isCompact ? 600 : undefined, overflowY: isCompact ? 'auto' : undefined, paddingRight: isCompact ? 4 : 0 }}>
+          {sortedDates.map(date => (
+            <div key={date} style={{ background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 16, border: '1px solid rgba(255,255,255,0.5)', overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.04)' }}>
+              <div style={{ padding: '12px 18px', backgroundColor: 'rgba(99,102,241,0.08)', borderBottom: '1px solid rgba(99,102,241,0.12)', fontSize: 12, fontWeight: 700, color: '#4F46E5' }}>
+                {date.replace(/-/g, '.')} · {grouped[date].length}건
+              </div>
+              {grouped[date].map(exp => (
+                <div key={exp.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                  <span style={{ fontSize: 20 }}>{sortedCats.find(c => c.id === exp.category)?.emoji ?? '🎫'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#37352F' }}>{exp.usage}</p>
+                    <span style={{ fontSize: 11, color: '#787774' }}>{sortedCats.find(c => c.id === exp.category)?.label ?? exp.category}</span>
+                  </div>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: '#37352F' }}>{formatAmount(exp.amount)}</span>
+                  {editingId === exp.id ? (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input type="date" value={exp.date} onChange={e => onUpdate(exp.id, { date: e.target.value })} style={{ ...inputBase, width: 110, padding: '6px 8px' }} />
+                      <select value={exp.category} onChange={e => onUpdate(exp.id, { category: e.target.value })} style={{ ...inputBase, width: 90, padding: '6px 8px' }}>
+                        {sortedCats.map(c => <option key={c.id} value={c.id}>{c.emoji}</option>)}
+                      </select>
+                      <input value={exp.usage} onChange={e => onUpdate(exp.id, { usage: e.target.value })} style={{ ...inputBase, width: 120, padding: '6px 8px' }} />
+                      <input type="number" value={exp.amount} onChange={e => onUpdate(exp.id, { amount: parseInt(e.target.value, 10) || 0 })} style={{ ...inputBase, width: 90, padding: '6px 8px' }} />
+                      <button onClick={() => setEditingId(null)} style={{ padding: '6px 10px', borderRadius: 8, border: 'none', background: '#34d399', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>저장</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => setEditingId(exp.id)} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="수정">
+                        <Pencil size={14} color="#6366f1" />
+                      </button>
+                      <button onClick={() => onRemove(exp.id)} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="삭제">
+                        <Trash2 size={14} color="#ef4444" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 여행 회고록 (Trip Retrospective) ────────────────────────────────────────────
+function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBase, isCompact }: {
+  review: TravelReview | null
+  templates: RetrospectiveTemplates
+  onSave: (r: TravelReview) => void
+  onOpenSettings?: () => void
+  inputBase: React.CSSProperties
+  isCompact?: boolean
+}) {
+  const [editing, setEditing] = useState(!review)
+  const [form, setForm] = useState<TravelReview>(() => ({
+    ratings: { ...review?.ratings },
+    textAnswers: { ...review?.textAnswers },
+  }))
+
+  useEffect(() => {
+    if (review) setForm({ ratings: { ...review.ratings }, textAnswers: { ...review.textAnswers } })
+  }, [review])
+
+  const handleSave = () => {
+    onSave(form)
+    setEditing(false)
+  }
+
+  const ratingItems = [...templates.ratingItems].sort((a, b) => a.sort_order - b.sort_order)
+  const textQuestions = [...templates.textQuestions].sort((a, b) => a.sort_order - b.sort_order)
+
+  const StarRating = ({ value, onChange, max = 5, emoji = '⭐' }: { value: number; onChange: (n: number) => void; max?: number; emoji?: string }) => (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {Array.from({ length: max }, (_, i) => (
+        <button key={i} type="button" onClick={() => onChange(i + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 24, opacity: i < value ? 1 : 0.25, transition: 'opacity 0.2s' }}>
+          {emoji}
+        </button>
+      ))}
+    </div>
+  )
+
+  const cardStyle: React.CSSProperties = {
+    background: isCompact ? '#F4F4F2' : 'rgba(255,255,255,0.6)',
+    backdropFilter: isCompact ? 'none' : 'blur(20px)',
+    WebkitBackdropFilter: isCompact ? 'none' : 'blur(20px)',
+    borderRadius: isCompact ? 14 : 20,
+    border: '1px solid rgba(0,0,0,0.06)',
+    padding: isCompact ? 20 : 28,
+    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+  }
+
+  if (!editing && review) {
+    const hasRatings = ratingItems.some(r => (review.ratings[r.id] ?? 0) > 0)
+    const hasText = textQuestions.some(q => (review.textAnswers[q.id] ?? '').trim())
+    const hasContent = hasRatings || hasText
+    return (
+      <div style={{ width: '100%', padding: isCompact ? 20 : 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#37352F' }}>📝 여행 회고록</h3>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {onOpenSettings && (
+              <button onClick={onOpenSettings} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', color: '#787774', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} title="항목 편집">
+                <Settings size={16} />항목 편집
+              </button>
+            )}
+            <button onClick={() => setEditing(true)} style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              <Pencil size={14} style={{ display: 'inline', verticalAlign: -2, marginRight: 6 }} />편집
+            </button>
+          </div>
+        </div>
+        <div style={cardStyle}>
+          {!hasContent ? (
+            <p style={{ margin: 0, fontSize: 14, color: '#9B9A97', fontStyle: 'italic' }}>아직 작성된 내용이 없어요. 편집 버튼을 눌러 회고록을 작성해보세요.</p>
+          ) : (
+          <>
+          {ratingItems.map(r => {
+            const v = review.ratings[r.id] ?? 0
+            if (v <= 0) return null
+            return (
+              <div key={r.id} style={{ marginBottom: 16 }}>
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 4 }}>{r.label}</p>
+                <span style={{ fontSize: 18 }}>{r.emoji.repeat(v)}</span>
+              </div>
+            )
+          })}
+          {textQuestions.map(q => {
+            const text = review.textAnswers[q.id] ?? ''
+            if (!text.trim()) return null
+            return (
+              <div key={q.id} style={{ marginBottom: 16 }}>
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 4 }}>{q.label}</p>
+                <p style={{ margin: 0, fontSize: 14, color: '#37352F', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{text}</p>
+              </div>
+            )
+          })}
+          </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ width: '100%', padding: isCompact ? 20 : 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#37352F' }}>📝 여행 회고록</h3>
+        {onOpenSettings && (
+          <button onClick={onOpenSettings} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', color: '#787774', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} title="항목 편집">
+            <Settings size={16} />항목 편집
+          </button>
+        )}
+      </div>
+      {!review && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 20, padding: 24, background: 'rgba(255,255,255,0.5)', backdropFilter: 'blur(12px)', borderRadius: 16, border: '1px dashed rgba(99,102,241,0.2)', color: '#787774', fontSize: 13 }}>
+          <span style={{ fontSize: 36, marginBottom: 8, opacity: 0.7 }}>📝</span>
+          <p style={{ margin: 0, fontWeight: 600 }}>여행의 감상을 남겨보세요</p>
+          <p style={{ margin: '4px 0 0', fontSize: 11 }}>별점과 메모로 여행을 기록해요</p>
+        </div>
+      )}
+      <div style={cardStyle}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 20 }}>여행 회고록</p>
+        {ratingItems.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: isCompact ? `repeat(${Math.min(ratingItems.length, 3)}, 1fr)` : `repeat(${Math.min(ratingItems.length, 4)}, 1fr)`, gap: isCompact ? 12 : 20, marginBottom: 20 }}>
+            {ratingItems.map(r => (
+              <div key={r.id}>
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8 }}>{r.label}</p>
+                <StarRating value={form.ratings[r.id] ?? 0} onChange={v => setForm(f => ({ ...f, ratings: { ...f.ratings, [r.id]: v } }))} emoji={r.emoji} />
+              </div>
+            ))}
+          </div>
+        )}
+        {textQuestions.map(q => (
+          <div key={q.id} style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8 }}>{q.label}</label>
+            <textarea value={form.textAnswers[q.id] ?? ''} onChange={e => setForm(f => ({ ...f, textAnswers: { ...f.textAnswers, [q.id]: e.target.value } }))} placeholder={q.placeholder ?? '답변을 입력하세요...'} rows={isCompact ? 5 : 4} style={{ ...inputBase, width: '100%', lineHeight: 1.8, minHeight: isCompact ? 100 : undefined }} />
+          </div>
+        ))}
+        <button onClick={handleSave} style={{ padding: '12px 24px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+          저장하기
+        </button>
+      </div>
+    </div>
+  )
+}
 
 // ── GourmetSection ────────────────────────────────────────────────────────────
 function GourmetSection() {
@@ -3893,22 +6560,29 @@ function GourmetSection() {
             </div>
           )}
 
-          <div style={{ maxHeight: '340px', overflowY: 'auto', paddingRight: '3px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px' }}>
             {gourmet.restaurants.map(rest => (
-              <div key={rest.id} style={{ backgroundColor: '#EEF2FF', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)', padding: '11px 13px', marginBottom: '8px', opacity: rest.visited ? 0.5 : 1, transition: 'opacity 0.2s' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div onClick={() => toggleVisited(rest.id)} style={{ width: '16px', height: '16px', borderRadius: '4px', border: `1.5px solid ${rest.visited ? '#6366f1' : '#D3D1CB'}`, backgroundColor: rest.visited ? '#6366f1' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', transition: 'all 0.15s' }}>
-                    {rest.visited && <span style={{ fontSize: '9px', color: '#37352F' }}>✓</span>}
+              <div key={rest.id} style={{
+                backgroundColor: '#fff', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)',
+                padding: '14px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', opacity: rest.visited ? 0.6 : 1,
+                transition: 'all 0.2s', position: 'relative', display: 'flex', flexDirection: 'column', gap: '8px',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.08)'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.1)' }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.06)' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '6px' }}>
+                  <div onClick={() => toggleVisited(rest.id)} style={{ width: '18px', height: '18px', borderRadius: '5px', border: `2px solid ${rest.visited ? '#6366f1' : '#D3D1CB'}`, backgroundColor: rest.visited ? '#6366f1' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', transition: 'all 0.15s' }}>
+                    {rest.visited && <span style={{ fontSize: '10px', color: '#fff', lineHeight: 1 }}>✓</span>}
                   </div>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: rest.visited ? '#9B9A97' : '#37352F', flex: 1, textDecoration: rest.visited ? 'line-through' : 'none' }}>{rest.name}</span>
-                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 9px', borderRadius: '999px', color: rest.type === 'cheat' ? '#f97316' : '#34d399', backgroundColor: rest.type === 'cheat' ? 'rgba(249,115,22,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${rest.type === 'cheat' ? 'rgba(249,115,22,0.25)' : 'rgba(52,211,153,0.25)'}`, flexShrink: 0 }}>
-                    {rest.type === 'cheat' ? '🍔 치팅' : '🥗 식단'}
-                  </span>
-                  <button onClick={() => removeRestaurant(rest.id)} style={{ width: '18px', height: '18px', borderRadius: '4px', border: 'none', backgroundColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                    <X size={10} color="#3f3f5e" />
+                  <button onClick={() => removeRestaurant(rest.id)} style={{ width: '22px', height: '22px', borderRadius: '6px', border: 'none', backgroundColor: 'rgba(239,68,68,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, opacity: 0.7 }} onMouseEnter={e => { e.currentTarget.style.opacity = '1' }} onMouseLeave={e => { e.currentTarget.style.opacity = '0.7' }}>
+                    <X size={12} color="#ef4444" />
                   </button>
                 </div>
-                {rest.area && <p style={{ margin: '4px 0 0 24px', fontSize: '10px', color: '#787774' }}>📍 {rest.area}</p>}
+                <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: rest.visited ? '#9B9A97' : '#37352F', textDecoration: rest.visited ? 'line-through' : 'none', lineHeight: 1.4, flex: 1 }}>{rest.name}</p>
+                {rest.area && <p style={{ margin: 0, fontSize: '11px', color: '#787774', lineHeight: 1.3 }}>📍 {rest.area}</p>}
+                <span style={{ fontSize: '10px', fontWeight: 700, padding: '4px 10px', borderRadius: '8px', color: rest.type === 'cheat' ? '#f97316' : '#34d399', backgroundColor: rest.type === 'cheat' ? 'rgba(249,115,22,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${rest.type === 'cheat' ? 'rgba(249,115,22,0.2)' : 'rgba(52,211,153,0.2)'}`, alignSelf: 'flex-start' }}>
+                  {rest.type === 'cheat' ? '🍔 치팅' : '🥗 식단'}
+                </span>
               </div>
             ))}
           </div>
@@ -3974,31 +6648,543 @@ function GourmetSection() {
   )
 }
 
+/** 캘린더와 동기화된 여행 목록 (캘린더에서 수정한 일자가 반영됨) */
+function getTripsWithCalendarDates(baseTrips: TravelTrip[]): TravelTrip[] {
+  const cal = loadCalendar()
+  const eventMap = new Map(cal.events.map(e => [e.id, e]))
+  return baseTrips.map(t => {
+    const ev = eventMap.get(t.id)
+    if (ev) return { ...t, startDate: ev.startDate, endDate: ev.endDate }
+    return t
+  })
+}
+
+function AddTripModal({ onClose, onAdded }: { onClose: () => void; onAdded: (trip: TravelTrip) => void }) {
+  const [title, setTitle] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [note, setNote] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = () => {
+    const t = title.trim()
+    if (!t) { setError('여행 이름을 입력해 주세요.'); return }
+    if (!startDate) { setError('시작일을 선택해 주세요.'); return }
+    if (!endDate) { setError('종료일을 선택해 주세요.'); return }
+    if (endDate < startDate) { setError('종료일은 시작일 이후여야 합니다.'); return }
+    setError(null)
+    const id = `trip_${Date.now()}`
+    const trip: TravelTrip = {
+      id,
+      title: t,
+      startDate,
+      endDate,
+      color: TRIP_COLORS[Math.floor(Math.random() * TRIP_COLORS.length)],
+      note: note.trim() || '',
+    }
+    const cal = loadCalendar()
+    cal.events.push({ id, title: t, startDate, endDate, color: trip.color, note: trip.note })
+    saveCalendar(cal)
+    onAdded(trip)
+    onClose()
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', maxWidth: '400px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 20px', fontSize: '18px', fontWeight: 800, color: '#37352F' }}>새 여행 추가</h3>
+        <input type="text" value={title} onChange={e => { setTitle(e.target.value); setError(null) }} placeholder="여행 이름 (예: 도쿄 여행)" style={{ width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '14px', marginBottom: '12px', boxSizing: 'border-box' }} />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#787774', marginBottom: '4px' }}>시작일</label>
+            <input type="date" value={startDate} onChange={e => { setStartDate(e.target.value); setError(null) }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '13px', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#787774', marginBottom: '4px' }}>종료일</label>
+            <input type="date" value={endDate} onChange={e => { setEndDate(e.target.value); setError(null) }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '13px', boxSizing: 'border-box' }} />
+          </div>
+        </div>
+        <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="메모 (선택)" style={{ width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '14px', marginBottom: '16px', boxSizing: 'border-box' }} />
+        {error && <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#ef4444' }}>{error}</p>}
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid #ddd', background: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>취소</button>
+          <button onClick={handleSubmit} style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', background: '#7C3AED', color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>추가</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── ItineraryStepBox ────────────────────────────────────────────────────────
+function ItineraryStepBox({
+  step,
+  index,
+  onUpdate,
+  onRemove,
+  uploadImageToMedia,
+}: {
+  step: ItineraryStep
+  index: number
+  onUpdate: (patch: Partial<ItineraryStep>) => void
+  onRemove?: () => void
+  uploadImageToMedia: (file: File) => Promise<string>
+}) {
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const handleImageUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file?.type.startsWith('image/')) return
+    setUploading(true)
+    try {
+      const url = await uploadImageToMedia(file)
+      onUpdate({ imageUrl: url })
+    } catch (err) { console.error('[이미지 업로드 실패]', err) }
+    finally { setUploading(false); e.target.value = '' }
+  }, [onUpdate, uploadImageToMedia])
+
+  return (
+    <div style={{
+      flexShrink: 0,
+      width: 140,
+      borderRadius: '12px',
+      border: '1px solid rgba(0,0,0,0.08)',
+      background: '#fff',
+      overflow: 'hidden',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 120,
+    }}>
+      <div style={{ padding: '6px 8px', background: 'rgba(99,102,241,0.08)', fontSize: '11px', fontWeight: 800, color: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>#{index + 1}</span>
+        {onRemove && (
+          <button onClick={e => { e.stopPropagation(); onRemove() }} title="삭제" style={{ width: 20, height: 20, borderRadius: 6, border: 'none', background: 'rgba(239,68,68,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <Trash2 size={10} color="#ef4444" />
+          </button>
+        )}
+      </div>
+      <div
+        onClick={() => fileRef.current?.click()}
+        style={{
+          flex: 1,
+          minHeight: 64,
+          background: step.imageUrl ? `url(${step.imageUrl}) center/cover` : 'rgba(0,0,0,0.04)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          position: 'relative',
+        }}
+      >
+        <input ref={fileRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
+        {!step.imageUrl && (uploading ? <span style={{ fontSize: '11px', color: '#94a3b8' }}>업로드 중…</span> : <Image size={22} color="#94a3b8" />)}
+      </div>
+      <input
+        value={step.title ?? ''}
+        onChange={e => onUpdate({ title: e.target.value })}
+        placeholder="장소명"
+        style={{ padding: '8px 10px', border: 'none', borderTop: '1px solid rgba(0,0,0,0.06)', fontSize: '13px', fontWeight: 600, outline: 'none' }}
+      />
+      <input
+        value={step.note ?? ''}
+        onChange={e => onUpdate({ note: e.target.value })}
+        placeholder="메모"
+        style={{ padding: '4px 10px 10px', border: 'none', fontSize: '12px', color: '#787774', outline: 'none' }}
+      />
+    </div>
+  )
+}
+
+// ── ItineraryStepsCarousel (가로 스크롤 + 화살표) ─────────────────────────────
+function ItineraryStepsCarousel({
+  steps,
+  onUpdate,
+  onRemove,
+  uploadImageToMedia,
+  isMobile,
+}: {
+  steps: ItineraryStep[]
+  onUpdate: (stepId: string, patch: Partial<ItineraryStep>) => void
+  onRemove: (stepId: string) => void
+  uploadImageToMedia: (file: File) => Promise<string>
+  isMobile: boolean
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scroll = (dir: number) => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollBy({ left: dir * 320, behavior: 'smooth' })
+  }
+  const showArrows = steps.length > (isMobile ? 3 : 6)
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8 }}>
+      {showArrows && (
+        <button onClick={() => scroll(-1)} style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }} title="왼쪽으로">
+          <ChevronLeft size={22} color="#6366f1" />
+        </button>
+      )}
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          display: 'flex',
+          gap: '12px',
+          padding: '8px 0',
+          scrollSnapType: 'x mandatory',
+          scrollbarWidth: 'thin',
+        }}
+      >
+        {steps.map((step, idx) => (
+          <div key={step.id} style={{ scrollSnapAlign: 'start' }}>
+            <ItineraryStepBox step={step} index={idx} onUpdate={p => onUpdate(step.id, p)} onRemove={steps.length > 1 ? () => onRemove(step.id) : undefined} uploadImageToMedia={uploadImageToMedia} />
+          </div>
+        ))}
+      </div>
+      {showArrows && (
+        <button onClick={() => scroll(1)} style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }} title="오른쪽으로">
+          <ChevronRight size={22} color="#6366f1" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ── TripPhotosSection ───────────────────────────────────────────────────────
+function TripPhotosSection({
+  detail,
+  onAdd,
+  onUpdate,
+  onRemove,
+  inputBase,
+}: {
+  detail: TripDetailData
+  onAdd: (url: string, caption?: string) => void
+  onUpdate: (id: string, patch: Partial<PhotoItem>) => void
+  onRemove: (id: string) => void
+  inputBase: React.CSSProperties
+}) {
+  const [urlInput, setUrlInput] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [lightboxPhoto, setLightboxPhoto] = useState<PhotoItem | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!lightboxPhoto) return
+    const photos = detail.photos
+    const idx = photos.findIndex(p => p.id === lightboxPhoto.id)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxPhoto(null)
+      else if (e.key === 'ArrowLeft' && idx > 0) setLightboxPhoto(photos[idx - 1])
+      else if (e.key === 'ArrowRight' && idx < photos.length - 1) setLightboxPhoto(photos[idx + 1])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightboxPhoto, detail.photos])
+
+  const uploadFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) return
+    const url = await uploadImageToMedia(file)
+    onAdd(url)
+  }, [onAdd])
+
+  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      await uploadFile(file)
+    } catch (err) {
+      console.error('[사진 업로드 실패]', err)
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }, [uploadFile])
+
+  const [isDragging, setIsDragging] = useState(false)
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer?.types?.includes('Files')) setIsDragging(true)
+  }, [])
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const related = e.relatedTarget as Node | null
+    if (!related || !e.currentTarget.contains(related)) setIsDragging(false)
+  }, [])
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer?.files ?? []).filter(f => f.type.startsWith('image/'))
+    if (files.length === 0) return
+    setUploading(true)
+    try {
+      for (const file of files) {
+        await uploadFile(file)
+      }
+    } catch (err) {
+      console.error('[사진 업로드 실패]', err)
+    } finally {
+      setUploading(false)
+    }
+  }, [uploadFile])
+
+  const handleAddByUrl = () => {
+    const url = urlInput.trim()
+    if (!url) return
+    onAdd(url)
+    setUrlInput('')
+  }
+
+  return (
+    <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg,#f97316,#ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(249,115,22,0.35)' }}>
+            <Image size={18} color="#fff" />
+          </div>
+          <div>
+            <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#f97316', letterSpacing: '0.2em', textTransform: 'uppercase' }}>사진</p>
+            <p style={{ margin: 0, fontSize: '19px', fontWeight: 900, color: '#37352F' }}>여행 사진</p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <input type="file" ref={fileInputRef} accept="image/*" onChange={handleUpload} style={{ display: 'none' }} />
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px', border: '1px solid rgba(249,115,22,0.3)', backgroundColor: 'rgba(249,115,22,0.08)', color: '#ea580c', fontSize: '11px', fontWeight: 700, cursor: uploading ? 'wait' : 'pointer' }}>
+            {uploading ? '업로드 중…' : '📤 사진 업로드'}
+          </button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input value={urlInput} onChange={e => setUrlInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddByUrl()} placeholder="이미지 URL 붙여넣기" style={{ ...inputBase, width: '200px', padding: '8px 12px' }} />
+            <button onClick={handleAddByUrl} style={{ padding: '8px 14px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#f97316,#ea580c)', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>추가</button>
+          </div>
+        </div>
+      </div>
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        style={{
+          minHeight: '120px',
+          borderRadius: '16px',
+          border: isDragging ? '2px dashed rgba(249,115,22,0.6)' : '1px dashed rgba(249,115,22,0.2)',
+          backgroundColor: isDragging ? 'rgba(249,115,22,0.08)' : 'rgba(249,115,22,0.03)',
+          transition: 'all 0.2s',
+        }}
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px', padding: detail.photos.length > 0 ? '24px' : '0' }}>
+          {detail.photos.map((photo) => (
+            <div key={photo.id} style={{ position: 'relative', borderRadius: '14px', overflow: 'hidden', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+              <div
+                style={{ aspectRatio: '4/3', overflow: 'hidden', backgroundColor: '#e5e5e0', cursor: 'pointer' }}
+                onClick={() => setLightboxPhoto(photo)}
+              >
+                <img src={photo.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.2s' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)' }} onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }} />
+              </div>
+              <input value={photo.caption ?? ''} onChange={e => onUpdate(photo.id, { caption: e.target.value })} placeholder="설명" style={{ ...inputBase, width: '100%', border: 'none', borderRadius: 0, borderTop: '1px solid rgba(0,0,0,0.06)', padding: '10px 12px', fontSize: '12px' }} />
+              <button onClick={e => { e.stopPropagation(); onRemove(photo.id) }} style={{ position: 'absolute', top: '10px', right: '10px', width: 30, height: 30, borderRadius: '8px', border: 'none', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.7)' }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.5)' }} title="삭제">
+                <Trash2 size={14} color="#fff" />
+              </button>
+            </div>
+          ))}
+        </div>
+        {detail.photos.length === 0 && (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'inherit', fontSize: '13px' }}>
+            {isDragging ? (
+              <span style={{ color: '#ea580c', fontWeight: 600 }}>여기에 놓기</span>
+            ) : (
+              <span style={{ color: '#787774' }}>사진이 없습니다. 업로드하거나 URL을 붙여넣어 여행 사진을 추가하세요.<br style={{ marginTop: '4px' }} /><span style={{ fontSize: '11px', color: '#9B9A97' }}>또는 파일을 드래그하여 여기에 놓으세요</span></span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 사진 확대 뷰 (노트 모달처럼) */}
+      {lightboxPhoto && (() => {
+        const photos = detail.photos
+        const idx = photos.findIndex(p => p.id === lightboxPhoto.id)
+        const prevPhoto = idx > 0 ? photos[idx - 1] : null
+        const nextPhoto = idx >= 0 && idx < photos.length - 1 ? photos[idx + 1] : null
+        return (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 9999,
+              backgroundColor: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(2px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', padding: '20px',
+            }}
+            onClick={() => setLightboxPhoto(null)}
+          >
+            {/* 사진 + 좌우 화살표 (사진 중심에 붙어서) */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', maxWidth: 'calc(100vw - 80px)' }} onClick={e => e.stopPropagation()}>
+              {/* 이전 사진 - 사진 왼쪽에 붙음 */}
+              {prevPhoto && (
+                <button
+                  onClick={e => { e.stopPropagation(); setLightboxPhoto(prevPhoto) }}
+                  style={{
+                    position: 'absolute', left: '-46px', top: '50%', transform: 'translateY(-50%)',
+                    width: 34, height: 34, borderRadius: '50%', border: 'none',
+                    backgroundColor: 'rgba(255,255,255,0.9)', color: '#37352F', boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 2,
+                  }}
+                  onMouseEnter={e => { e.stopPropagation(); e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.transform = 'translateY(-50%) scale(1.05)' }}
+                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.9)'; e.currentTarget.style.transform = 'translateY(-50%) scale(1)' }}
+                >
+                  <ChevronLeft size={20} />
+                </button>
+              )}
+
+              {/* 사진 */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+                <img
+                  src={lightboxPhoto.url}
+                  alt=""
+                  style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', borderRadius: '8px', display: 'block' }}
+                />
+                {lightboxPhoto.caption && (
+                  <p style={{ margin: '16px 0 0', fontSize: '14px', color: '#37352F', maxWidth: '600px', textAlign: 'center' }}>
+                    {lightboxPhoto.caption}
+                  </p>
+                )}
+              </div>
+
+              {/* 다음 사진 - 사진 오른쪽에 붙음 */}
+              {nextPhoto && (
+                <button
+                  onClick={e => { e.stopPropagation(); setLightboxPhoto(nextPhoto) }}
+                  style={{
+                    position: 'absolute', right: '-46px', top: '50%', transform: 'translateY(-50%)',
+                    width: 34, height: 34, borderRadius: '50%', border: 'none',
+                    backgroundColor: 'rgba(255,255,255,0.9)', color: '#37352F', boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 2,
+                  }}
+                  onMouseEnter={e => { e.stopPropagation(); e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.transform = 'translateY(-50%) scale(1.05)' }}
+                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.9)'; e.currentTarget.style.transform = 'translateY(-50%) scale(1)' }}
+                >
+                  <ChevronRight size={20} />
+                </button>
+              )}
+
+              {/* 닫기 버튼 - 사진 오른쪽, 약간 아래 */}
+              <button
+                onClick={e => { e.stopPropagation(); setLightboxPhoto(null) }}
+                style={{
+                  position: 'absolute', top: '12px', right: '-23px',
+                  width: 22, height: 22, borderRadius: '50%', border: 'none',
+                  backgroundColor: 'rgba(255,255,255,0.9)', color: '#37352F', boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', zIndex: 3,
+                }}
+                onMouseEnter={e => { e.stopPropagation(); e.currentTarget.style.backgroundColor = '#fff' }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.9)' }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
 // ── TravelPage ────────────────────────────────────────────────────────────────
 function TravelPage() {
   const isMobile = useIsMobile()
-  const [store,      setStore]      = useState<TravelStore>(() => loadTravel())
+  const [selectedTrip, setSelectedTrip] = useState<string | null>(null)
   const [activeSpot, setActiveSpot] = useState<string | null>(null)
+  const [tripsBase,  setTripsBase]  = useState<TravelTrip[]>(() => loadTravelTrips())
+  const [addTripOpen, setAddTripOpen] = useState(false)
+  const coverInputRef = useRef<HTMLInputElement>(null)
+  const [coverUploading, setCoverUploading] = useState(false)
+  const [coverPositionMode, setCoverPositionMode] = useState(false)
+  const [coverPositionDrag, setCoverPositionDrag] = useState({ x: 50, y: 50 })
+  const [coverPositionDragging, setCoverPositionDragging] = useState(false)
+  const coverPositionDragStart = useRef<{ mx: number; my: number; px: number; py: number } | null>(null)
 
-  const allItems     = store.packing.flatMap(c => c.items)
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>(getDefaultExpenseCategories())
+  const [retrospectiveTemplates, setRetrospectiveTemplates] = useState<RetrospectiveTemplates>(getDefaultRetrospectiveTemplates())
+  const [travelSettingsOpen, setTravelSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    loadExpenseCategories().then(setExpenseCategories)
+    loadRetrospectiveTemplates().then(setRetrospectiveTemplates)
+  }, [])
+
+  const trips = getTripsWithCalendarDates(tripsBase)
+  const currentTrip = trips.find(t => t.id === selectedTrip)
+
+  // 여행별 상세 데이터 (선택된 여행에 따라 로드)
+  const [detail, setDetail] = useState<TripDetailData>(() =>
+    selectedTrip ? loadTripDetail(selectedTrip, currentTrip ?? undefined) : getDefaultTripDetail('', undefined)
+  )
+
+  useEffect(() => {
+    if (selectedTrip && currentTrip) {
+      setDetail(loadTripDetail(selectedTrip, currentTrip))
+    }
+  }, [selectedTrip, currentTrip?.id])
+
+  function handleAddTrip(trip: TravelTrip) {
+    setTripsBase(prev => {
+      const next = [...prev, trip]
+      saveTravelTrips(next)
+      return next
+    })
+  }
+
+  function persist(next: TripDetailData) {
+    if (selectedTrip) {
+      setDetail(next)
+      saveTripDetail(selectedTrip, next)
+    }
+  }
+
+  function updateItineraryStep(stepId: string, patch: Partial<ItineraryStep>) {
+    persist({
+      ...detail,
+      itinerarySteps: (detail.itinerarySteps ?? DEFAULT_ITINERARY_STEPS).map(s => s.id === stepId ? { ...s, ...patch } : s),
+    })
+  }
+  function addItineraryStep() {
+    const steps = detail.itinerarySteps ?? DEFAULT_ITINERARY_STEPS
+    persist({
+      ...detail,
+      itinerarySteps: [...steps, { id: `step_${Date.now()}`, title: '', imageUrl: '', note: '' }],
+    })
+  }
+  function removeItineraryStep(stepId: string) {
+    persist({
+      ...detail,
+      itinerarySteps: (detail.itinerarySteps ?? DEFAULT_ITINERARY_STEPS).filter(s => s.id !== stepId),
+    })
+  }
+
+  const expenses = detail.expenses ?? []
+  const addExpense = (e: TravelExpense) => persist({ ...detail, expenses: [...expenses, e] })
+  const updateExpense = (id: string, patch: Partial<TravelExpense>) =>
+    persist({ ...detail, expenses: expenses.map(x => x.id === id ? { ...x, ...patch } : x) })
+  const removeExpense = (id: string) => persist({ ...detail, expenses: expenses.filter(x => x.id !== id) })
+
+  const review = detail.review ?? null
+  const saveReview = (r: TravelReview) => persist({ ...detail, review: r })
+
+  const allItems     = detail.packing.flatMap(c => c.items)
   const checkedCount = allItems.filter(i => i.checked).length
   const totalCount   = allItems.length
   const pct          = totalCount > 0 ? Math.round(checkedCount / totalCount * 100) : 0
 
-  const now   = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const dday  = Math.ceil((OSAKA_START.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-  const ddayTxt   = dday > 0 ? `D-${dday}` : dday === 0 ? 'D-DAY!' : `D+${Math.abs(dday)}`
-  const ddayColor = dday <= 0 ? '#fbbf24' : dday <= 7 ? '#f97316' : dday <= 30 ? '#7C3AED' : '#818cf8'
+  const ddayResult = currentTrip ? calcDDay(currentTrip.startDate) : { text: '-', isPast: false }
 
   const CAT_COLOR: Record<string, string> = { essential: '#6366f1', creative: '#f472b6', daily: '#34d399' }
-
-  function persist(next: TravelStore) { setStore(next); saveTravel(next) }
+  const PACK_COLORS = ['#6366f1', '#f472b6', '#34d399', '#f97316', '#8b5cf6']
 
   function toggleItem(catId: string, itemId: string) {
     persist({
-      ...store,
-      packing: store.packing.map(cat => cat.id !== catId ? cat : {
+      ...detail,
+      packing: detail.packing.map(cat => cat.id !== catId ? cat : {
         ...cat,
         items: cat.items.map(item => item.id === itemId ? { ...item, checked: !item.checked } : item),
       }),
@@ -4006,15 +7192,127 @@ function TravelPage() {
   }
 
   function updateMemo(spotId: string, text: string) {
-    persist({ ...store, spotMemos: { ...store.spotMemos, [spotId]: text } })
+    persist({ ...detail, spotMemos: { ...detail.spotMemos, [spotId]: text } })
   }
 
-  const tips = [
-    { icon: '🚇', text: 'IC 카드(ICOCA) 첫날 바로 구매 → 지하철·버스 올인원 교통' },
-    { icon: '🍜', text: '도톤보리 타코야키 & 라멘 → 창작 에너지 보충 필수' },
-    { icon: '📸', text: '오사카성 & 만화박물관 → 웹툰 배경 레퍼런스 대량 촬영' },
-    { icon: '🕐', text: '교토 당일치기 → 아침 일찍 출발해 후시미이나리 인파 피하기' },
-  ]
+  function addSpot() {
+    const id = `spot_${Date.now()}`
+    persist({
+      ...detail,
+      spots: [...detail.spots, { id, name: '새 스팟', emoji: '📍', tag: '', desc: '' }],
+    })
+    setActiveSpot(id)
+  }
+  function updateSpot(id: string, patch: Partial<TravelSpot>) {
+    persist({
+      ...detail,
+      spots: detail.spots.map(s => s.id === id ? { ...s, ...patch } : s),
+    })
+  }
+  function removeSpot(id: string) {
+    const spotMemos = { ...detail.spotMemos }; delete spotMemos[id]
+    persist({ ...detail, spots: detail.spots.filter(s => s.id !== id), spotMemos })
+    if (activeSpot === id) setActiveSpot(null)
+  }
+
+  function addScheduleItem() {
+    const date = currentTrip?.startDate ?? new Date().toISOString().slice(0, 10)
+    persist({
+      ...detail,
+      schedule: [...detail.schedule, { id: `sch_${Date.now()}`, date, title: '', note: '', time: '' }],
+    })
+  }
+  function updateScheduleItem(id: string, patch: Partial<ScheduleItem>) {
+    persist({
+      ...detail,
+      schedule: detail.schedule.map(s => s.id === id ? { ...s, ...patch } : s),
+    })
+  }
+  function removeScheduleItem(id: string) {
+    persist({ ...detail, schedule: detail.schedule.filter(s => s.id !== id) })
+  }
+
+  function addPhoto(url: string, caption?: string) {
+    persist({
+      ...detail,
+      photos: [...detail.photos, { id: `photo_${Date.now()}`, url, caption: caption ?? '' }],
+    })
+  }
+  function updatePhoto(id: string, patch: Partial<PhotoItem>) {
+    persist({
+      ...detail,
+      photos: detail.photos.map(p => p.id === id ? { ...p, ...patch } : p),
+    })
+  }
+  function removePhoto(id: string) {
+    persist({ ...detail, photos: detail.photos.filter(p => p.id !== id) })
+  }
+
+  async function handleCoverUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file?.type.startsWith('image/')) return
+    setCoverUploading(true)
+    try {
+      const url = await uploadImageToMedia(file)
+      persist({ ...detail, coverImageUrl: url })
+    } catch (err) { console.error('[커버 업로드 실패]', err) }
+    finally { setCoverUploading(false); e.target.value = '' }
+  }
+
+  // ── Packing (카테고리/항목 추가·수정·삭제) ──
+  function addPackingCategory() {
+    const id = `pack_cat_${Date.now()}`
+    persist({
+      ...detail,
+      packing: [...detail.packing, { id, label: '새 카테고리', emoji: '📦', items: [] }],
+    })
+  }
+  function updatePackingCategory(catId: string, patch: Partial<PackCategory>) {
+    persist({
+      ...detail,
+      packing: detail.packing.map(c => c.id === catId ? { ...c, ...patch } : c),
+    })
+  }
+  function removePackingCategory(catId: string) {
+    persist({ ...detail, packing: detail.packing.filter(c => c.id !== catId) })
+  }
+  function addPackingItem(catId: string) {
+    const id = `pack_item_${Date.now()}`
+    persist({
+      ...detail,
+      packing: detail.packing.map(c => c.id !== catId ? c : { ...c, items: [...c.items, { id, label: '새 항목', checked: false }] }),
+    })
+  }
+  function updatePackingItem(catId: string, itemId: string, patch: Partial<PackItem>) {
+    persist({
+      ...detail,
+      packing: detail.packing.map(c => c.id !== catId ? c : {
+        ...c,
+        items: c.items.map(i => i.id !== itemId ? i : { ...i, ...patch }),
+      }),
+    })
+  }
+  function removePackingItem(catId: string, itemId: string) {
+    persist({
+      ...detail,
+      packing: detail.packing.map(c => c.id !== catId ? c : { ...c, items: c.items.filter(i => i.id !== itemId) }),
+    })
+  }
+
+  // ── Tips (꿀팁 추가·수정·삭제) ──
+  const tips = detail.tips ?? []
+  function addTip() {
+    persist({ ...detail, tips: [...tips, { icon: '💡', text: '' }] })
+  }
+  function updateTip(index: number, patch: { icon?: string; text?: string }) {
+    const next = [...tips]
+    next[index] = { ...next[index], ...patch }
+    persist({ ...detail, tips: next })
+  }
+  function removeTip(index: number) {
+    persist({ ...detail, tips: tips.filter((_, i) => i !== index) })
+  }
+
 
   const inputBase: React.CSSProperties = {
     width: '100%', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.06)',
@@ -4022,93 +7320,430 @@ function TravelPage() {
     outline: 'none', resize: 'none', boxSizing: 'border-box', lineHeight: '1.7', fontFamily: 'inherit',
   }
 
+  // ── 목록 뷰 (List View) - image_0 스타일 + 국기/D-Day ──
+  if (!selectedTrip) {
+    return (
+      <>
+      <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
+        <div style={{ marginBottom: '28px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <span style={{ fontSize: '10px', fontWeight: 800, color: '#f97316', letterSpacing: '0.2em', textTransform: 'uppercase' }}>✈️ Travel Center</span>
+            <h1 style={{ margin: '8px 0 0', fontSize: '28px', fontWeight: 900, color: '#37352F' }}>여행 프로젝트</h1>
+            <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>여행지를 선택하거나 새 여행을 추가하세요</p>
+          </div>
+          {trips.length > 0 && (
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#9B9A97', letterSpacing: '0.05em' }}>
+              {trips[0].startDate.split('-')[0]}년
+            </span>
+          )}
+        </div>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: '20px',
+        }}>
+          {trips.map(trip => {
+            const dday = calcDDay(trip.startDate)
+            return (
+              <button
+                key={trip.id}
+                onClick={() => setSelectedTrip(trip.id)}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  padding: '24px 22px',
+                  borderRadius: '16px',
+                  border: '1px solid rgba(0,0,0,0.06)',
+                  backgroundColor: '#FFFFFF',
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  position: 'relative',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = 'translateY(-4px)'
+                  e.currentTarget.style.boxShadow = '0 12px 28px rgba(0,0,0,0.12)'
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)'
+                }}
+              >
+                {/* 카드 우측 상단: 년도 */}
+                <span style={{ position: 'absolute', top: '16px', right: '18px', fontSize: '13px', fontWeight: 800, color: '#37352F', letterSpacing: '0.03em' }}>
+                  {trip.startDate.split('-')[0]}년
+                </span>
+                {/* 비행기 아이콘 (좌상단) */}
+                <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
+                {/* 녹색 일본 지도 + 제목 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '20px', lineHeight: 1, filter: 'hue-rotate(100deg) saturate(1.3)', display: 'inline-block' }} title="일본">🗾</span>
+                  <p style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#37352F' }}>{trip.title}</p>
+                </div>
+                {/* 국기 + 날짜 + D-Day (한 줄) */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: '1 1 auto', overflow: 'hidden' }}>
+                    <span style={{ width: 18, height: 14, borderRadius: 2, overflow: 'hidden', display: 'inline-block', flexShrink: 0 }}>
+                      <svg width="18" height="14" viewBox="0 0 20 15" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="20" height="15" fill="#fff"/>
+                        <circle cx="10" cy="7.5" r="3.3" fill="#bc002d"/>
+                      </svg>
+                    </span>
+                    <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
+                  </div>
+                  <span style={{ fontSize: '16px', color: dday.isPast ? '#94a3b8' : '#475569', fontWeight: 600, flexShrink: 0, letterSpacing: '-0.02em' }}>{dday.text}</span>
+                </div>
+                {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
+              </button>
+            )
+          })}
+          <button
+            onClick={() => setAddTripOpen(true)}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '12px',
+              padding: '24px 22px',
+              borderRadius: '16px',
+              border: '2px dashed rgba(0,0,0,0.12)',
+              backgroundColor: 'rgba(0,0,0,0.02)',
+              cursor: 'pointer',
+              transition: 'transform 0.2s, border-color 0.2s, background 0.2s',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.transform = 'translateY(-4px)'
+              e.currentTarget.style.borderColor = 'rgba(99,102,241,0.35)'
+              e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.06)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.transform = 'translateY(0)'
+              e.currentTarget.style.borderColor = 'rgba(0,0,0,0.12)'
+              e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.02)'
+            }}
+          >
+            <span style={{ fontSize: '32px', color: '#9B9A97' }}>+</span>
+            <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#787774' }}>새로운 여행 추가</p>
+          </button>
+        </div>
+      </div>
+      {addTripOpen && <AddTripModal onClose={() => setAddTripOpen(false)} onAdded={handleAddTrip} />}
+      </>
+    )
+  }
+
+  // ── 상세 뷰 (Detail View) ──
   return (
     <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
 
-      {/* ── Travel Hero Header ── */}
-      <div style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden', background: 'linear-gradient(135deg, #0c0c1e 0%, #1a1440 55%, #0d1828 100%)', border: '1px solid rgba(99,102,241,0.22)', padding: isMobile ? '24px 20px' : '40px 48px', marginBottom: '24px' }}>
-        {/* Decorative glows */}
-        <div style={{ position: 'absolute', top: '-60px', right: '-60px', width: '320px', height: '320px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.13) 0%, transparent 70%)', pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', bottom: '-80px', left: '25%', width: '240px', height: '240px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(249,115,22,0.09) 0%, transparent 70%)', pointerEvents: 'none' }} />
+      {/* <- 목록으로 돌아가기 */}
+      <button
+        onClick={() => setSelectedTrip(null)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          marginBottom: '20px',
+          padding: '8px 14px',
+          borderRadius: '10px',
+          border: '1px solid rgba(0,0,0,0.08)',
+          backgroundColor: 'transparent',
+          color: '#6366f1',
+          fontSize: '13px',
+          fontWeight: 600,
+          cursor: 'pointer',
+          transition: 'background 0.15s, border-color 0.15s',
+        }}
+        onMouseEnter={e => {
+          e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.08)'
+          e.currentTarget.style.borderColor = 'rgba(99,102,241,0.25)'
+        }}
+        onMouseLeave={e => {
+          e.currentTarget.style.backgroundColor = 'transparent'
+          e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'
+        }}
+      >
+        <span style={{ fontSize: '16px' }}>←</span>
+        목록으로 돌아가기
+      </button>
 
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '24px' }}>
-          {/* Left: title */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-              <span style={{ fontSize: '14px' }}>✈️</span>
-              <span style={{ fontSize: '10px', fontWeight: 800, color: '#f97316', letterSpacing: '0.22em', textTransform: 'uppercase' }}>Travel Center</span>
-            </div>
-            <h1 style={{ margin: '0 0 10px', fontSize: '42px', fontWeight: 900, color: '#37352F', letterSpacing: '-1.5px', lineHeight: 1.05 }}>
-              OSAKA <span style={{ color: '#6366f1' }}>&amp;</span> KYOTO
-            </h1>
-            <p style={{ margin: '0 0 16px', fontSize: '14px', color: '#6B6B6B', fontWeight: 500 }}>2026년 4월 27일 (월) — 4월 30일 (목) · 3박 4일</p>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {['일본 오사카', '교토 당일치기', '만화 성지순례', '창작 충전'].map(tag => (
-                <span key={tag} style={{ fontSize: '10px', fontWeight: 700, color: '#7C3AED', backgroundColor: 'rgba(167,139,250,0.1)', padding: '4px 12px', borderRadius: '999px', border: '1px solid rgba(167,139,250,0.2)' }}>{tag}</span>
-              ))}
+      {/* ── Travel Hero Header (3단 Grid + Glassmorphism + 드래그 위치 조정) ── */}
+      {(() => {
+        const parsePos = (s: string | undefined) => {
+          if (!s) return { x: 50, y: 50 }
+          const m = s.match(/(\d+)\s*%\s*(\d+)\s*%/)
+          if (m) return { x: Math.min(100, Math.max(0, +m[1])), y: Math.min(100, Math.max(0, +m[2])) }
+          return { x: 50, y: 50 }
+        }
+        const pos = coverPositionMode ? coverPositionDrag : parsePos(detail.coverImagePosition)
+        const posStr = `${pos.x}% ${pos.y}%`
+        const handleCoverMouseDown = (e: React.MouseEvent) => {
+          if (!coverPositionMode || !detail.coverImageUrl) return
+          coverPositionDragStart.current = { mx: e.clientX, my: e.clientY, px: pos.x, py: pos.y }
+          setCoverPositionDragging(true)
+        }
+        const handleCoverMouseMove = (e: React.MouseEvent) => {
+          const ref = coverPositionDragStart.current
+          if (!ref) return
+          const el = e.currentTarget as HTMLElement
+          const rect = el.getBoundingClientRect()
+          const dx = ((e.clientX - ref.mx) / rect.width) * 100
+          const dy = ((e.clientY - ref.my) / rect.height) * 100
+          setCoverPositionDrag({
+            x: Math.min(100, Math.max(0, ref.px - dx)),
+            y: Math.min(100, Math.max(0, ref.py - dy)),
+          })
+        }
+        const handleCoverMouseUp = () => { coverPositionDragStart.current = null; setCoverPositionDragging(false) }
+        const handleCoverMouseLeave = () => { coverPositionDragStart.current = null; setCoverPositionDragging(false) }
+        const saveCoverPosition = () => {
+          persist({ ...detail, coverImagePosition: posStr })
+          setCoverPositionMode(false)
+        }
+        const ACCENT = '#9b8ff0'
+        const iconBtn = (onClick: () => void, children: React.ReactNode, title: string, disabled?: boolean) => (
+          <button onClick={onClick} disabled={disabled} title={title} style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: disabled ? 'wait' : 'pointer', opacity: disabled ? 0.6 : 1, fontSize: 11 }} onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = 'rgba(255,255,255,0.2)' }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)' }}>
+            {children}
+          </button>
+        )
+        return (
+      <div
+        style={{
+          position: 'relative',
+          borderRadius: 16,
+          overflow: 'hidden',
+          background: 'linear-gradient(135deg, #0f1229 0%, #141736 60%, #1a1e3d 100%)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          padding: isMobile ? '28px 32px' : '40px 48px',
+          marginBottom: '24px',
+          minHeight: 200,
+          cursor: coverPositionMode && detail.coverImageUrl ? (coverPositionDragging ? 'grabbing' : 'grab') : undefined,
+        }}
+        onMouseDown={handleCoverMouseDown}
+        onMouseMove={handleCoverMouseMove}
+        onMouseUp={handleCoverMouseUp}
+        onMouseLeave={handleCoverMouseLeave}
+      >
+        <input ref={coverInputRef} type="file" accept="image/*" onChange={handleCoverUpload} style={{ display: 'none' }} />
+
+        {coverPositionMode && detail.coverImageUrl && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, padding: '12px 16px', background: 'rgba(0,0,0,0.5)', borderBottom: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+            <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#fff' }}>이미지를 드래그하여 위치를 조정하세요</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={saveCoverPosition} style={{ padding: '6px 16px', borderRadius: 8, border: 'none', background: ACCENT, color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>저장</button>
+              <button onClick={() => { setCoverPositionMode(false); setCoverPositionDrag(parsePos(detail.coverImagePosition)) }} style={{ padding: '6px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.4)', background: 'transparent', color: '#fff', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>취소</button>
             </div>
           </div>
+        )}
 
-          {/* Right: D-Day */}
-          <div style={{ textAlign: 'center', padding: '28px 40px', borderRadius: '12px', backgroundColor: 'rgba(0,0,0,0.38)', border: `1px solid ${ddayColor}40`, backdropFilter: 'blur(12px)', flexShrink: 0 }}>
-            <p style={{ margin: '0 0 6px', fontSize: '10px', fontWeight: 700, color: '#787774', letterSpacing: '0.18em', textTransform: 'uppercase' }}>출발까지</p>
-            <p style={{ margin: '0 0 6px', fontSize: '56px', fontWeight: 900, color: ddayColor, lineHeight: 1, letterSpacing: '-2px', textShadow: `0 0 32px ${ddayColor}55` }}>{ddayTxt}</p>
-            <p style={{ margin: 0, fontSize: '11px', color: '#787774' }}>2026.04.27 (화)</p>
+        {/* 3-column Grid: 좌(캘린더) | 중(타이틀⬅️➡️메모) | 우(연도/아이콘/D-day) */}
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 1fr auto', gap: 32, alignItems: 'stretch', minHeight: 160 }}>
+          {/* 좌측: 캘린더 (Glassmorphism) */}
+          {currentTrip && (() => {
+            const [sy, sm, sd] = currentTrip.startDate.split('-').map(Number)
+            const [ey, em, ed] = currentTrip.endDate.split('-').map(Number)
+            const start = new Date(sy, sm - 1, sd)
+            const end = new Date(ey, em - 1, ed)
+            const sameMonth = sy === ey && sm === em
+            const calW = isMobile ? 120 : 130
+            if (!sameMonth) {
+              return (
+                <div style={{ width: calW, padding: '12px 10px', borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>📅</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#fff' }}>{sm}/{sd}~{em}/{ed}</span>
+                </div>
+              )
+            }
+            const month = start.getMonth()
+            const year = start.getFullYear()
+            const firstDay = new Date(year, month, 1).getDay()
+            const daysInMonth = new Date(year, month + 1, 0).getDate()
+            const isInRange = (d: number) => {
+              const dte = new Date(year, month, d)
+              return dte >= start && dte <= end
+            }
+            return (
+              <div style={{ width: calW, padding: '12px 10px', borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{year}.{String(month + 1).padStart(2,'0')}</span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, width: '100%', justifyItems: 'center' }}>
+                  {['일','월','화','수','목','금','토'].map(d => <span key={d} style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', textAlign: 'center', fontWeight: 600 }}>{d}</span>)}
+                  {Array.from({ length: firstDay }, (_, i) => <span key={`e${i}`} />)}
+                  {Array.from({ length: daysInMonth }, (_, i) => {
+                    const d = i + 1
+                    const active = isInRange(d)
+                    return (
+                      <span key={d} style={{
+                        fontSize: 10, fontWeight: active ? 700 : 500, color: active ? '#fff' : 'rgba(255,255,255,0.5)',
+                        background: active ? ACCENT : 'transparent', borderRadius: 4, textAlign: 'center', padding: '2px 0', minWidth: 16, boxSizing: 'border-box',
+                      }}>{d}</span>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* 중앙: 타이틀(좌) ⬅️ ➡️ 메모장(우, flex-1) — 가로 한 줄, 절대 밑으로 안 떨어짐 */}
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 28, minWidth: 0, flex: 1, flexWrap: 'nowrap' }}>
+            <div style={{ flexShrink: 0, minWidth: 0, paddingTop: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span onClick={() => { const v = window.prompt('아이콘: 이모지 또는 URL', detail.heroIcon ?? '✈️'); if (v !== null) persist({ ...detail, heroIcon: v.trim() || '✈️' }) }} style={{ fontSize: 24, lineHeight: 1, cursor: 'pointer', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.4))' }}>
+                  {detail.heroIcon?.startsWith('http') || detail.heroIcon?.startsWith('data:') ? (
+                    <img src={detail.heroIcon} alt="" style={{ width: 28, height: 28, objectFit: 'contain', borderRadius: 6 }} />
+                  ) : (
+                    detail.heroIcon || '✈️'
+                  )}
+                </span>
+                <h1 style={{ margin: 0, fontSize: isMobile ? 28 : 36, fontWeight: 800, color: '#fff', lineHeight: 1.2, letterSpacing: '-0.02em', textShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
+                  {currentTrip?.title ?? '여행'}
+                </h1>
+              </div>
+              {currentTrip?.note && <p style={{ margin: '8px 0 0', fontSize: 15, fontWeight: 500, color: 'rgba(255,255,255,0.75)', lineHeight: 1.5, textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>{currentTrip.note}</p>}
+              {currentTrip && (
+                <p style={{ margin: '6px 0 0', fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.55)', lineHeight: 1.5, textShadow: '0 1px 3px rgba(0,0,0,0.25)' }}>
+                  {fmtTripDateShort(currentTrip.startDate, currentTrip.endDate)}
+                  <span style={{ marginLeft: 8 }}>· {calcTripNights(currentTrip.startDate, currentTrip.endDate)}</span>
+                </p>
+              )}
+            </div>
+            <textarea
+              data-travel-memo
+              value={detail.heroMemo ?? ''}
+              onChange={e => persist({ ...detail, heroMemo: e.target.value })}
+              placeholder="여행에 대한 메모를 자유롭게 적어보세요"
+              rows={2}
+              style={{
+                flex: 1, minWidth: 180, maxWidth: '100%', minHeight: 72, padding: '12px 16px', borderRadius: 12,
+                border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.9)',
+                fontSize: 14, outline: 'none', resize: 'none', boxSizing: 'border-box',
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'rgba(140,120,240,0.5)' }}
+              onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)' }}
+            />
           </div>
+
+          {/* 우측: 2026년(타이틀보다 작게) + 아이콘(소) + D-day(하단 정렬) */}
+          {currentTrip && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', minWidth: 90 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                <span style={{ fontSize: 28, fontWeight: 700, color: '#fff', lineHeight: 1, letterSpacing: '-0.02em', textShadow: '0 2px 12px rgba(0,0,0,0.3)' }}>
+                  {currentTrip.startDate.split('-')[0]}년
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {iconBtn(() => coverInputRef.current?.click(), coverUploading ? '…' : <Image size={12} />, '커버 이미지', coverUploading)}
+                  {detail.coverImageUrl && (
+                    <>
+                      {iconBtn(() => { setCoverPositionMode(true); setCoverPositionDrag(parsePos(detail.coverImagePosition)) }, <Move size={12} />, '위치 이동')}
+                      {iconBtn(() => persist({ ...detail, coverImageUrl: '' }), <Trash2 size={12} />, '커버 제거')}
+                    </>
+                  )}
+                </div>
+              </div>
+              <span style={{ fontSize: 22, fontWeight: 700, color: ACCENT, marginTop: 'auto', textShadow: '0 1px 8px rgba(0,0,0,0.3)' }}>
+                {ddayResult.text}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Progress bar */}
-        <div style={{ position: 'relative', marginTop: '30px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <span style={{ fontSize: '10px', fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase' }}>🧳 여행 준비 완료율</span>
-            <span style={{ fontSize: '13px', fontWeight: 800, color: pct === 100 ? '#34d399' : '#37352F' }}>
-              {pct}% <span style={{ fontSize: '10px', color: '#787774', fontWeight: 500 }}>({checkedCount}/{totalCount})</span>
-              {pct === 100 && <span style={{ marginLeft: '8px', fontSize: '13px' }}>🎉 준비 완료!</span>}
-            </span>
+        <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.5)' }}>▪ 여행 준비 완료율</span>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>{pct}% ({checkedCount}/{totalCount}){pct === 100 && ' 🎉'}</span>
           </div>
-          <div style={{ height: '7px', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: '999px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${pct}%`, borderRadius: '999px', background: pct === 100 ? 'linear-gradient(90deg,#34d399,#10b981)' : 'linear-gradient(90deg,#6366f1,#a78bfa)', transition: 'width 0.45s cubic-bezier(0.4,0,0.2,1)', boxShadow: pct > 0 ? `0 0 12px rgba(99,102,241,0.5)` : 'none' }} />
+          <div style={{ height: 3, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, borderRadius: 2, background: 'rgba(140,120,240,0.8)', transition: 'width 0.3s ease' }} />
           </div>
         </div>
       </div>
+        )})()}
 
-      {/* ── Two column layout ── */}
+      {/* ── 여행 단계별 방문 장소 (10개 이상 가능, 가로 스크롤) ── */}
+      <div style={{ marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: 8 }}>
+          <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>📍</span> 여행 단계별 방문 장소
+          </p>
+          <button onClick={addItineraryStep} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(99,102,241,0.28)', backgroundColor: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+            <Plus size={10} />단계 추가
+          </button>
+        </div>
+        <ItineraryStepsCarousel
+          steps={detail.itinerarySteps ?? DEFAULT_ITINERARY_STEPS}
+          onUpdate={updateItineraryStep}
+          onRemove={removeItineraryStep}
+          uploadImageToMedia={uploadImageToMedia}
+          isMobile={isMobile}
+        />
+      </div>
+
+      {/* ── 원페이지 대시보드: 일정/체크리스트 | 가계부 | 회고록 통합 ── */}
+      <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+      {/* ── Two column layout: 체크리스트 + 스팟 ── */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', alignItems: 'start' }}>
 
         {/* ── Left: Packing Checklist ── */}
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <span style={{ fontSize: '18px' }}>🧳</span>
-            <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F' }}>스마트 체크리스트</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>🧳</span>
+              <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F' }}>스마트 체크리스트</p>
+            </div>
+            <button onClick={addPackingCategory} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(99,102,241,0.28)', backgroundColor: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+              <Plus size={10} />카테고리 추가
+            </button>
           </div>
 
-          {store.packing.map(cat => {
+          {detail.packing.map(cat => {
             const catChecked = cat.items.filter(i => i.checked).length
-            const ac = CAT_COLOR[cat.id] ?? '#6366f1'
+            const ac = (CAT_COLOR[cat.id] ?? PACK_COLORS[detail.packing.indexOf(cat) % PACK_COLORS.length])
             return (
-              <div key={cat.id} style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)', marginBottom: '14px', overflow: 'hidden' }}>
-                <div style={{ padding: '13px 18px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '16px' }}>{cat.emoji}</span>
-                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#37352F' }}>{cat.label}</span>
+              <div key={cat.id} style={{ backgroundColor: '#FFFFFF', borderRadius: '14px', border: '1px solid rgba(0,0,0,0.06)', marginBottom: '14px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+                <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                    <input value={cat.emoji} onChange={e => updatePackingCategory(cat.id, { emoji: e.target.value || '📦' })} style={{ width: 36, textAlign: 'center', padding: '4px 2px', fontSize: '16px', border: 'none', backgroundColor: 'transparent', outline: 'none', fontFamily: 'inherit' }} maxLength={2} title="이모지" />
+                    <input value={cat.label} onChange={e => updatePackingCategory(cat.id, { label: e.target.value })} style={{ border: 'none', padding: 0, backgroundColor: 'transparent', fontSize: '13px', fontWeight: 800, color: '#37352F', flex: 1, minWidth: 80, outline: 'none', fontFamily: 'inherit' }} placeholder="카테고리 이름" />
                   </div>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: catChecked === cat.items.length ? '#34d399' : ac, backgroundColor: `${ac}15`, padding: '3px 11px', borderRadius: '999px', border: `1px solid ${ac}30` }}>
-                    {catChecked}/{cat.items.length} {catChecked === cat.items.length ? '✓' : ''}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: catChecked === cat.items.length ? '#34d399' : ac, backgroundColor: `${ac}15`, padding: '3px 11px', borderRadius: '999px', border: `1px solid ${ac}30` }}>
+                      {catChecked}/{cat.items.length} {catChecked === cat.items.length ? '✓' : ''}
+                    </span>
+                    <button onClick={() => removePackingCategory(cat.id)} style={{ width: 24, height: 24, borderRadius: 6, border: 'none', backgroundColor: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="카테고리 삭제">
+                      <Trash2 size={12} color="#ef4444" />
+                    </button>
+                  </div>
                 </div>
-                <div style={{ padding: '8px 10px' }}>
-                  {cat.items.map(item => (
-                    <div key={item.id} onClick={() => toggleItem(cat.id, item.id)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 10px', borderRadius: '10px', cursor: 'pointer', transition: 'background 0.12s' }}
-                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.06)' }}
+                <div style={{ padding: '12px 16px' }}>
+                  {cat.items.map((item, idx) => (
+                    <div key={item.id} style={{
+                      display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0',
+                      borderBottom: idx < cat.items.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none',
+                      transition: 'background 0.12s',
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'transparent' }}
                       onMouseLeave={e => { e.currentTarget.style.backgroundColor = '' }}
                     >
-                      <div style={{ width: '18px', height: '18px', borderRadius: '5px', border: `2px solid ${item.checked ? ac : '#D3D1CB'}`, backgroundColor: item.checked ? ac : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', boxShadow: item.checked ? `0 0 8px ${ac}50` : 'none' }}>
-                        {item.checked && <span style={{ fontSize: '10px', color: '#37352F', lineHeight: 1 }}>✓</span>}
+                      <div onClick={() => toggleItem(cat.id, item.id)} style={{ width: '18px', height: '18px', borderRadius: '5px', border: `2px solid ${item.checked ? ac : '#D3D1CB'}`, backgroundColor: item.checked ? ac : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer', transition: 'all 0.15s', boxShadow: item.checked ? `0 0 8px ${ac}50` : 'none' }}>
+                        {item.checked && <span style={{ fontSize: '10px', color: '#fff', lineHeight: 1 }}>✓</span>}
                       </div>
-                      <span style={{ fontSize: '13px', color: item.checked ? '#9B9A97' : '#37352F', textDecoration: item.checked ? 'line-through' : 'none', transition: 'all 0.2s' }}>{item.label}</span>
+                      <input value={item.label} onChange={e => updatePackingItem(cat.id, item.id, { label: e.target.value })} onClick={e => e.stopPropagation()} style={{
+                        flex: 1, minWidth: 0, border: 'none', padding: '4px 0', backgroundColor: 'transparent',
+                        fontSize: '13px', color: item.checked ? '#9B9A97' : '#37352F', textDecoration: item.checked ? 'line-through' : 'none',
+                        outline: 'none', fontFamily: 'inherit',
+                      }} placeholder="항목" />
+                      <button onClick={() => removePackingItem(cat.id, item.id)} style={{ width: 22, height: 22, borderRadius: 6, border: 'none', backgroundColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, opacity: 0.5 }} onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.08)' }} onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.backgroundColor = 'transparent' }} title="삭제">
+                        <Trash2 size={11} color="#ef4444" />
+                      </button>
                     </div>
                   ))}
+                  <button onClick={() => addPackingItem(cat.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', width: '100%', padding: '10px', marginTop: '4px', borderRadius: '8px', border: '1px dashed rgba(0,0,0,0.12)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '11px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.3)'; e.currentTarget.style.color = '#6366f1' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.12)'; e.currentTarget.style.color = '#9B9A97' }}>
+                    <Plus size={12} />항목 추가
+                  </button>
                 </div>
               </div>
             )
@@ -4117,64 +7752,171 @@ function TravelPage() {
 
         {/* ── Right: Inspiration Spots ── */}
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <span style={{ fontSize: '18px' }}>📍</span>
-            <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F' }}>주요 스팟 가이드</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>📍</span>
+              <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F' }}>주요 스팟 가이드</p>
+            </div>
+            <button onClick={addSpot} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(99,102,241,0.28)', backgroundColor: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+              <Plus size={10} />스팟 추가
+            </button>
           </div>
-
-          {TRAVEL_SPOTS.map(spot => {
+          {detail.spots.map(spot => {
             const isActive = activeSpot === spot.id
+            const spotBorder = isActive ? 'rgba(99,102,241,0.38)' : 'rgba(0,0,0,0.06)'
+            const spotShadow = isActive ? '0 4px 20px rgba(99,102,241,0.12)' : '0 2px 8px rgba(0,0,0,0.03)'
             return (
-              <div key={spot.id} style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', border: `1px solid ${isActive ? 'rgba(99,102,241,0.38)' : '#EBEBEA'}`, marginBottom: '14px', overflow: 'hidden', transition: 'border-color 0.2s', boxShadow: isActive ? '0 0 24px rgba(99,102,241,0.12)' : 'none' }}>
+              <div key={spot.id} style={{ backgroundColor: '#FFFFFF', borderRadius: '14px', border: `1px solid ${spotBorder}`, marginBottom: '14px', overflow: 'hidden', transition: 'border-color 0.2s', boxShadow: spotShadow }}>
                 <div onClick={() => setActiveSpot(isActive ? null : spot.id)}
-                  style={{ padding: '16px 18px', cursor: 'pointer', transition: 'background 0.12s' }}
+                  style={{ padding: '18px 20px', cursor: 'pointer', transition: 'background 0.12s' }}
                   onMouseEnter={e => { if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.04)' }}
                   onMouseLeave={e => { if (!isActive) e.currentTarget.style.backgroundColor = '' }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
-                    <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: '30px', lineHeight: 1, flexShrink: 0 }}>{spot.emoji}</span>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '14px' }}>
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: '32px', lineHeight: 1, flexShrink: 0 }}>{spot.emoji}</span>
                       <div style={{ minWidth: 0 }}>
                         <p style={{ margin: '0 0 5px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>{spot.name}</p>
                         <span style={{ fontSize: '10px', fontWeight: 700, color: '#7C3AED', backgroundColor: 'rgba(167,139,250,0.1)', padding: '3px 9px', borderRadius: '999px', border: '1px solid rgba(167,139,250,0.22)' }}>{spot.tag}</span>
                         <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#787774', lineHeight: 1.65 }}>{spot.desc}</p>
                       </div>
                     </div>
-                    <span style={{ color: isActive ? '#6366f1' : '#D3D1CB', flexShrink: 0, fontSize: '11px', marginTop: '3px', display: 'inline-block', transform: isActive ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s, color 0.2s' }}>▼</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      <button onClick={e => { e.stopPropagation(); removeSpot(spot.id) }} style={{ width: 24, height: 24, borderRadius: 6, border: 'none', backgroundColor: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="삭제">
+                        <Trash2 size={12} color="#ef4444" />
+                      </button>
+                      <span style={{ color: isActive ? '#6366f1' : '#D3D1CB', fontSize: '11px', display: 'inline-block', transform: isActive ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s, color 0.2s' }}>▼</span>
+                    </div>
                   </div>
                 </div>
 
                 {isActive && (
+                  <>
+                  <div style={{ borderTop: '1px solid rgba(99,102,241,0.14)', padding: '14px 18px', backgroundColor: 'rgba(99,102,241,0.04)' }}>
+                    <p style={{ margin: '0 0 8px', fontSize: '9px', fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase' }}>✏️ 스팟 정보 편집</p>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input value={spot.emoji} onChange={e => updateSpot(spot.id, { emoji: e.target.value || '📍' })} placeholder="이모지" style={{ ...inputBase, width: '50px', textAlign: 'center' }} maxLength={2} />
+                      <input value={spot.name} onChange={e => updateSpot(spot.id, { name: e.target.value })} placeholder="스팟 이름" style={{ ...inputBase, flex: 1 }} />
+                    </div>
+                    <input value={spot.tag} onChange={e => updateSpot(spot.id, { tag: e.target.value })} placeholder="태그 (예: 역사적 영감)" style={{ ...inputBase, marginBottom: '8px' }} />
+                    <textarea value={spot.desc} onChange={e => updateSpot(spot.id, { desc: e.target.value })} placeholder="설명" rows={2} style={inputBase} />
+                  </div>
                   <div style={{ borderTop: '1px solid rgba(99,102,241,0.14)', padding: '14px 18px', backgroundColor: 'rgba(99,102,241,0.04)' }}>
                     <p style={{ margin: '0 0 9px', fontSize: '9px', fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase' }}>✏️ 여기서 꼭 할 일 & 영감 메모</p>
                     <textarea
-                      value={store.spotMemos[spot.id] ?? ''}
+                      value={detail.spotMemos[spot.id] ?? ''}
                       onChange={e => updateMemo(spot.id, e.target.value)}
                       placeholder={`${spot.name}에서의 계획을 자유롭게 적어보세요...`}
                       rows={4}
                       style={inputBase}
                     />
                   </div>
+                  </>
                 )}
               </div>
             )
           })}
 
-          {/* Tips card */}
-          <div style={{ backgroundColor: 'rgba(99,102,241,0.05)', borderRadius: '12px', border: '1px solid rgba(99,102,241,0.14)', padding: '18px 20px' }}>
-            <p style={{ margin: '0 0 14px', fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em', textTransform: 'uppercase' }}>💡 오사카 여행 꿀팁</p>
-            {tips.map((tip, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: i < tips.length - 1 ? '10px' : 0 }}>
-                <span style={{ fontSize: '14px', flexShrink: 0, lineHeight: 1.5 }}>{tip.icon}</span>
-                <span style={{ fontSize: '12px', color: '#6B6B6B', lineHeight: 1.6 }}>{tip.text}</span>
-              </div>
-            ))}
+          {/* Tips card - 추가·수정·삭제 가능 */}
+          <div style={{ backgroundColor: '#fff', borderRadius: '14px', border: '1px solid rgba(0,0,0,0.06)', marginTop: '14px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <p style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: '#37352F' }}>💡 여행 꿀팁</p>
+              <button onClick={addTip} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(99,102,241,0.25)', backgroundColor: 'transparent', color: '#6366f1', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                <Plus size={10} />추가
+              </button>
+            </div>
+            <div style={{ padding: '12px 18px' }}>
+              {tips.map((tip, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: i < tips.length - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                  <input value={tip.icon} onChange={e => updateTip(i, { icon: e.target.value })} style={{ width: 32, textAlign: 'center', padding: '4px 2px', fontSize: '14px', border: 'none', backgroundColor: 'transparent', outline: 'none', fontFamily: 'inherit', flexShrink: 0 }} maxLength={2} placeholder="이모지" />
+                  <input value={tip.text} onChange={e => updateTip(i, { text: e.target.value })} style={{ flex: 1, minWidth: 0, border: 'none', padding: '4px 0', backgroundColor: 'transparent', fontSize: '12px', color: '#37352F', outline: 'none', fontFamily: 'inherit' }} placeholder="꿀팁 내용을 입력하세요" />
+                  <button onClick={() => removeTip(i)} style={{ width: 24, height: 24, borderRadius: 6, border: 'none', backgroundColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, opacity: 0.5 }} onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.08)' }} onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.backgroundColor = 'transparent' }} title="삭제">
+                    <Trash2 size={11} color="#ef4444" />
+                  </button>
+                </div>
+              ))}
+              {tips.length === 0 && (
+                <p style={{ margin: 0, padding: '16px 0', fontSize: '12px', color: '#9B9A97', textAlign: 'center' }}>꿀팁이 없습니다. &quot;추가&quot; 버튼을 눌러 추가하세요.</p>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
+      {/* ── 일정 (Schedule) Section ── */}
+      <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(99,102,241,0.35)' }}>
+              <CalendarRange size={18} color="#fff" />
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.2em', textTransform: 'uppercase' }}>일정</p>
+              <p style={{ margin: 0, fontSize: '19px', fontWeight: 900, color: '#37352F' }}>여행 일정</p>
+            </div>
+          </div>
+          <button onClick={addScheduleItem} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px', border: '1px solid rgba(99,102,241,0.3)', backgroundColor: 'rgba(99,102,241,0.08)', color: '#4F46E5', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+            <Plus size={14} />일정 추가
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {detail.schedule
+            .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
+            .map((item) => (
+              <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 18px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+                <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <input type="date" value={item.date} onChange={e => updateScheduleItem(item.id, { date: e.target.value })} style={{ ...inputBase, width: '130px', padding: '8px 10px' }} />
+                  <input type="time" value={item.time ?? ''} onChange={e => updateScheduleItem(item.id, { time: e.target.value })} placeholder="시간" style={{ ...inputBase, width: '130px', padding: '8px 10px' }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input value={item.title} onChange={e => updateScheduleItem(item.id, { title: e.target.value })} placeholder="제목" style={{ ...inputBase, marginBottom: '8px', fontWeight: 700 }} />
+                  <textarea value={item.note} onChange={e => updateScheduleItem(item.id, { note: e.target.value })} placeholder="메모" rows={2} style={inputBase} />
+                </div>
+                <button onClick={() => removeScheduleItem(item.id)} style={{ width: 32, height: 32, borderRadius: '8px', border: 'none', backgroundColor: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }} title="삭제">
+                  <Trash2 size={14} color="#ef4444" />
+                </button>
+              </div>
+            ))}
+          {detail.schedule.length === 0 && (
+            <div style={{ padding: '32px', textAlign: 'center', backgroundColor: 'rgba(99,102,241,0.04)', borderRadius: '12px', border: '1px dashed rgba(99,102,241,0.25)', color: '#787774', fontSize: '13px' }}>
+              일정이 없습니다. &quot;일정 추가&quot; 버튼을 눌러 여행 일정을 추가하세요.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── 사진 (Photos) Section ── */}
+      <TripPhotosSection detail={detail} onAdd={addPhoto} onUpdate={updatePhoto} onRemove={removePhoto} inputBase={inputBase} />
       {/* ── Gourmet & Diet Section ── */}
       <GourmetSection />
+
+      {/* ── 하단 2단 그리드: 가계부 | 회고록 ── */}
+      <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+        <div
+          className="grid grid-cols-1 lg:grid-cols-2 gap-8"
+          style={{ alignItems: 'start' }}
+        >
+          {/* 좌측: 여행 가계부 */}
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 16, border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 2px 8px rgba(0,0,0,0.03)', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+            <ExpenseLedger expenses={expenses} categories={expenseCategories} onAdd={addExpense} onUpdate={updateExpense} onRemove={removeExpense} onOpenSettings={() => setTravelSettingsOpen(true)} inputBase={inputBase} isCompact />
+          </div>
+          {/* 우측: 여행 회고록 */}
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 16, border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 2px 8px rgba(0,0,0,0.03)', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+            <TripRetrospective review={review} templates={retrospectiveTemplates} onSave={saveReview} onOpenSettings={() => setTravelSettingsOpen(true)} inputBase={inputBase} isCompact />
+          </div>
+        </div>
+      </div>
+    </div>
+
+      <TravelSettingsEditModal
+        open={travelSettingsOpen}
+        onClose={() => setTravelSettingsOpen(false)}
+        expenseCategories={expenseCategories}
+        retrospectiveTemplates={retrospectiveTemplates}
+        onSaveExpenseCategories={(c) => { setExpenseCategories(c); saveExpenseCategories(c) }}
+        onSaveRetrospectiveTemplates={(t) => { setRetrospectiveTemplates(t); saveRetrospectiveTemplates(t) }}
+        inputBase={inputBase}
+      />
     </div>
   )
 }
@@ -4192,6 +7934,7 @@ export default function App() {
 
   // ── 페이지 라우팅 ──
   const [activePage, setActivePage] = useState<PageId>('dashboard')
+  const [calendarRefreshKey, setCalendarRefreshKey] = useState(0)
   const isMobile = useIsMobile()
 
   // ── 스탯 상태 ──
@@ -4213,15 +7956,21 @@ export default function App() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [editingProjectName, setEditingProjectName] = useState('')
 
+  // ── Identity (정체성) ──
+  const [identities, setIdentities] = useState<IdentityRow[]>([])
+
   // ── 사용자 정의 퀘스트 (빈 배열로 시작 — Supabase에서 로드) ──
   const [userQuests,       setUserQuests]       = useState<Card[]>([])
   const [newQuestTitle,    setNewQuestTitle]    = useState('')
   const [newQuestCat,      setNewQuestCat]      = useState<CatId>('writing')
   const [newQuestAreaId,   setNewQuestAreaId]   = useState<string>('')
   const [newQuestProjectId,setNewQuestProjectId] = useState<string>('')
+  const [newQuestIdentityId, setNewQuestIdentityId] = useState<string>('')
+  const [newQuestTags, setNewQuestTags] = useState<string[]>([])
   const [addingQuest,      setAddingQuest]      = useState(false)
-  const pomodoroStartRef       = useRef<number | null>(null)
-  const focusQuestProjectIdRef = useRef<string | null>(null)
+  const pomodoroStartRef         = useRef<number | null>(null)
+  const pomodoroSessionProcessedRef = useRef(false) // 동일 세션 daily_logs 중복 누적 방지
+  const focusQuestProjectIdRef   = useRef<string | null>(null)
   const focusQuestAreaIdRef    = useRef<string | null>(null)
   const [focusQuestId, setFocusQuestId] = useState<string | null>(null)
 
@@ -4235,6 +7984,9 @@ export default function App() {
   const [toastMsg,     setToastMsg]     = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ── Undo/Redo ──
+  const { pushUndo } = useUndoRedo()
+
   // ── Supabase 동기화 상태 ──
   type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
@@ -4244,9 +7996,15 @@ export default function App() {
   const [timerSec,     setTimerSec]     = useState(25 * 60)
   const [timerRunning, setTimerRunning] = useState(false)
   const [timerDone,    setTimerDone]    = useState(false)
-  const [dailyLog,     setDailyLog]     = useState<{ total_pomodoros: number; total_time_sec: number } | null>(null)
+  const [isOvertime,   setIsOvertime]   = useState(false)
+  const [overtimeSec,  setOvertimeSec]  = useState(0)
+  const [dailyLog,     setDailyLog]     = useState<{ total_pomodoros: number; total_time_sec: number; time_score_applied?: number } | null>(null)
+  const [levelRewards, setLevelRewards] = useState<{ id: string; target_level: number; reward_text: string; is_claimed: boolean }[]>([])
+  const [newRewardLevel, setNewRewardLevel] = useState('')
+  const [newRewardText, setNewRewardText] = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerSecRef = useRef(timerSec)
+  const isOvertimeRef = useRef(false)
 
   // ── 초기 로드 (localStorage) ──
   // ── Auth 세션 초기화 ──
@@ -4278,7 +8036,10 @@ export default function App() {
       // ① user_stats 테이블에서 레벨·경험치·스탯 가져오기
       fetchUserStats().then(row => {
         if (!row) return
-        const xp: XpState = { level: row.level, currentXp: row.current_xp, requiredXp: row.required_xp }
+        const totalXp = (row as { total_xp?: number }).total_xp != null
+          ? (row as { total_xp: number }).total_xp
+          : cumulativeXpToReachLevel(row.level) + row.current_xp
+        const xp: XpState = { totalXp }
         localStorage.setItem(XP_KEY, JSON.stringify(xp))
         setXpState(xp)
         if (row.stats_json && Object.keys(row.stats_json).length) {
@@ -4311,7 +8072,11 @@ export default function App() {
           name:        r.title,
           sub:         r.category,
           emoji:       CAT_OPTS.find(c => c.id === r.category)?.emoji ?? '✅',
-          projectId:   r.project_id != null ? String(r.project_id) : null, // bigint→string
+          projectId:   r.project_id != null ? String(r.project_id) : null,
+          identityId:  r.identity_id ?? null,
+          status:      r.status ?? 'someday',
+          tags:        r.tags ?? [],
+          sortOrder:   r.sort_order ?? 0,
           priority:    r.priority,
           deadline:    r.deadline,
           timeSpentSec: r.time_spent_sec,
@@ -4329,15 +8094,21 @@ export default function App() {
       // ⑤-b 프로젝트 목록 로드
       fetchProjects().then(rows => setProjects(rows)),
 
+      // ⑤-b2 Identity 목록 로드
+      fetchIdentities().then(rows => setIdentities(rows)),
+
       // ⑤-c 오늘 daily_logs 로드
       fetchDailyLog(new Date().toISOString().split('T')[0]).then(row => {
-        if (row) setDailyLog({ total_pomodoros: row.total_pomodoros, total_time_sec: row.total_time_sec })
+        if (row) setDailyLog({ total_pomodoros: row.total_pomodoros, total_time_sec: row.total_time_sec, time_score_applied: row.time_score_applied })
         else setDailyLog({ total_pomodoros: 0, total_time_sec: 0 })
       }).catch(() => setDailyLog({ total_pomodoros: 0, total_time_sec: 0 })),
 
+      // ⑤-d 레벨 보상함 로드
+      fetchLevelRewards().then(rows => setLevelRewards(rows)),
+
       // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
       kvGetAll().then(all => {
-        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, GOURMET_KEY]
+        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY]
         passThrough.forEach(k => { if (all[k]) localStorage.setItem(k, JSON.stringify(all[k])) })
       }),
     ])
@@ -4359,9 +8130,13 @@ export default function App() {
         localStorage.setItem(key, JSON.stringify(c))
         setCompletedQuests(c)
       } else if (key === XP_KEY) {
-        const x = value as XpState
-        localStorage.setItem(key, JSON.stringify(x))
-        setXpState(x)
+        const x = value as Record<string, unknown>
+        let totalXp = 0
+        if (typeof x.totalXp === 'number') totalXp = x.totalXp
+        else if (typeof x.level === 'number' && typeof x.currentXp === 'number') totalXp = cumulativeXpToReachLevel(x.level) + x.currentXp
+        const xp: XpState = { totalXp }
+        localStorage.setItem(key, JSON.stringify(xp))
+        setXpState(xp)
       } else {
         // Journal, Worlds, Saju, Calendar, Travel, Gourmet
         localStorage.setItem(key, JSON.stringify(value))
@@ -4380,9 +8155,10 @@ export default function App() {
 
     // 이전 퀘스트로 전환 시, 현재 남은 시간 저장
     const sec = timerSecRef.current
-    if (prevId && prevId !== focusQuestId && sec > 0 && !timerDone) {
-      updateQuestRemainingTime(prevId, sec)
-      setUserQuests(prev => prev.map(q => q.id === prevId ? { ...q, remainingTimeSec: sec } : q))
+    if (prevId && prevId !== focusQuestId && !timerDone) {
+      const toSave = isOvertimeRef.current ? 0 : sec
+      updateQuestRemainingTime(prevId, toSave)
+      setUserQuests(prev => prev.map(q => q.id === prevId ? { ...q, remainingTimeSec: toSave } : q))
     }
 
     if (!focusQuestId) {
@@ -4405,6 +8181,9 @@ export default function App() {
     setTimerTotal(loadSec)
     setTimerSec(loadSec)
     setTimerDone(false)
+    setIsOvertime(false)
+    setOvertimeSec(0)
+    isOvertimeRef.current = false
   }, [focusQuestId, userQuests, projects])
 
   // ── Toast 트리거 ──
@@ -4414,37 +8193,99 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToastVisible(false), 2200)
   }
 
-  // ── XP 획득 ──
-  function gainXp(amount: number) {
+  // ── 시간 점수 → total_xp 동기화 (Delta만 가산) ──
+  async function syncTimeScoreToXp(recordDate: string) {
+    const row = await fetchDailyLog(recordDate)
+    if (!row) return
+    const newScore = calculateTimeScore(Math.floor(row.total_time_sec / 60))
+    const oldScore = row.time_score_applied ?? 0
+    const delta = newScore - oldScore
+    if (delta === 0) return
     setXpState(prev => {
-      let { level, currentXp, requiredXp } = prev
-      currentXp += amount
-      let didLevelUp = false
-      while (currentXp >= requiredXp) {
-        currentXp -= requiredXp
-        level++
-        requiredXp = getRequiredXp(level)
-        didLevelUp = true
-      }
-      const next: XpState = { level, currentXp, requiredXp }
+      const next = { totalXp: Math.max(0, prev.totalXp + delta) }
+      saveXp(next)
+      return next
+    })
+    await updateDailyLogTimeScore(recordDate, newScore)
+  }
+
+  // ── XP 가감 (토글: 체크 시 +, 해제 시 -) — totalXp 기반 절대 계산 ──
+  function adjustXp(delta: number) {
+    if (delta === 0) return
+    setXpState(prev => {
+      const newTotalXp = Math.max(0, prev.totalXp + delta)
+      const { currentLevel } = calculateLevel(newTotalXp)
+      const prevLevel = calculateLevel(prev.totalXp).currentLevel
+      const didLevelUp = currentLevel > prevLevel
+      const next: XpState = { totalXp: newTotalXp }
       saveXp(next)
       if (didLevelUp) {
-        setTimeout(() => { setLevelUpNewLv(level); setLevelUpAnim(true) }, 0)
+        setTimeout(() => { setLevelUpNewLv(currentLevel); setLevelUpAnim(true) }, 0)
       }
       return next
     })
   }
 
-  // ── 퀘스트 완료 토글 ──
+  // ── XP 수동 편집 (Override): 총 누적 XP 직접 수정 ──
+  function handleEditTotalXp(newTotalXp: number) {
+    const next: XpState = { totalXp: Math.max(0, newTotalXp) }
+    setXpState(next)
+    saveXp(next)
+  }
+
+  // ── XP 수동 편집 (Override): 현재 레벨 경험치 수정 → baseXpForCurrentLevel + 입력값으로 total_xp 역산 ──
+  function handleEditCurrentLevelXp(newCurrentLevelXp: number) {
+    const calc = calculateLevel(xpState.totalXp)
+    const newTotalXp = Math.max(0, calc.baseXpForCurrentLevel + newCurrentLevelXp)
+    const next: XpState = { totalXp: newTotalXp }
+    setXpState(next)
+    saveXp(next)
+  }
+
+  // ── Undo 스택에 퀘스트 변경 액션 푸시 ──
+  const pushQuestNameUndo = useCallback((id: string, oldName: string, newName: string) => {
+    pushUndo({
+      actionType: 'UPDATE', id, table: 'quests', field: 'title', oldValue: oldName, newValue: newName,
+      executeReverse: async () => {
+        await updateQuestTitle(id, oldName)
+        setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: oldName } : q))
+        setNoteTarget(prev => prev?.id === id && prev?.table === 'quests' ? { ...prev, title: oldName } : prev ?? null)
+      },
+      executeForward: async () => {
+        await updateQuestTitle(id, newName)
+        setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: newName } : q))
+        setNoteTarget(prev => prev?.id === id && prev?.table === 'quests' ? { ...prev, title: newName } : prev ?? null)
+      },
+    })
+  }, [pushUndo])
+
+  const pushQuestDeadlineUndo = useCallback((id: string, oldVal: string | null, newVal: string | null) => {
+    pushUndo({
+      actionType: 'UPDATE', id, table: 'quests', field: 'deadline', oldValue: oldVal, newValue: newVal,
+      executeReverse: async () => {
+        await updateQuestDeadline(id, oldVal)
+        setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: oldVal ?? undefined } : q))
+      },
+      executeForward: async () => {
+        await updateQuestDeadline(id, newVal)
+        setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: newVal ?? undefined } : q))
+      },
+    })
+  }, [pushUndo])
+
+  // ── 퀘스트 완료 토글 (체크 ON: +XP, 체크 OFF: -XP) ──
   function toggleComplete(id: string) {
     setCompletedQuests(prev => {
       const isDone = prev.includes(id)
       const next = isDone ? prev.filter(x => x !== id) : [...prev, id]
       localStorage.setItem(COMPLETED_KEY, JSON.stringify(next))
       kvSet(COMPLETED_KEY, next)
-      if (!isDone) {
+      if (isDone) {
+        fireToast('체크 해제 — -20 XP')
+        adjustXp(-XP_PER_QUEST)
+      } else {
         fireToast('Quest Clear! ✓  +20 XP')
-        gainXp(XP_PER_QUEST)
+        adjustXp(XP_PER_QUEST)
       }
       return next
     })
@@ -4467,6 +8308,34 @@ export default function App() {
     setEditingAreaId(null)
   }
 
+  function moveAreaUp(id: string) {
+    const idx = areas.findIndex(a => a.id === id)
+    if (idx <= 0) return
+    const prev = areas[idx - 1]
+    const curr = areas[idx]
+    updateAreaSortOrder(prev.id, idx)
+    updateAreaSortOrder(curr.id, idx - 1)
+    setAreas(prevAreas => {
+      const next = [...prevAreas]
+      next[idx - 1] = curr
+      next[idx] = prev
+      return next
+    })
+  }
+  function moveAreaDown(id: string) {
+    const idx = areas.findIndex(a => a.id === id)
+    if (idx < 0 || idx >= areas.length - 1) return
+    const curr = areas[idx]
+    const nextItem = areas[idx + 1]
+    updateAreaSortOrder(curr.id, idx + 1)
+    updateAreaSortOrder(nextItem.id, idx)
+    setAreas(prevAreas => {
+      const next = [...prevAreas]
+      next[idx] = nextItem
+      next[idx + 1] = curr
+      return next
+    })
+  }
   async function removeArea(id: string) {
     await deleteArea(id)
     setAreas(prev => prev.filter(a => a.id !== id))
@@ -4479,7 +8348,7 @@ export default function App() {
   async function addProject() {
     const name = newProjectName.trim()
     if (!name) return
-    if (!newProjectAreaId) { fireToast('Area를 먼저 선택해주세요!'); return }
+    if (!newProjectAreaId) { fireToast('Vision Area를 먼저 선택해주세요!'); return }
     const areaId = newProjectAreaId  // 반드시 string — DB는 string→bigint 자동 변환
     const row = await insertProject(name, areaId)
     if (row) {
@@ -4499,6 +8368,34 @@ export default function App() {
     setEditingProjectId(null)
   }
 
+  function moveProjectUp(id: string) {
+    const idx = projects.findIndex(p => p.id === id)
+    if (idx <= 0) return
+    const prev = projects[idx - 1]
+    const curr = projects[idx]
+    updateProjectSortOrder(prev.id, idx)
+    updateProjectSortOrder(curr.id, idx - 1)
+    setProjects(prevProj => {
+      const next = [...prevProj]
+      next[idx - 1] = curr
+      next[idx] = prev
+      return next
+    })
+  }
+  function moveProjectDown(id: string) {
+    const idx = projects.findIndex(p => p.id === id)
+    if (idx < 0 || idx >= projects.length - 1) return
+    const curr = projects[idx]
+    const nextItem = projects[idx + 1]
+    updateProjectSortOrder(curr.id, idx + 1)
+    updateProjectSortOrder(nextItem.id, idx)
+    setProjects(prevProj => {
+      const next = [...prevProj]
+      next[idx] = nextItem
+      next[idx + 1] = curr
+      return next
+    })
+  }
   async function removeProject(id: string) {
     await deleteProject(id)
     setProjects(prev => prev.filter(p => p.id !== id))
@@ -4550,12 +8447,14 @@ export default function App() {
   async function addUserQuest() {
     const title = newQuestTitle.trim()
     if (!title || !_sbClient) return
-    if (!newQuestAreaId) { fireToast('Area를 먼저 선택해주세요!'); return }
-    if (!newQuestProjectId) { fireToast('Project를 먼저 선택해주세요!'); return }
+    if (!newQuestAreaId) { fireToast('Vision Area를 먼저 선택해주세요!'); return }
+    if (!newQuestProjectId) { fireToast('Real Projects를 먼저 선택해주세요!'); return }
     setAddingQuest(true)
     const projectId = newQuestProjectId  // 반드시 string
     const payload: Record<string, unknown> = { title, category: newQuestCat, is_completed: false }
     if (projectId) payload.project_id = projectId
+    if (newQuestIdentityId) payload.identity_id = newQuestIdentityId
+    if (newQuestTags.length) payload.tags = newQuestTags
     const { data, error } = await _sbClient
       .from('quests')
       .insert(payload)
@@ -4565,10 +8464,12 @@ export default function App() {
       fireToast(`퀘스트 추가 실패: ${error.message}`)
     } else if (data) {
       const catOpt = CAT_OPTS.find(c => c.id === newQuestCat) ?? CAT_OPTS[0]
-      const newCard: Card = { id: String(data.id), name: title, sub: newQuestCat, emoji: catOpt.emoji, projectId: String(projectId), pomodoroCount: 0 }
+      const newCard: Card = { id: String(data.id), name: title, sub: newQuestCat, emoji: catOpt.emoji, projectId: String(projectId), identityId: newQuestIdentityId || null, tags: [...newQuestTags], pomodoroCount: 0 }
       setUserQuests(prev => [...prev, newCard])
       setNewQuestTitle('')
       setNewQuestProjectId('')
+      setNewQuestIdentityId('')
+      setNewQuestTags([])
     }
     setAddingQuest(false)
   }
@@ -4588,6 +8489,8 @@ export default function App() {
       fetchUserCreatedQuests().then(rows => {
         setUserQuests(rows.map(r => ({
           id: String(r.id), name: r.title, sub: r.category, emoji: CAT_OPTS.find(c=>c.id===r.category)?.emoji??'✅',
+          projectId: r.project_id ?? null, identityId: r.identity_id ?? null,
+          status: r.status ?? 'someday', tags: r.tags ?? [],
           priority: r.priority, deadline: r.deadline, timeSpentSec: r.time_spent_sec,
         })))
       })
@@ -4610,40 +8513,29 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [isZenMode])
 
-  // 타이머 엔진
+  // 타이머 엔진: 0초 도달 시 overtime 모드로 전환(자동 완료 X), overtime 시 카운트업
   useEffect(() => {
     if (timerRunning) {
       intervalRef.current = setInterval(() => {
-        setTimerSec(s => {
-          if (s <= 1) {
-            clearInterval(intervalRef.current!)
-            setTimerRunning(false)
-            setTimerDone(true)
-            const today = new Date().toISOString().split('T')[0]
-            _flushPomodoroTime().then(async elapsed => {
-              if (elapsed > 0) {
-                await upsertDailyLog(today, 1, elapsed)
-                fetchDailyLog(today).then(row => {
-                  if (row) setDailyLog({ total_pomodoros: row.total_pomodoros, total_time_sec: row.total_time_sec })
-                })
-              }
-            })
-            if (focusQuestId) {
-              updateQuestRemainingTime(focusQuestId, 0)
-              incrementQuestPomodoroCount(focusQuestId)
-              setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: 0, pomodoroCount: (q.pomodoroCount ?? 0) + 1 } : q))
+        if (isOvertimeRef.current) {
+          setOvertimeSec(prev => prev + 1)
+        } else {
+          setTimerSec(s => {
+            if (s <= 1) {
+              isOvertimeRef.current = true
+              setIsOvertime(true)
+              setOvertimeSec(0)
+              return 0
             }
-            recordFocusSession(Math.round(timerTotal / 60))
-            return 0
-          }
-          return s - 1
-        })
+            return s - 1
+          })
+        }
       }, 1000)
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [timerRunning, timerTotal, focusQuestId])
+  }, [timerRunning])
 
   // ── 타이머 시간 조절 (분/초 단위, 준비됨 상태에서만) ─────────────────────
   function adjustTime(deltaSec: number) {
@@ -4660,12 +8552,14 @@ export default function App() {
   function handlePlayPause() {
     if (timerDone) return
     if (!timerRunning) {
+      pomodoroSessionProcessedRef.current = false
       pomodoroStartRef.current = Date.now()
     } else {
-      // 일시정지: 남은 시간 저장 (Resume용), time_spent_sec 누적은 하지 않음
-      if (focusQuestId && timerSec > 0) {
-        updateQuestRemainingTime(focusQuestId, timerSec)
-        setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: timerSec } : q))
+      // 일시정지: 남은 시간 저장 (Resume용), 도장 X
+      if (focusQuestId && !timerDone) {
+        const toSave = isOvertime ? 0 : timerSec
+        updateQuestRemainingTime(focusQuestId, toSave)
+        setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: toSave } : q))
       }
     }
     setTimerRunning(r => !r)
@@ -4675,58 +8569,86 @@ export default function App() {
     setTimerRunning(false)
     setTimerSec(timerTotal)
     setTimerDone(false)
+    setIsOvertime(false)
+    setOvertimeSec(0)
+    isOvertimeRef.current = false
+    pomodoroSessionProcessedRef.current = false
   }
 
-  /** 모달 닫기: 남은 시간 저장 후 닫기 (time_spent_sec 누적 X) */
+  /** 모달 닫기: 남은 시간 저장 후 닫기 (도장 X, time_spent 누적 X) */
   function handleCloseModal() {
-    if (focusQuestId && timerSec > 0 && !timerDone) {
-      updateQuestRemainingTime(focusQuestId, timerSec)
-      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: timerSec } : q))
+    if (focusQuestId && !timerDone) {
+      const toSave = isOvertime ? 0 : timerSec
+      updateQuestRemainingTime(focusQuestId, toSave)
+      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: toSave } : q))
     }
     setFocusOpen(false)
     handleReset()
   }
 
-  async function handleEarlyFinish() {
+  /** 완료 버튼 클릭 시에만 실행: 시간 누적 + 도장 +1 (overtime 포함 정확 합산) */
+  async function handleComplete() {
     if (intervalRef.current) clearInterval(intervalRef.current)
     setTimerRunning(false)
     setTimerDone(true)
-    const elapsed = await _flushPomodoroTime()
-    if (elapsed > 0) {
-      const today = new Date().toISOString().split('T')[0]
-      await upsertDailyLog(today, 0, elapsed)
+    if (pomodoroSessionProcessedRef.current) return
+    pomodoroSessionProcessedRef.current = true
+    const elapsed = isOvertime ? timerTotal + overtimeSec : timerTotal - timerSec
+    const elapsedClamped = Math.max(0, elapsed)
+    const today = new Date().toISOString().split('T')[0]
+    const flushed = await _flushPomodoroTime(elapsedClamped)
+    if (flushed > 0) {
+      await upsertDailyLog(today, 1, flushed)
       const row = await fetchDailyLog(today)
-      if (row) setDailyLog({ total_pomodoros: row.total_pomodoros, total_time_sec: row.total_time_sec })
+      if (row) {
+        setDailyLog({ total_pomodoros: row.total_pomodoros, total_time_sec: row.total_time_sec, time_score_applied: row.time_score_applied })
+        await syncTimeScoreToXp(today)
+      }
     }
     if (focusQuestId) {
       await updateQuestRemainingTime(focusQuestId, 0)
-      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: 0 } : q))
+      incrementQuestPomodoroCount(focusQuestId)
+      const focusQuest = userQuests.find(q => q.id === focusQuestId)
+      if (focusQuest?.identityId && elapsedClamped > 0) {
+        const xpGain = Math.max(1, Math.floor(elapsedClamped / 60))
+        await addIdentityTimeAndXp(focusQuest.identityId, elapsedClamped, xpGain)
+      }
+      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: 0, pomodoroCount: (q.pomodoroCount ?? 0) + 1 } : q))
     }
     recordFocusSession(Math.round(timerTotal / 60))
+    setIsOvertime(false)
+    setOvertimeSec(0)
+    isOvertimeRef.current = false
   }
 
   function handleExtend() {
     const extendSec = 300
+    pomodoroSessionProcessedRef.current = false
     pomodoroStartRef.current = Date.now()
     setTimerDone(false)
+    setIsOvertime(false)
+    setOvertimeSec(0)
+    isOvertimeRef.current = false
     setTimerTotal(extendSec)
     setTimerSec(extendSec)
     setTimerRunning(true)
   }
 
   function enterZen() {
-    if (focusQuestId && timerSec > 0 && !timerDone) {
-      updateQuestRemainingTime(focusQuestId, timerSec)
-      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: timerSec } : q))
+    if (focusQuestId && !timerDone) {
+      const toSave = isOvertime ? 0 : timerSec
+      updateQuestRemainingTime(focusQuestId, toSave)
+      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: toSave } : q))
     }
     setIsZenMode(true)
     setFocusOpen(false)
   }
 
   function exitZen() {
-    if (focusQuestId && timerSec > 0 && !timerDone) {
-      updateQuestRemainingTime(focusQuestId, timerSec)
-      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: timerSec } : q))
+    if (focusQuestId && !timerDone) {
+      const toSave = isOvertime ? 0 : timerSec
+      updateQuestRemainingTime(focusQuestId, toSave)
+      setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: toSave } : q))
     }
     setIsZenMode(false)
     setTimerRunning(false)
@@ -4774,6 +8696,10 @@ export default function App() {
         from { transform: rotate(0deg); }
         to   { transform: rotate(360deg); }
       }
+      @keyframes fadeIn {
+        0%   { opacity: 0; }
+        100% { opacity: 1; }
+      }
     `}</style>
     <div style={{ backgroundColor: '#F4F4F2', minHeight: '100vh', color: '#37352F', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
 
@@ -4798,6 +8724,30 @@ export default function App() {
               setNoteTarget(prev => prev ? { ...prev, meta: { ...prev.meta, pomodoroCount: newCount } } : null)
             }
           }}
+          onUpdateTimeSpent={async (id, table, sec) => {
+            if (table === 'areas') {
+              await setAreaTimeSpent(id, sec)
+              setAreas(prev => prev.map(a => a.id === id ? { ...a, time_spent_sec: sec } : a))
+            } else if (table === 'projects') {
+              await setProjectTimeSpent(id, sec)
+              setProjects(prev => prev.map(p => p.id === id ? { ...p, time_spent_sec: sec } : p))
+            } else if (table === 'quests') {
+              await setQuestTimeSpent(id, sec)
+              setUserQuests(prev => prev.map(q => q.id === id ? { ...q, timeSpentSec: sec } : q))
+            }
+            if (noteTarget?.table === table && noteTarget.id === id) {
+              setNoteTarget(prev => prev ? { ...prev, meta: { ...prev.meta, timeSpentSec: sec } } : null)
+            }
+          }}
+          onUpdateQuestTitle={noteTarget?.table === 'quests' ? async (id, newTitle) => {
+            const oldTitle = userQuests.find(q => q.id === id)?.name ?? noteTarget?.title ?? ''
+            const { success } = await updateQuestTitle(id, newTitle)
+            if (success) {
+              setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: newTitle } : q))
+              setNoteTarget(prev => prev ? { ...prev, title: newTitle } : null)
+              pushQuestNameUndo(id, oldTitle, newTitle)
+            }
+          } : undefined}
         />
       )}
 
@@ -4805,9 +8755,10 @@ export default function App() {
         <ZenView
           seconds={timerSec} totalSec={timerTotal}
           running={timerRunning} finished={timerDone}
+          isOvertime={isOvertime} overtimeSec={overtimeSec}
           focusQuestName={userQuests.find(q => q.id === focusQuestId)?.name ?? null}
           onPlayPause={handlePlayPause} onStop={exitZen}
-          onEarlyFinish={handleEarlyFinish}
+          onComplete={handleComplete}
           onExtend={handleExtend}
         />
       )}
@@ -4817,6 +8768,7 @@ export default function App() {
         <PomodoroModal
           seconds={timerSec} totalSec={timerTotal}
           running={timerRunning} finished={timerDone}
+          isOvertime={isOvertime} overtimeSec={overtimeSec}
           quests={userQuests}
           areas={areas}
           projects={projects}
@@ -4828,7 +8780,7 @@ export default function App() {
           onSetDefault={setTo25Min}
           onClose={handleCloseModal}
           onEnterZen={enterZen}
-          onEarlyFinish={handleEarlyFinish}
+          onComplete={handleComplete}
           onExtend={handleExtend}
         />
       )}
@@ -4870,12 +8822,14 @@ export default function App() {
           {/* 페이지 탭 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
             {([
+              { id: 'identity',  label: 'Identity',  emoji: '🎭' },
               { id: 'dashboard', label: 'Dashboard', emoji: '⚡' },
               { id: 'library',   label: 'Library',   emoji: '📚' },
               { id: 'worlds',    label: 'Worlds',    emoji: '🌐' },
               { id: 'journal',   label: 'Journal',   emoji: '📓' },
               { id: 'calendar',  label: 'Calendar',  emoji: '📅' },
               { id: 'travel',    label: 'Travel',    emoji: '✈️' },
+              { id: 'fortune',   label: 'Fortune',   emoji: '🔮' },
             ] as const).map(p => (
               <button key={p.id} onClick={() => setActivePage(p.id)} style={{
                 display: 'flex', alignItems: 'center', gap: '6px',
@@ -4917,11 +8871,15 @@ export default function App() {
       {/* ════════════════ BODY ════════════════ */}
       <div style={{ paddingBottom: isMobile ? '70px' : 0 }}>
       {activePage === 'calendar' && (
-        <JournalCalendarPage
+        <UnifiedCalendar
+          userQuests={userQuests}
           onOpenNote={(id, title) => setNoteTarget({ table: 'journals', id, title })}
+          refreshTrigger={calendarRefreshKey}
         />
       )}
+      {activePage === 'identity' && <IdentityPage identities={identities} onRefresh={() => fetchIdentities().then(rows => setIdentities(rows))} />}
       {activePage === 'travel'   && <TravelPage />}
+      {activePage === 'fortune'  && <FortunePage onReadingSaved={() => setCalendarRefreshKey(k => k + 1)} />}
       {activePage === 'worlds' && <WorldsPage />}
       {activePage === 'library' && (
         <LibraryPage
@@ -5024,8 +8982,20 @@ export default function App() {
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
-                <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#7C3AED' }}>{fmtDailyTime(dailyLog?.total_time_sec)}</p>
-                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#9B9A97' }}>누적 집중</p>
+                <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#7C3AED', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  <EditableTimeMinutes
+                    totalSec={dailyLog?.total_time_sec ?? 0}
+                    displayOverride={dailyLog ? fmtDailyTime(dailyLog.total_time_sec) : '0분'}
+                    onSave={async sec => {
+                      const today = new Date().toISOString().split('T')[0]
+                      const res = await setDailyLogTime(today, sec)
+                      const pom = res?.total_pomodoros ?? dailyLog?.total_pomodoros ?? 0
+                      setDailyLog(prev => prev ? { ...prev, total_time_sec: sec } : { total_pomodoros: pom, total_time_sec: sec })
+                      syncTimeScoreToXp(today)
+                    }}
+                  />
+                </p>
+                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#9B9A97' }}>누적 집중 (분 단위 수정)</p>
               </div>
             </div>
           </div>
@@ -5038,11 +9008,107 @@ export default function App() {
           ))}
         </div>
 
+        {/* ── 스스로에게 줄 보상함 (Level Rewards) ── */}
+        <div style={{
+          backgroundColor: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)',
+          borderRadius: '16px', padding: '20px 24px', marginBottom: '20px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <Gift size={20} color="#7C3AED" />
+            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>스스로에게 줄 보상함</h3>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <input
+              type="number"
+              placeholder="목표 레벨"
+              value={newRewardLevel}
+              onChange={e => setNewRewardLevel(e.target.value)}
+              min={1}
+              max={MAX_LEVEL}
+              style={{ width: '100px', padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '13px' }}
+            />
+            <input
+              type="text"
+              placeholder="보상 내용"
+              value={newRewardText}
+              onChange={e => setNewRewardText(e.target.value)}
+              style={{ flex: 1, minWidth: '140px', padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '13px' }}
+            />
+            <button
+              onClick={async () => {
+                const lv = parseInt(newRewardLevel, 10)
+                if (!newRewardText.trim() || Number.isNaN(lv) || lv < 1 || lv > MAX_LEVEL) return
+                const row = await insertLevelReward(lv, newRewardText.trim())
+                if (row) {
+                  setLevelRewards(prev => [...prev, row])
+                  setNewRewardLevel('')
+                  setNewRewardText('')
+                }
+              }}
+              style={{
+                padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#7C3AED', color: '#fff',
+                fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >추가</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {levelRewards.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4', fontStyle: 'italic' }}>아직 보상이 없습니다. 목표 레벨과 보상을 추가해 보세요!</p>
+            ) : (
+              levelRewards.map(r => {
+                const currentLevel = calculateLevel(xpState.totalXp).currentLevel
+                const canClaim = currentLevel >= r.target_level && !r.is_claimed
+                return (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px',
+                      borderRadius: '10px', backgroundColor: r.is_claimed ? 'rgba(52,211,153,0.08)' : canClaim ? 'rgba(124,58,237,0.06)' : '#F4F4F2',
+                      border: `1px solid ${r.is_claimed ? 'rgba(52,211,153,0.3)' : canClaim ? 'rgba(124,58,237,0.2)' : 'rgba(0,0,0,0.04)'}`,
+                    }}
+                  >
+                    {canClaim ? (
+                      <button
+                        onClick={async () => {
+                          await claimLevelReward(r.id)
+                          setLevelRewards(prev => prev.map(x => x.id === r.id ? { ...x, is_claimed: true } : x))
+                        }}
+                        style={{
+                          width: '24px', height: '24px', padding: 0, borderRadius: '6px', border: '1px solid rgba(99,102,241,0.4)',
+                          backgroundColor: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                        title="Claim"
+                      >
+                        <CheckCircle2 size={16} color="#6366f1" />
+                      </button>
+                    ) : currentLevel < r.target_level ? (
+                      <span style={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#AEAAA4' }} title={`Lv.${r.target_level} 도달 시`}>
+                        <Lock size={16} />
+                      </span>
+                    ) : (
+                      <span style={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399' }}>
+                        <CheckCircle2 size={18} strokeWidth={2.5} />
+                      </span>
+                    )}
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#6366f1', minWidth: '52px' }}>Lv.{r.target_level}</span>
+                    <span style={{ flex: 1, fontSize: '13px', color: r.is_claimed ? '#787774' : '#37352F', textDecoration: r.is_claimed ? 'line-through' : 'none' }}>{r.reward_text}</span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+
         {/* XP 게이지 바 */}
         <XpBar
-          level={xpState.level} currentXp={xpState.currentXp} requiredXp={xpState.requiredXp}
+          currentLevelXp={calculateLevel(xpState.totalXp).currentLevelXp}
+          maxCurrentLevelXp={calculateLevel(xpState.totalXp).maxCurrentLevelXp}
+          totalXp={xpState.totalXp}
           doneCount={completedQuests.filter(id => userQuests.some(q => q.id === id)).length}
           totalCount={userQuests.length}
+          onEditCurrentLevelXp={handleEditCurrentLevelXp}
+          onEditTotalXp={handleEditTotalXp}
         />
 
         {/* 갑술(甲戌) 오늘의 기운 */}
@@ -5075,7 +9141,7 @@ export default function App() {
             </div>
 
             {areas.length === 0 ? (
-              <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 Area 없음</p>
+              <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 Vision Area 없음</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
                 {areas.map(a => (
@@ -5102,6 +9168,10 @@ export default function App() {
                             <span style={{ fontSize:'10px', color:'#0369A1', fontWeight:600 }}>⏱ {fmtHM(a.time_spent_sec)}</span>
                           )}
                         </div>
+                        <div style={{ display:'flex', alignItems:'center', gap:'2px' }}>
+                          <button onClick={()=>moveAreaUp(a.id)} disabled={areas.indexOf(a)===0} style={{ padding:'2px 4px', border:'none', backgroundColor:'transparent', color:'#9B9A97', cursor:areas.indexOf(a)===0?'default':'pointer', opacity:areas.indexOf(a)===0?0.4:1 }} title="위로"><ChevronUp size={14} /></button>
+                          <button onClick={()=>moveAreaDown(a.id)} disabled={areas.indexOf(a)===areas.length-1} style={{ padding:'2px 4px', border:'none', backgroundColor:'transparent', color:'#9B9A97', cursor:areas.indexOf(a)===areas.length-1?'default':'pointer', opacity:areas.indexOf(a)===areas.length-1?0.4:1 }} title="아래로"><ChevronDown size={14} /></button>
+                        </div>
                         <button onClick={()=>{ setEditingAreaId(a.id); setEditingAreaName(a.name) }}
                           style={{ padding:'2px 6px', borderRadius:'5px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'transparent', color:'#787774', fontSize:'10px', cursor:'pointer' }} title="수정">✏️</button>
                         <button onClick={()=>removeArea(a.id)}
@@ -5119,7 +9189,7 @@ export default function App() {
             <div style={{ display: 'flex', gap: '6px' }}>
               <input value={newAreaName} onChange={e=>setNewAreaName(e.target.value)}
                 onKeyDown={e=>{ if(e.key==='Enter') addArea() }}
-                placeholder="새 Area 이름"
+                placeholder="새 Vision Area 이름"
                 style={{ flex:1, padding:'7px 10px', borderRadius:'7px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'#F1F1EF', color:'#37352F', fontSize:'12px', outline:'none' }}
                 onFocus={e=>(e.target.style.borderColor='#0369A1')}
                 onBlur={e=>(e.target.style.borderColor='rgba(0,0,0,0.06)')}
@@ -5134,7 +9204,7 @@ export default function App() {
           <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
-                <span style={{ marginRight: '6px' }}>📁</span>Project
+                <span style={{ marginRight: '6px' }}>📁</span>Real Projects
               </h2>
               <span style={{ fontSize: '10px', color: '#9B9A97' }}>{projects.length}개</span>
             </div>
@@ -5170,6 +9240,10 @@ export default function App() {
                               {fmtHM(p.time_spent_sec) && <span style={{ fontSize:'9px', color:'#6366f1', fontWeight:600 }}>⏱ {fmtHM(p.time_spent_sec)}</span>}
                             </div>
                           </div>
+                          <div style={{ display:'flex', alignItems:'center', gap:'2px' }}>
+                            <button onClick={()=>moveProjectUp(p.id)} disabled={projects.indexOf(p)===0} style={{ padding:'2px 4px', border:'none', backgroundColor:'transparent', color:'#9B9A97', cursor:projects.indexOf(p)===0?'default':'pointer', opacity:projects.indexOf(p)===0?0.4:1 }} title="위로"><ChevronUp size={14} /></button>
+                            <button onClick={()=>moveProjectDown(p.id)} disabled={projects.indexOf(p)===projects.length-1} style={{ padding:'2px 4px', border:'none', backgroundColor:'transparent', color:'#9B9A97', cursor:projects.indexOf(p)===projects.length-1?'default':'pointer', opacity:projects.indexOf(p)===projects.length-1?0.4:1 }} title="아래로"><ChevronDown size={14} /></button>
+                          </div>
                           <button onClick={()=>{ setEditingProjectId(p.id); setEditingProjectName(p.name) }}
                             style={{ padding:'2px 6px', borderRadius:'5px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'transparent', color:'#787774', fontSize:'10px', cursor:'pointer' }} title="수정">✏️</button>
                           <button onClick={()=>removeProject(p.id)}
@@ -5189,7 +9263,7 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <select value={newProjectAreaId} onChange={e=>setNewProjectAreaId(e.target.value)}
                 style={{ padding:'7px 10px', borderRadius:'7px', border:'1px solid rgba(0,0,0,0.06)', backgroundColor:'#F1F1EF', color: newProjectAreaId ? '#37352F' : '#9B9A97', fontSize:'12px', outline:'none' }}>
-                <option value="">{areas.length===0 ? 'Area를 먼저 생성해주세요' : 'Area 선택 (필수)'}</option>
+                <option value="">{areas.length===0 ? 'Vision Area를 먼저 생성해주세요' : 'Vision Area 선택 (필수)'}</option>
                 {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
               <div style={{ display:'flex', gap:'6px' }}>
@@ -5231,6 +9305,7 @@ export default function App() {
               activePomodoroId={focusQuestId}
               projects={projects}
               areas={areas}
+              identities={identities}
               newTitle={newQuestTitle}
               onNewTitle={setNewQuestTitle}
               newCat={newQuestCat}
@@ -5239,12 +9314,40 @@ export default function App() {
               onNewQuestAreaId={setNewQuestAreaId}
               newProjectId={newQuestProjectId}
               onNewProjectId={setNewQuestProjectId}
+              newQuestIdentityId={newQuestIdentityId}
+              onNewQuestIdentityId={setNewQuestIdentityId}
+              newQuestTags={newQuestTags}
+              onNewQuestTags={setNewQuestTags}
               adding={addingQuest}
               onAdd={addUserQuest}
               onToggleComplete={toggleComplete}
               onDelete={removeUserQuest}
               onSelectPomodoro={handleSelectFocusQuest}
               onOpenNote={(id, title, meta) => setNoteTarget({ table:'quests', id, title, meta })}
+              onQuestNameUpdate={(id, newName) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: newName } : q))}
+              onQuestDeadlineUpdate={(id, deadline) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: deadline ?? undefined } : q))}
+              onQuestStatusUpdate={(id, status) => { updateQuestStatus(id, status); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, status } : q)) }}
+              onQuestTagsUpdate={(id, tags) => { updateQuestTags(id, tags); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, tags } : q)) }}
+              onMoveQuestUp={(id) => {
+                const idx = userQuests.findIndex(q => q.id === id)
+                if (idx <= 0) return
+                const prev = userQuests[idx - 1]
+                const curr = userQuests[idx]
+                updateQuestSortOrder(prev.id, idx)
+                updateQuestSortOrder(curr.id, idx - 1)
+                setUserQuests(prevQ => { const n=[...prevQ]; n[idx-1]=curr; n[idx]=prev; return n })
+              }}
+              onMoveQuestDown={(id) => {
+                const idx = userQuests.findIndex(q => q.id === id)
+                if (idx < 0 || idx >= userQuests.length - 1) return
+                const curr = userQuests[idx]
+                const nextItem = userQuests[idx + 1]
+                updateQuestSortOrder(curr.id, idx + 1)
+                updateQuestSortOrder(nextItem.id, idx)
+                setUserQuests(prevQ => { const n=[...prevQ]; n[idx]=nextItem; n[idx+1]=curr; return n })
+              }}
+              onPushQuestNameUndo={pushQuestNameUndo}
+              onPushQuestDeadlineUndo={pushQuestDeadlineUndo}
             />
           </div>
         </div>

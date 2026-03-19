@@ -18,6 +18,9 @@ INSERT INTO user_stats (id, level, current_xp, required_xp, stats_json)
 VALUES (1, 1, 0, 100, '{}')
 ON CONFLICT DO NOTHING;
 
+-- total_xp 컬럼 추가 (단일 진실 공급원, 기존 DB 마이그레이션용)
+ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS total_xp INTEGER;
+
 ALTER TABLE user_stats DISABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION supabase_realtime ADD TABLE user_stats;
 
@@ -59,6 +62,25 @@ CREATE TABLE IF NOT EXISTS app_kv (
 
 ALTER TABLE app_kv DISABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION supabase_realtime ADD TABLE app_kv;
+
+-- ── 5. daily_logs (없다면 생성) + time_score_applied ─────────────────
+CREATE TABLE IF NOT EXISTS daily_logs (
+  log_date TEXT PRIMARY KEY,
+  total_pomodoros INTEGER NOT NULL DEFAULT 0,
+  total_time_sec INTEGER NOT NULL DEFAULT 0
+);
+ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS time_score_applied INTEGER DEFAULT 0;
+
+-- ── 6. level_rewards (레벨별 보상함) ───────────────────────────
+CREATE TABLE IF NOT EXISTS level_rewards (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_level  INTEGER     NOT NULL,
+  reward_text   TEXT        NOT NULL,
+  is_claimed    BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE level_rewards DISABLE ROW LEVEL SECURITY;
+ALTER PUBLICATION supabase_realtime ADD TABLE level_rewards;
 
 -- ══════════════════════════════════════════════════════════════
 --  저장 위치 요약

@@ -41,8 +41,172 @@ input, textarea, select {
   color-scheme: light;
 }
 
+/* Travel 메모 placeholder ─────────────────────────────────── */
+[data-travel-memo]::placeholder {
+  color: rgba(255,255,255,0.3);
+}
+
 /* ── Focus ring (accessible) ─────────────────────────────── */
 :focus-visible {
   outline: 2px solid rgba(99,102,241,0.5);
   outline-offset: 2px;
+}
+
+/* ── Fortune 카드 크기 슬라이더 ───────────────────────────── */
+.fortune-card-size-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(to right, rgba(124,58,237,0.2) 0%, rgba(124,58,237,0.4) 100%);
+  outline: none;
+}
+.fortune-card-size-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7C3AED 0%, #6366f1 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(124,58,237,0.4);
+  border: 2px solid #fff;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.fortune-card-size-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 3px 12px rgba(124,58,237,0.5);
+}
+.fortune-card-size-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7C3AED 0%, #6366f1 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(124,58,237,0.4);
+  border: 2px solid #fff;
+}
+
+/* ── Fortune 운세 기록 캘린더 (미니멀 Bento 스타일, 일요일 시작) ────────────── */
+.fortune-calendar-wrapper .react-calendar {
+  width: 100%;
+  border: none;
+  font-family: inherit;
+}
+.fortune-calendar-wrapper .react-calendar__viewContainer {
+  padding: 2px 0;
+}
+
+/* 주차(Week Numbers) - 좌측 고정 너비, 날짜 영역과 구분선 */
+.fortune-calendar-wrapper .react-calendar__month-view__weekNumbers {
+  flex-basis: auto !important;
+  flex-shrink: 0 !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  padding-right: 8px;
+  margin-right: 0;
+  border-right: 1px solid rgba(124, 58, 237, 0.15);
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+}
+.fortune-calendar-wrapper .react-calendar__month-view__weekNumbers .react-calendar__tile {
+  padding: 4px 2px;
+  min-height: 28px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #9ca3af;
+  margin: 0 !important;
+}
+
+/* 요일 헤더 - 7열 그리드와 수직 정렬 */
+.fortune-calendar-wrapper .react-calendar__month-view__weekdays {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr) !important;
+  gap: 1px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #7C3AED;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.fortune-calendar-wrapper .react-calendar__month-view__weekdays__weekday {
+  padding: 4px 2px;
+  text-align: center;
+  margin: 0 !important;
+}
+.fortune-calendar-wrapper .react-calendar__month-view__weekdays__weekday abbr {
+  text-decoration: none;
+}
+
+/* 날짜 영역 - 7열 그리드 강제 고정 (토요일 밑으로 떨어지지 않게) */
+.fortune-calendar-wrapper .react-calendar__month-view__days {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr) !important;
+  flex-wrap: nowrap !important;
+  gap: 1px;
+}
+.fortune-calendar-wrapper .react-calendar__month-view__days .react-calendar__tile {
+  margin: 0 !important;
+  margin-inline-start: 0 !important;
+  margin-inline-end: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+.fortune-calendar-wrapper .react-calendar__tile {
+  padding: 4px 2px;
+  min-height: 28px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #37352F;
+  border-radius: 6px;
+  transition: background-color 0.12s, color 0.12s;
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box;
+}
+.fortune-calendar-wrapper .react-calendar__tile:hover {
+  background-color: rgba(124,58,237,0.08);
+  color: #7C3AED;
+}
+.fortune-calendar-wrapper .react-calendar__tile--active {
+  background: linear-gradient(135deg, #7C3AED 0%, #6366f1 100%) !important;
+  color: #fff !important;
+}
+.fortune-calendar-wrapper .react-calendar__tile--now {
+  background: rgba(124,58,237,0.12);
+  color: #7C3AED;
+}
+.fortune-calendar-wrapper .react-calendar__month-view__days__day--neighboringMonth {
+  color: #D3D1CB;
+}
+.fortune-calendar-wrapper .react-calendar__navigation {
+  margin-bottom: 6px;
+  gap: 4px;
+}
+.fortune-calendar-wrapper .react-calendar__navigation button {
+  min-width: 24px;
+  height: 24px;
+  font-size: 12px;
+  color: #7C3AED;
+  background: rgba(124,58,237,0.08);
+  border: 1px solid rgba(124,58,237,0.2);
+  border-radius: 6px;
+  transition: all 0.12s;
+}
+.fortune-calendar-wrapper .react-calendar__navigation button:hover {
+  background: rgba(124,58,237,0.15);
+  border-color: rgba(124,58,237,0.35);
+}
+.fortune-calendar-wrapper .react-calendar__navigation button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.fortune-calendar-wrapper .react-calendar__navigation__label {
+  font-weight: 800;
+  font-size: 12px;
+  color: #37352F;
 }
