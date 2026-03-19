@@ -683,11 +683,17 @@ export async function deleteJournalNote(id: number): Promise<void> {
 //  노트 상세 content CRUD (areas / projects / quests 공통)
 //  테이블별 content 컬럼이 있어야 함 (TEXT, nullable)
 // ══════════════════════════════════════════════════════════════════════════════
-type NoteTable = 'areas' | 'projects' | 'quests' | 'journals'
+type NoteTable = 'areas' | 'projects' | 'quests' | 'journals' | 'calendar_journal'
 
 export async function fetchNoteContent(table: NoteTable, id: string): Promise<string> {
   if (!supabase) return ''
   try {
+    if (table === 'calendar_journal') {
+      const { data, error } = await supabase.from('calendar_events').select('content').eq('id', id).eq('event_type', 'journal').single()
+      if (error || !data) return ''
+      const c = (data as { content?: Record<string, unknown> }).content
+      return String(c?.content ?? '')
+    }
     const { data, error } = await supabase.from(table).select('content').eq('id', id).single()
     if (error || !data) return ''
     return (data as Record<string, unknown>).content as string ?? ''
@@ -696,6 +702,12 @@ export async function fetchNoteContent(table: NoteTable, id: string): Promise<st
 
 export async function saveNoteContent(table: NoteTable, id: string, content: string): Promise<void> {
   if (!supabase) return
+  if (table === 'calendar_journal') {
+    const { data } = await supabase.from('calendar_events').select('content').eq('id', id).single()
+    const prev = (data as { content?: Record<string, unknown> })?.content ?? {}
+    await supabase.from('calendar_events').update({ content: { ...prev, content }, updated_at: new Date().toISOString() }).eq('id', id)
+    return
+  }
   const { error } = await supabase.from(table).update({ content }).eq('id', id)
   if (error) console.error(`[Supabase] saveNoteContent(${table}) 실패:`, error.message)
 }
@@ -947,7 +959,325 @@ export async function insertFortuneCard(deckId: string, nameKo: string, nameEn?:
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  reading_logs (점괘 기록)
+//  calendar_events (중앙 캘린더/이벤트 테이블)
+//  모든 날짜 기반 데이터: 점괘(fortune), 저널(journal), 여행(travel), 퀘스트(quest), 이벤트(event)
+//  event_type으로 엄격히 구분, 공통 CRUD: insertCalendarEvent, updateCalendarEvent, deleteCalendarEvent
+//  각 도메인별 fetch* 함수가 event_type 필터로 해당 데이터만 조회
+// ══════════════════════════════════════════════════════════════════════════════
+export type CalendarEventType = 'fortune' | 'journal' | 'quest' | 'travel' | 'event'
+
+export interface CalendarEventRow {
+  id: string
+  event_date: string
+  event_type: CalendarEventType
+  title: string
+  content: Record<string, unknown>
+  created_at: string
+  updated_at?: string
+}
+
+export async function fetchCalendarEventsByType(eventType: CalendarEventType): Promise<CalendarEventRow[]> {
+  if (!supabase) return []
+  try {
+    const { data, error } = await supabase
+      .from('calendar_events')
+      .select('id, event_date, event_type, title, content, created_at, updated_at')
+      .eq('event_type', eventType)
+      .order('created_at', { ascending: false })
+    if (error || !data) { if (error) console.error('[Supabase] fetchCalendarEventsByType 실패:', error.message); return [] }
+    return data.map(r => ({ ...r, id: String(r.id), content: (r.content as Record<string, unknown>) ?? {} })) as CalendarEventRow[]
+  } catch (e) { console.error('[Supabase] fetchCalendarEventsByType 예외:', e); return [] }
+}
+
+export async function fetchCalendarEventsInRange(eventType: CalendarEventType, startDate: string, endDate: string): Promise<CalendarEventRow[]> {
+  if (!supabase) return []
+  try {
+    let q = supabase
+      .from('calendar_events')
+      .select('id, event_date, event_type, title, content, created_at, updated_at')
+      .eq('event_type', eventType)
+    if (eventType === 'event') {
+      q = q.lte('event_date', endDate)
+    } else {
+      q = q.gte('event_date', startDate).lte('event_date', endDate)
+    }
+    const { data, error } = await q.order('created_at', { ascending: false })
+    if (error || !data) { if (error) console.error('[Supabase] fetchCalendarEventsInRange 실패:', error.message); return [] }
+    let rows = data.map(r => ({ ...r, id: String(r.id), content: (r.content as Record<string, unknown>) ?? {} })) as CalendarEventRow[]
+    if (eventType === 'event') {
+      rows = rows.filter(r => {
+        const end = (r.content?.endDate as string) ?? r.event_date
+        return end >= startDate
+      })
+    }
+    return rows
+  } catch (e) { console.error('[Supabase] fetchCalendarEventsInRange 예외:', e); return [] }
+}
+
+export async function insertCalendarEvent(eventType: CalendarEventType, eventDate: string, title: string, content: Record<string, unknown>): Promise<CalendarEventRow | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('calendar_events').insert({
+    event_date: eventDate,
+    event_type: eventType,
+    title,
+    content: content ?? {},
+  }).select().single()
+  if (error) { console.error('[Supabase] insertCalendarEvent 실패:', error.message); return null }
+  return { ...data, id: String(data.id), content: (data.content as Record<string, unknown>) ?? {} } as CalendarEventRow
+}
+
+export async function updateCalendarEvent(id: string, patch: { event_date?: string; title?: string; content?: Record<string, unknown> }): Promise<CalendarEventRow | null> {
+  if (!supabase) return null
+  const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (patch.event_date !== undefined) payload.event_date = patch.event_date
+  if (patch.title !== undefined) payload.title = patch.title
+  if (patch.content !== undefined) payload.content = patch.content
+  const { data, error } = await supabase.from('calendar_events').update(payload).eq('id', id).select().single()
+  if (error) { console.error('[Supabase] updateCalendarEvent 실패:', error.message); return null }
+  return { ...data, id: String(data.id), content: (data.content as Record<string, unknown>) ?? {} } as CalendarEventRow
+}
+
+export async function deleteCalendarEvent(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase.from('calendar_events').delete().eq('id', id)
+  if (error) { console.error('[Supabase] deleteCalendarEvent 실패:', error.message); return false }
+  return true
+}
+
+/** calendar_events (fortune) → ReadingLogRow 형식 변환 (Fortune UI 호환)
+ * content JSONB: question, drawn_cards, notes, fortune_type, fortune_score, fortune_outcome, accuracy_score, related_people
+ * 마이그레이션 데이터 호환: 다양한 키명 시도 */
+function calendarEventToFortuneRow(ce: CalendarEventRow): ReadingLogRow {
+  const c = (ce.content ?? {}) as Record<string, unknown>
+  const source = c?.source as string
+  const drawn = (c?.drawn_cards as unknown[]) ?? []
+  const question = source === 'feedback'
+    ? String(c?.fortune_feedback ?? c?.question ?? ce.title ?? '')
+    : String(c?.question ?? ce.title ?? '')
+  const eventDate = ce.event_date ?? ce.created_at?.slice(0, 10)
+  const num = (v: unknown): number | null => (v == null || v === '') ? null : (typeof v === 'number' ? v : parseInt(String(v), 10) || null)
+  return {
+    id: ce.id,
+    question,
+    drawn_cards: drawn.map((x: unknown) => {
+      const o = x as Record<string, unknown>
+      return { emoji: String(o?.emoji ?? '🃏'), name_ko: String(o?.name_ko ?? o?.nameKo ?? ''), name_en: o?.name_en != null ? String(o.name_en) : (o?.nameEn != null ? String(o.nameEn) : undefined) }
+    }),
+    notes: (c?.notes as string) ?? null,
+    created_at: ce.created_at,
+    event_date: eventDate,
+    fortune_type: (c?.fortune_type ?? c?.fortuneType) ? String(c?.fortune_type ?? c?.fortuneType).trim() || null : null,
+    fortune_score: num(c?.fortune_score ?? c?.fortuneScore),
+    fortune_outcome: ((c?.fortune_outcome ?? c?.fortuneOutcome) as string) === 'good' || ((c?.fortune_outcome ?? c?.fortuneOutcome) as string) === 'bad' ? (c?.fortune_outcome ?? c?.fortuneOutcome) as 'good' | 'bad' : null,
+    accuracy_score: num(c?.accuracy_score ?? c?.accuracyScore),
+    related_people: (c?.related_people ?? c?.relatedPeople) ? String(c?.related_people ?? c?.relatedPeople).trim() || null : null,
+  }
+}
+
+/** reading_logs 행에 event_date 추가 (캘린더 표시용) */
+function withEventDate(r: ReadingLogRow): ReadingLogRow {
+  if (r.event_date) return r
+  const ed = r.created_at?.slice(0, 10)
+  return ed ? { ...r, event_date: ed } : r
+}
+
+/** 점괘용: calendar_events + reading_logs 병합 조회 (ReadingLogRow[] 반환)
+ * calendar_events 우선, 없으면 reading_logs 폴백. 마이그레이션 전/실패 시에도 기존 데이터 표시 */
+export async function fetchFortuneEvents(): Promise<ReadingLogRow[]> {
+  const [fromCal, fromLegacy] = await Promise.all([
+    fetchCalendarEventsByType('fortune'),
+    fetchReadingLogs(),
+  ])
+  const calRows = fromCal.map(calendarEventToFortuneRow)
+  const calIds = new Set(calRows.map(r => r.id))
+  const legacyRows = fromLegacy.map(withEventDate).filter(r => !calIds.has(r.id))
+  return [...calRows, ...legacyRows].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+}
+
+/** 점괘용: 기간별 fortune 조회 (calendar_events + reading_logs 병합) */
+export async function fetchFortuneEventsInRange(startDate: string, endDate: string): Promise<ReadingLogRow[]> {
+  const [fromCal, fromLegacy] = await Promise.all([
+    fetchCalendarEventsInRange('fortune', startDate, endDate),
+    fetchReadingLogsInRange(startDate, endDate),
+  ])
+  const calRows = fromCal.map(calendarEventToFortuneRow)
+  const calIds = new Set(calRows.map(r => r.id))
+  const legacyRows = fromLegacy.map(withEventDate).filter(r => !calIds.has(r.id))
+  return [...calRows, ...legacyRows].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+}
+
+/** 점괘용: 새 점괘 기록 저장 (calendar_events에 저장) */
+export async function insertFortuneEvent(question: string, drawnCards: DrawnCardItem[], eventDate?: string): Promise<ReadingLogRow | null> {
+  const date = eventDate ?? new Date().toISOString().slice(0, 10)
+  const payload = drawnCards.map(c => ({ emoji: c.emoji, name_ko: c.name_ko, name_en: c.name_en ?? null }))
+  const content = { source: 'reading', question, drawn_cards: payload, notes: null }
+  const title = payload.length ? `[점괘] ${payload.map(c => c.name_ko).join(', ')}` : '[점괘]'
+  const row = await insertCalendarEvent('fortune', date, title, content)
+  if (!row) return null
+  return calendarEventToFortuneRow(row)
+}
+
+/** 점괘용: 운세 피드백 저장 (calendar_events에 저장, daily_logs에도 동기화) */
+export async function insertFortuneFeedback(fortuneFeedback: string, recordDate: string): Promise<CalendarEventRow | null> {
+  const content = { source: 'feedback', fortune_feedback: fortuneFeedback }
+  const row = await insertCalendarEvent('fortune', recordDate, '운세 피드백', content)
+  if (row) await upsertDailyLogFortune(recordDate, fortuneFeedback)
+  return row
+}
+
+/** 점괘용: 점괘 기록 수정 (calendar_events 우선, 없으면 reading_logs 업데이트) */
+export async function updateFortuneEvent(id: string, patch: { question?: string; notes?: string; created_at?: string; fortune_type?: string | null; fortune_score?: number | null; fortune_outcome?: 'good' | 'bad' | null; accuracy_score?: number | null; related_people?: string | null }): Promise<ReadingLogRow | null> {
+  const existing = (await fetchCalendarEventsByType('fortune')).find(r => r.id === id)
+  if (existing) {
+    const c = { ...(existing.content as Record<string, unknown>) }
+    if (patch.question !== undefined) c.question = patch.question
+    if (patch.notes !== undefined) c.notes = patch.notes?.trim() || null
+    if (patch.fortune_type !== undefined) c.fortune_type = patch.fortune_type
+    if (patch.fortune_score !== undefined) c.fortune_score = patch.fortune_score
+    if (patch.fortune_outcome !== undefined) c.fortune_outcome = patch.fortune_outcome
+    if (patch.accuracy_score !== undefined) c.accuracy_score = patch.accuracy_score
+    if (patch.related_people !== undefined) c.related_people = patch.related_people?.trim() || null
+    const eventDate = patch.created_at ? patch.created_at.slice(0, 10) : existing.event_date
+    const title = (c.drawn_cards as unknown[])?.length ? `[점괘] ${(c.drawn_cards as { name_ko: string }[]).map(x => x.name_ko).join(', ')}` : String(c.question || '[점괘]')
+    const updated = await updateCalendarEvent(id, { event_date: eventDate, title, content: c })
+    return updated ? calendarEventToFortuneRow(updated) : null
+  }
+  const legacyUpdated = await updateReadingLog(id, {
+    question: patch.question,
+    notes: patch.notes,
+    created_at: patch.created_at,
+    fortune_type: patch.fortune_type,
+    fortune_score: patch.fortune_score,
+    fortune_outcome: patch.fortune_outcome,
+    accuracy_score: patch.accuracy_score,
+    related_people: patch.related_people,
+  })
+  return legacyUpdated ? withEventDate(legacyUpdated) : null
+}
+
+/** 점괘용: 점괘 기록 삭제 (calendar_events + reading_logs 둘 다 시도, 마이그레이션 전 데이터 처리) */
+export async function deleteFortuneEvent(id: string): Promise<boolean> {
+  const fromCal = await deleteCalendarEvent(id)
+  const fromLegacy = await deleteReadingLog(id)
+  return fromCal || fromLegacy
+}
+
+/** calendar_events (journal) → JournalNoteRow 형식 변환 */
+function calendarEventToJournalRow(ce: CalendarEventRow): JournalNoteRow {
+  const c = ce.content as Record<string, unknown>
+  return {
+    id: parseInt(ce.id.slice(0, 8), 16) || 0,
+    record_date: ce.event_date,
+    title: ce.title,
+    content: String(c?.content ?? ''),
+    group_name: String(c?.group_name ?? ''),
+    sub_name: String(c?.sub_name ?? ''),
+    created_at: ce.created_at,
+  }
+}
+
+/** 저널용: calendar_events에서 journal 타입 조회 (id는 string, UnifiedCalendar용) */
+export async function fetchJournalEventsInRange(startDate: string, endDate: string): Promise<Array<Omit<JournalNoteRow, 'id'> & { id: string }>> {
+  const rows = await fetchCalendarEventsInRange('journal', startDate, endDate)
+  return rows.map(ce => ({
+    ...calendarEventToJournalRow(ce),
+    id: ce.id,
+  }))
+}
+
+/** 저널용: calendar_events에서 journal 타입 전체 조회 (Journal 메뉴용) */
+export async function fetchJournalEvents(): Promise<Array<Omit<JournalNoteRow, 'id'> & { id: string }>> {
+  const rows = await fetchCalendarEventsByType('journal')
+  return rows.map(ce => ({
+    ...calendarEventToJournalRow(ce),
+    id: ce.id,
+  }))
+}
+
+/** 저널용: journal이 있는 날짜 목록 (calendar_events 기반) */
+export async function fetchJournalEventDates(): Promise<string[]> {
+  const rows = await fetchCalendarEventsByType('journal')
+  return [...new Set(rows.map(r => r.event_date))]
+}
+
+/** 저널용: calendar_events에 저장 */
+export async function insertJournalEvent(note: Omit<JournalNoteRow, 'id' | 'created_at'>): Promise<(Omit<JournalNoteRow, 'id'> & { id: string }) | null> {
+  const content = { content: note.content, group_name: note.group_name, sub_name: note.sub_name }
+  const row = await insertCalendarEvent('journal', note.record_date, note.title, content)
+  if (!row) return null
+  return { ...note, id: row.id, created_at: row.created_at }
+}
+
+/** 저널용: calendar_events 수정 */
+export async function updateJournalEvent(id: string, fields: Partial<Pick<JournalNoteRow, 'title' | 'content' | 'record_date' | 'group_name' | 'sub_name'>>): Promise<void> {
+  const existing = (await fetchCalendarEventsByType('journal')).find(r => r.id === id)
+  if (!existing) return
+  const c = { ...(existing.content as Record<string, unknown>) }
+  if (fields.title !== undefined) await updateCalendarEvent(id, { title: fields.title })
+  if (fields.record_date !== undefined) await updateCalendarEvent(id, { event_date: fields.record_date })
+  if (fields.content !== undefined || fields.group_name !== undefined || fields.sub_name !== undefined) {
+    if (fields.content !== undefined) c.content = fields.content
+    if (fields.group_name !== undefined) c.group_name = fields.group_name
+    if (fields.sub_name !== undefined) c.sub_name = fields.sub_name
+    await updateCalendarEvent(id, { content: c })
+  }
+}
+
+/** 저널용: calendar_events 삭제 */
+export async function deleteJournalEvent(id: string): Promise<boolean> {
+  return deleteCalendarEvent(id)
+}
+
+/** 캘린더 이벤트용: CalEvent 형식 (startDate, endDate, color, note) */
+export type CalEventPayload = { startDate: string; endDate: string; color: string; note: string }
+
+/** calendar_events (event) → CalEvent 형식 변환 */
+function calendarEventToCalEvent(ce: CalendarEventRow): CalEventPayload & { id: string } {
+  const c = ce.content as Record<string, unknown>
+  return {
+    id: ce.id,
+    startDate: ce.event_date,
+    endDate: String(c?.endDate ?? ce.event_date),
+    color: String(c?.color ?? '#6366f1'),
+    note: String(c?.note ?? ''),
+  }
+}
+
+/** 캘린더 이벤트용: calendar_events에서 event 타입 조회 */
+export async function fetchEventEventsInRange(startDate: string, endDate: string): Promise<(CalEventPayload & { id: string })[]> {
+  const rows = await fetchCalendarEventsInRange('event', startDate, endDate)
+  return rows.map(calendarEventToCalEvent)
+}
+
+/** 캘린더 이벤트용: calendar_events에 저장 */
+export async function insertEventEvent(ev: CalEventPayload & { title: string }): Promise<CalendarEventRow | null> {
+  const content = { endDate: ev.endDate, color: ev.color, note: ev.note }
+  return insertCalendarEvent('event', ev.startDate, ev.title, content)
+}
+
+/** 캘린더 이벤트용: calendar_events 수정 */
+export async function updateEventEvent(id: string, ev: Partial<CalEventPayload & { title: string }>): Promise<CalendarEventRow | null> {
+  const existing = (await fetchCalendarEventsByType('event')).find(r => r.id === id)
+  if (!existing) return null
+  const c = { ...(existing.content as Record<string, unknown>) }
+  if (ev.endDate !== undefined) c.endDate = ev.endDate
+  if (ev.color !== undefined) c.color = ev.color
+  if (ev.note !== undefined) c.note = ev.note
+  return updateCalendarEvent(id, {
+    event_date: ev.startDate ?? existing.event_date,
+    title: ev.title ?? existing.title,
+    content: c,
+  })
+}
+
+/** 캘린더 이벤트용: calendar_events 삭제 */
+export async function deleteEventEvent(id: string): Promise<boolean> {
+  return deleteCalendarEvent(id)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  reading_logs (점괘 기록) — 레거시, calendar_events로 통합됨
+//  하위 호환을 위해 ReadingLogRow 타입 유지, calendar_events ↔ ReadingLogRow 변환
 // ══════════════════════════════════════════════════════════════════════════════
 export type DrawnCardItem = { emoji: string; name_ko: string; name_en?: string }
 
@@ -957,6 +1287,13 @@ export interface ReadingLogRow {
   drawn_cards: DrawnCardItem[]
   notes?: string | null
   created_at: string
+  /** calendar_events.event_date (YYYY-MM-DD) — 캘린더 표시용, 없으면 created_at 기반 */
+  event_date?: string
+  fortune_type?: string | null
+  fortune_score?: number | null
+  fortune_outcome?: 'good' | 'bad' | null
+  accuracy_score?: number | null
+  related_people?: string | null
 }
 
 function normalizeDrawnCards(raw: unknown): DrawnCardItem[] {
@@ -988,7 +1325,7 @@ export async function fetchReadingLogs(): Promise<ReadingLogRow[]> {
   try {
     const { data, error } = await supabase
       .from('reading_logs')
-      .select('id, question, drawn_cards, notes, created_at')
+      .select('id, question, drawn_cards, notes, created_at, fortune_type, fortune_score, fortune_outcome, accuracy_score, related_people')
       .order('created_at', { ascending: false })
     if (error || !data) { if (error) console.error('[Supabase] fetchReadingLogs 실패:', error.message); return [] }
     return data.map(r => ({
@@ -996,6 +1333,11 @@ export async function fetchReadingLogs(): Promise<ReadingLogRow[]> {
       id: String(r.id),
       drawn_cards: normalizeDrawnCards((r as { drawn_cards?: unknown }).drawn_cards),
       notes: (r as { notes?: string }).notes ?? null,
+      fortune_type: (r as { fortune_type?: string }).fortune_type ?? null,
+      fortune_score: (r as { fortune_score?: number }).fortune_score ?? null,
+      fortune_outcome: (r as { fortune_outcome?: 'good' | 'bad' }).fortune_outcome ?? null,
+      accuracy_score: (r as { accuracy_score?: number }).accuracy_score ?? null,
+      related_people: (r as { related_people?: string }).related_people ?? null,
     })) as ReadingLogRow[]
   } catch (e) { console.error('[Supabase] fetchReadingLogs 예외:', e); return [] }
 }
@@ -1007,7 +1349,7 @@ export async function fetchReadingLogsInRange(startDate: string, endDate: string
     const endTs = `${endDate}T23:59:59.999Z`
     const { data, error } = await supabase
       .from('reading_logs')
-      .select('id, question, drawn_cards, notes, created_at')
+      .select('id, question, drawn_cards, notes, created_at, fortune_type, fortune_score, fortune_outcome, accuracy_score, related_people')
       .gte('created_at', startTs)
       .lte('created_at', endTs)
       .order('created_at', { ascending: false })
@@ -1017,6 +1359,11 @@ export async function fetchReadingLogsInRange(startDate: string, endDate: string
       id: String(r.id),
       drawn_cards: normalizeDrawnCards((r as { drawn_cards?: unknown }).drawn_cards),
       notes: (r as { notes?: string }).notes ?? null,
+      fortune_type: (r as { fortune_type?: string }).fortune_type ?? null,
+      fortune_score: (r as { fortune_score?: number }).fortune_score ?? null,
+      fortune_outcome: (r as { fortune_outcome?: 'good' | 'bad' }).fortune_outcome ?? null,
+      accuracy_score: (r as { accuracy_score?: number }).accuracy_score ?? null,
+      related_people: (r as { related_people?: string }).related_people ?? null,
     })) as ReadingLogRow[]
   } catch (e) { console.error('[Supabase] fetchReadingLogsInRange 예외:', e); return [] }
 }
@@ -1035,12 +1382,27 @@ export async function updateReadingLogNotes(id: string, notes: string): Promise<
   return { ...data, id: String(data.id), drawn_cards: normalizeDrawnCards((data as { drawn_cards?: unknown }).drawn_cards), notes: (data as { notes?: string }).notes ?? null } as ReadingLogRow
 }
 
-export async function updateReadingLog(id: string, patch: { question?: string; notes?: string; created_at?: string }): Promise<ReadingLogRow | null> {
+export type ReadingLogPatch = {
+  question?: string
+  notes?: string
+  created_at?: string
+  fortune_type?: string | null
+  fortune_score?: number | null
+  fortune_outcome?: 'good' | 'bad' | null
+  accuracy_score?: number | null
+  related_people?: string | null
+}
+export async function updateReadingLog(id: string, patch: ReadingLogPatch): Promise<ReadingLogRow | null> {
   if (!supabase) return null
   const payload: Record<string, unknown> = {}
   if (patch.question !== undefined) payload.question = patch.question
   if (patch.notes !== undefined) payload.notes = patch.notes.trim() || null
   if (patch.created_at !== undefined) payload.created_at = patch.created_at
+  if (patch.fortune_type !== undefined) payload.fortune_type = patch.fortune_type ?? null
+  if (patch.fortune_score !== undefined) payload.fortune_score = patch.fortune_score ?? null
+  if (patch.fortune_outcome !== undefined) payload.fortune_outcome = patch.fortune_outcome ?? null
+  if (patch.accuracy_score !== undefined) payload.accuracy_score = patch.accuracy_score ?? null
+  if (patch.related_people !== undefined) payload.related_people = patch.related_people?.trim() || null
   if (Object.keys(payload).length === 0) return null
   const { data, error } = await supabase.from('reading_logs').update(payload).eq('id', id).select().single()
   if (error) { console.error('[Supabase] updateReadingLog 실패:', error.message); return null }

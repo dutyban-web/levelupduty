@@ -14,6 +14,7 @@ import {
   fetchJournalCategories, insertJournalCategory,
   updateJournalCategory, deleteJournalCategory,
   fetchJournalNotes, fetchJournalDates,
+  fetchJournalEvents, fetchJournalEventDates, insertJournalEvent, updateJournalEvent, deleteJournalEvent,
   insertJournalNote, updateJournalNote, deleteJournalNote,
   fetchProjects, insertProject, updateProject, deleteProject, addProjectTimeSpent,
   fetchAreas, insertArea, updateArea, deleteArea, addAreaTimeSpent, updateAreaSortOrder, updateProjectSortOrder,
@@ -21,7 +22,9 @@ import {
   type IdentityRow,
   fetchFortuneDecks, fetchFortuneCards, insertFortuneDeck, updateFortuneDeck, deleteFortuneDeck,
   type FortuneDeckRow, type FortuneCardRow,
-  insertReadingLog, fetchReadingLogs, fetchReadingLogsInRange, deleteReadingLog, updateReadingLog, type ReadingLogRow, type DrawnCardItem,
+  fetchFortuneEvents, fetchFortuneEventsInRange, insertFortuneEvent, insertFortuneFeedback, updateFortuneEvent, deleteFortuneEvent,
+  fetchJournalEventsInRange, fetchEventEventsInRange, insertEventEvent, updateEventEvent, deleteEventEvent, fetchCalendarEventsByType,
+  type ReadingLogRow, type DrawnCardItem,
   fetchDailyLogsInRange,
   fetchNoteContent, saveNoteContent, uploadImageToMedia,
   type Session,
@@ -35,8 +38,14 @@ import {
   Trophy, BarChart3, BookOpen, Archive, CalendarDays,
   CheckCircle2, PenLine,
   Scroll, Sparkles, Plus, X,   ChevronRight, ChevronLeft, ChevronUp, ChevronDown,
-  Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, MoreVertical, Image, CalendarRange, Move, Settings,
+  Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, MoreVertical, Image, CalendarRange, Move, Settings, GripVertical,
 } from 'lucide-react'
+import {
+  DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, rectSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { Solar } from 'lunar-javascript'
 
 // ═══════════════════════════════════════ RESPONSIVE ═══════════════════════════
@@ -684,7 +693,7 @@ type NoteMeta = {
   isCompleted?: boolean
 }
 type NoteTarget = {
-  table: 'areas' | 'projects' | 'quests' | 'journals'
+  table: 'areas' | 'projects' | 'quests' | 'journals' | 'calendar_journal'
   id: string
   title: string
   meta?: NoteMeta
@@ -711,7 +720,7 @@ function NoteModal({
   useEffect(() => {
     setLoading(true)
     setSaveStatus('idle')
-    fetchNoteContent(target.table as 'areas' | 'projects' | 'quests' | 'journals', target.id).then(c => {
+    fetchNoteContent(target.table as 'areas' | 'projects' | 'quests' | 'journals' | 'calendar_journal', target.id).then(c => {
       setContent(c)
       setLoading(false)
     })
@@ -728,14 +737,14 @@ function NoteModal({
     setSaveStatus('saving')
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
-      await saveNoteContent(target.table as 'areas' | 'projects' | 'quests' | 'journals', target.id, val)
+      await saveNoteContent(target.table as 'areas' | 'projects' | 'quests' | 'journals' | 'calendar_journal', target.id, val)
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
     }, 800)
   }
 
   const tableLabel: Record<string, string> = {
-    areas: '🌐 Vision Area', projects: '📁 Real Projects', quests: '✅ Quest', journals: '📓 Journal',
+    areas: '🌐 Vision Area', projects: '📁 Real Projects', quests: '✅ Quest', journals: '📓 Journal', calendar_journal: '📓 Journal',
   }
 
   return (
@@ -2607,12 +2616,15 @@ function WorldsPage() {
 }
 
 // ═══════════════════════════════════════ JOURNAL PAGE ════════════════════════
-function JournalPage({ completedQuests, xpState, userQuests }: {
+function JournalPage({ completedQuests, xpState, userQuests, onOpenNote, onJournalChange }: {
   completedQuests: string[]
   xpState: XpState
   userQuests: Card[]
+  onOpenNote?: (id: string, title: string, meta?: { source?: 'calendar' }) => void
+  onJournalChange?: () => void
 }) {
   const isMobile = useIsMobile()
+  const [journalTab, setJournalTab] = useState<'diary' | 'calendar'>('diary')
   const todayKey = getTodayKey()
   const [store,       setStore]       = useState<JournalStore>(() => loadJournal())
   const [activeKey,   setActiveKey]   = useState(todayKey)
@@ -2683,13 +2695,31 @@ function JournalPage({ completedQuests, xpState, userQuests }: {
   if (!entryKeys.includes(todayKey)) entryKeys.unshift(todayKey)
   const totalXp = activeBlocks.length * XP_PER_QUEST
 
+  if (journalTab === 'calendar' && onOpenNote && onJournalChange) {
+    return (
+      <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 48px' }}>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '1px solid rgba(0,0,0,0.06)', paddingBottom: '12px' }}>
+          <button onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>창작 일지</button>
+          <button onClick={() => setJournalTab('calendar')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>저널 캘린더</button>
+        </div>
+        <JournalCalendarPage onOpenNote={onOpenNote} onJournalChange={onJournalChange} />
+      </div>
+    )
+  }
+
   return (
     <div style={{
       maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 48px',
-      display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '0' : '24px',
-      height: isMobile ? 'auto' : 'calc(100vh - 52px)', overflow: isMobile ? 'visible' : 'hidden',
+      display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : 'calc(100vh - 52px)', overflow: isMobile ? 'visible' : 'hidden',
     }}>
+      {/* ── 탭 (창작 일지 / 저널 캘린더) ── */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0 }}>
+        <button onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>창작 일지</button>
+        <button onClick={() => setJournalTab('calendar')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>저널 캘린더</button>
+      </div>
 
+      {/* ── diary 본문: 좌측 날짜 목록 + 우측 에디터 ── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '0' : '24px', minHeight: 0, overflow: 'hidden' }}>
       {/* ── 좌측: 날짜 목록 ── */}
       <div style={{ width: isMobile ? '100%' : '240px', flexShrink: 0, display: 'flex', flexDirection: 'column', overflowY: isMobile ? 'visible' : 'auto', borderBottom: isMobile ? '1px solid rgba(0,0,0,0.06)' : 'none', paddingBottom: isMobile ? '12px' : '0', marginBottom: isMobile ? '12px' : '0' }}>
         <div style={{ paddingBottom: '16px', borderBottom: '1px solid rgba(0,0,0,0.06)', marginBottom: '14px' }}>
@@ -2882,6 +2912,7 @@ function JournalPage({ completedQuests, xpState, userQuests }: {
             {activeKey !== todayKey ? '📖 읽기 전용' : '700ms 자동 저장'}
           </span>
         </div>
+      </div>
       </div>
     </div>
   )
@@ -3600,14 +3631,14 @@ function getWeekEvents(week: string[], events: CalEvent[]): WeekEvent[] {
 // ══════════════════════════════════════════════════════════════════════════════
 //  UNIFIED CALENDAR — 퀘스트 마감일 + 데일리 저널 + 운세/기운 기록 통합
 // ══════════════════════════════════════════════════════════════════════════════
-type UnifiedEventType = 'quest' | 'journal' | 'fortune'
+type UnifiedEventType = 'quest' | 'journal' | 'fortune' | 'event'
 type UnifiedEvent = { id: string; date: string; type: UnifiedEventType; title: string; meta?: unknown }
 
 function toYMD(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
-function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpenNote: (id: string, title: string) => void; userQuests: Card[]; refreshTrigger?: number }) {
+function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpenNote: (id: string, title: string, meta?: { source?: 'calendar' }) => void; userQuests: Card[]; refreshTrigger?: number }) {
   const isMobile = useIsMobile()
   const todayStr = toYMD(new Date())
   const [viewDate, setViewDate] = useState(new Date())
@@ -3615,8 +3646,11 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
   const [filterQuest, setFilterQuest] = useState(true)
   const [filterJournal, setFilterJournal] = useState(true)
   const [filterFortune, setFilterFortune] = useState(true)
+  const [filterEvent, setFilterEvent] = useState(true)
   const [dailyLogs, setDailyLogs] = useState<{ log_date: string; fortune_feedback?: string | null }[]>([])
   const [journalNotes, setJournalNotes] = useState<JournalNoteRow[]>([])
+  const [journalEvents, setJournalEvents] = useState<Array<Omit<JournalNoteRow, 'id'> & { id: string }>>([])
+  const [calEvents, setCalEvents] = useState<Array<{ id: string; startDate: string; endDate: string; title: string; color: string; note: string }>>([])
   const [readingLogs, setReadingLogs] = useState<ReadingLogRow[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedReading, setSelectedReading] = useState<ReadingLogRow | null>(null)
@@ -3628,14 +3662,18 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
   useEffect(() => {
     (async () => {
       setLoading(true)
-      const [logs, notes, readings] = await Promise.all([
+      const [logs, notes, jEvents, evts, fortuneEvents] = await Promise.all([
         fetchDailyLogsInRange(startStr, endStr),
         fetchJournalNotes(),
-        fetchReadingLogsInRange(startStr, endStr),
+        fetchJournalEventsInRange(startStr, endStr),
+        fetchEventEventsInRange(startStr, endStr),
+        fetchFortuneEventsInRange(startStr, endStr),
       ])
       setDailyLogs(logs)
       setJournalNotes(notes)
-      setReadingLogs(readings)
+      setJournalEvents(jEvents)
+      setCalEvents(evts)
+      setReadingLogs(fortuneEvents)
       setLoading(false)
     })()
   }, [startStr, endStr, refreshTrigger])
@@ -3648,26 +3686,40 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
       }
     }
     if (filterJournal) {
+      const seenJournal = new Set<string>()
+      for (const n of journalEvents) {
+        const key = `${n.record_date}:${n.title}`
+        if (seenJournal.has(key)) continue
+        seenJournal.add(key)
+        out.push({ id: `jc-${n.id}`, date: n.record_date, type: 'journal', title: n.title, meta: { ...n, fromCalendar: true } })
+      }
       for (const n of journalNotes) {
+        const key = `${n.record_date}:${n.title}`
+        if (seenJournal.has(key)) continue
+        seenJournal.add(key)
         out.push({ id: `j-${n.id}`, date: n.record_date, type: 'journal', title: n.title, meta: n })
       }
     }
-    if (filterFortune) {
-      for (const l of dailyLogs) {
-        if (l.fortune_feedback && l.fortune_feedback.trim()) {
-          out.push({ id: `f-dl-${l.log_date}`, date: l.log_date, type: 'fortune', title: '운세 기록', meta: l })
+    if (filterEvent) {
+      for (const e of calEvents) {
+        const start = new Date(e.startDate + 'T00:00:00')
+        const end = new Date(e.endDate + 'T23:59:59')
+        for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
+          const dateKey = toYMD(new Date(t))
+          out.push({ id: `e-${e.id}-${dateKey}`, date: dateKey, type: 'event', title: e.title, meta: e })
         }
       }
+    }
+    if (filterFortune) {
       for (const r of readingLogs) {
-        const d = new Date(r.created_at)
-        const dateKey = toYMD(d)
+        const dateKey = r.event_date ?? toYMD(new Date(r.created_at))
         const cardsStr = (r.drawn_cards ?? []).map(c => `${c.emoji} ${c.name_ko}${c.name_en ? ` (${c.name_en})` : ''}`).join(' | ')
-        const title = cardsStr ? `[🔮 운세] ${cardsStr}` : '[🔮 운세]'
-        out.push({ id: `r-${r.id}`, date: dateKey, type: 'fortune', title, meta: r })
+        const title = cardsStr ? `[🔮 운세] ${cardsStr}` : r.question ? `[🔮 운세] ${r.question.slice(0, 30)}${r.question.length > 30 ? '…' : ''}` : '[🔮 운세]'
+        out.push({ id: `f-${r.id}`, date: dateKey, type: 'fortune', title, meta: r })
       }
     }
     return out
-  }, [userQuests, journalNotes, dailyLogs, readingLogs, filterQuest, filterJournal, filterFortune])
+  }, [userQuests, journalNotes, journalEvents, calEvents, readingLogs, filterQuest, filterJournal, filterEvent, filterFortune])
 
   const eventsByDate = useMemo(() => {
     const m: Record<string, UnifiedEvent[]> = {}
@@ -3683,11 +3735,13 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
     const evs = eventsByDate[dk] ?? []
     const hasQuest = evs.some(e => e.type === 'quest')
     const hasJournal = evs.some(e => e.type === 'journal')
+    const hasEvent = evs.some(e => e.type === 'event')
     const hasFortune = evs.some(e => e.type === 'fortune')
     return (
       <div style={{ display: 'flex', gap: '3px', justifyContent: 'center', marginTop: '2px' }}>
         {hasQuest && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'block' }} title="퀘스트 마감일" />}
         {hasJournal && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', display: 'block' }} title="데일리 저널" />}
+        {hasEvent && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#34d399', display: 'block' }} title="캘린더 이벤트" />}
         {hasFortune && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#7C3AED', display: 'block' }} title="운세/기운 기록" />}
       </div>
     )
@@ -3696,8 +3750,10 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
   const dayEvents = selectedDate ? (eventsByDate[selectedDate] ?? []) : []
   const dayQuests = dayEvents.filter(e => e.type === 'quest').map(e => e.meta as Card)
   const dayJournals = dayEvents.filter(e => e.type === 'journal').map(e => e.meta as JournalNoteRow)
-  const dayFortuneLog = dayEvents.find(e => e.type === 'fortune' && e.id.startsWith('f-dl-'))?.meta as { fortune_feedback?: string } | undefined
-  const dayReadings = dayEvents.filter(e => e.type === 'fortune' && e.id.startsWith('r-')).map(e => e.meta as ReadingLogRow)
+  const dayReadings = dayEvents.filter(e => e.type === 'fortune').map(e => e.meta as ReadingLogRow)
+  const dayFortuneFeedback = dayReadings.filter(r => (r.drawn_cards ?? []).length === 0)
+  const dayTarotReadings = dayReadings.filter(r => (r.drawn_cards ?? []).length > 0)
+  const dayCalEvents = Array.from(new Map(dayEvents.filter(e => e.type === 'event').map(e => [(e.meta as { id: string }).id, e.meta as typeof calEvents[0]])).values())
 
   function fmtDateKo(dk: string) {
     const d = new Date(dk + 'T00:00:00')
@@ -3706,7 +3762,7 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
 
   async function handleDeleteReadingFromCalendar(id: string) {
     if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
-    const ok = await deleteReadingLog(id)
+    const ok = await deleteFortuneEvent(id)
     if (ok) {
       setReadingLogs(prev => prev.filter(r => r.id !== id))
       setSelectedReading(null)
@@ -3733,6 +3789,10 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
               <input type="checkbox" checked={filterJournal} onChange={e => setFilterJournal(e.target.checked)} />
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#3b82f6' }} /> 데일리 저널
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterEvent} onChange={e => setFilterEvent(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399' }} /> 캘린더 이벤트
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
               <input type="checkbox" checked={filterFortune} onChange={e => setFilterFortune(e.target.checked)} />
@@ -3781,23 +3841,25 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
                   <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
                     {dayJournals.map(n => (
                       <li key={n.id} style={{ marginBottom: '6px' }}>
-                        <button onClick={() => onOpenNote(String(n.id), n.title)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left' }}>{n.title}</button>
+                        <button onClick={() => onOpenNote(String(n.id), n.title, (n as { fromCalendar?: boolean }).fromCalendar ? { source: 'calendar' } : undefined)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left' }}>{n.title}</button>
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-              {dayFortuneLog?.fortune_feedback && (
+              {dayFortuneFeedback.length > 0 && (
                 <div>
                   <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#7C3AED', letterSpacing: '0.05em' }}>운세 피드백 (Fortune Journal)</p>
-                  <p style={{ margin: 0, fontSize: '13px', color: '#6B6B6B', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{dayFortuneLog.fortune_feedback}</p>
+                  {dayFortuneFeedback.map(r => (
+                    <p key={r.id} style={{ margin: '0 0 8px', fontSize: '13px', color: '#6B6B6B', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{r.question}</p>
+                  ))}
                 </div>
               )}
-              {dayReadings.length > 0 && (
+              {dayTarotReadings.length > 0 && (
                 <div>
                   <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#7C3AED', letterSpacing: '0.05em' }}>타로 점괘 기록</p>
                   <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
-                    {dayReadings.map(r => {
+                    {dayTarotReadings.map(r => {
                       const drawn = r.drawn_cards ?? []
                       return (
                         <li key={r.id} style={{ marginBottom: '8px' }}>
@@ -3851,7 +3913,20 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
                   </ul>
                 </div>
               )}
-              {dayQuests.length === 0 && dayJournals.length === 0 && !dayFortuneLog?.fortune_feedback && dayReadings.length === 0 && (
+              {dayCalEvents.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#34d399', letterSpacing: '0.05em' }}>캘린더 이벤트</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
+                    {dayCalEvents.map(ev => (
+                      <li key={ev.id} style={{ marginBottom: '6px', fontSize: '13px', color: '#37352F' }}>
+                        <span style={{ fontWeight: 600 }}>{ev.title}</span>
+                        {ev.note && <span style={{ marginLeft: '6px', color: '#787774', fontSize: '12px' }}>— {ev.note}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dayQuests.length === 0 && dayJournals.length === 0 && dayReadings.length === 0 && dayCalEvents.length === 0 && (
                 <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>이 날짜에 기록된 내용이 없습니다.</p>
               )}
             </div>
@@ -3923,7 +3998,8 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
 //  JOURNAL CALENDAR PAGE  — Supabase journal_categories + journals 전용
 //  퀘스트 시스템과 완전히 독립적
 // ══════════════════════════════════════════════════════════════════════════════
-function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: string) => void }) {
+type JournalEventRow = Omit<JournalNoteRow, 'id'> & { id: string }
+function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id: string, title: string, meta?: { source?: 'calendar' }) => void; onJournalChange?: () => void }) {
   const isMobile = useIsMobile()
   const todayStr = (() => {
     const d = new Date()
@@ -3946,7 +4022,7 @@ function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: s
   const [catSaving,    setCatSaving]    = useState(false)
 
   const [editorOpen,   setEditorOpen]   = useState(false)
-  const [editorNoteId, setEditorNoteId] = useState<number | null>(null)
+  const [editorNoteId, setEditorNoteId] = useState<string | null>(null)
   const [edDate,       setEdDate]       = useState(todayStr)
   const [edGroup,      setEdGroup]      = useState('')
   const [edSub,        setEdSub]        = useState('')
@@ -3955,25 +4031,23 @@ function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: s
   const [edSaving,     setEdSaving]     = useState(false)
 
   const [categories,   setCategories]   = useState<JournalCategoryRow[]>([])
-  const [notes,        setNotes]        = useState<JournalNoteRow[]>([])
+  const [notes,        setNotes]        = useState<JournalEventRow[]>([])
   const [journalDates, setJournalDates] = useState<Set<string>>(new Set())
   const [loading,      setLoading]      = useState(true)
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true)
-      const [cats, allNotes, dates] = await Promise.all([
-        fetchJournalCategories(),
-        fetchJournalNotes(),
-        fetchJournalDates(),
-      ])
+  function refreshJournal() {
+    setLoading(true)
+    Promise.all([fetchJournalCategories(), fetchJournalEvents(), fetchJournalEventDates()]).then(([cats, allNotes, dates]) => {
       setCategories(cats)
       setNotes(allNotes)
       setJournalDates(new Set(dates))
-      if (cats.length > 0) setExpanded(new Set([cats[0].group_name]))
+      if (cats.length > 0) setExpanded(prev => prev.size ? prev : new Set([cats[0].group_name]))
       setLoading(false)
-    })()
-  }, [])
+      onJournalChange?.()
+    })
+  }
+
+  useEffect(() => { refreshJournal() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const groupedCats = useMemo(() => {
     const map: Record<string, string[]> = {}
@@ -4031,7 +4105,7 @@ function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: s
     setEdTitle(''); setEdContent('')
     setEditorOpen(true)
   }
-  function openEdit(note: JournalNoteRow) {
+  function openEdit(note: JournalEventRow) {
     setEditorNoteId(note.id); setEdDate(note.record_date)
     setEdGroup(note.group_name); setEdSub(note.sub_name)
     setEdTitle(note.title); setEdContent(note.content)
@@ -4042,26 +4116,29 @@ function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: s
     if (!edTitle.trim() || !edDate || !edGroup || !edSub) return
     setEdSaving(true)
     if (editorNoteId === null) {
-      const created = await insertJournalNote({ record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub })
+      const created = await insertJournalEvent({ record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub })
       if (created) {
         setNotes(prev => [created, ...prev])
         setJournalDates(prev => new Set([...prev, edDate]))
+        refreshJournal()
       }
     } else {
       const fields = { record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub }
-      await updateJournalNote(editorNoteId, fields)
+      await updateJournalEvent(editorNoteId, fields)
       setNotes(prev => prev.map(n => n.id === editorNoteId ? { ...n, ...fields } : n))
+      refreshJournal()
     }
     setEdSaving(false)
     setEditorOpen(false)
   }
 
-  async function handleDeleteNote(id: number) {
+  async function handleDeleteNote(id: string) {
     if (!window.confirm('이 저널을 삭제할까요?')) return
-    await deleteJournalNote(id)
+    await deleteJournalEvent(id)
     const remaining = notes.filter(n => n.id !== id)
     setNotes(remaining)
     setJournalDates(new Set(remaining.map(n => n.record_date)))
+    refreshJournal()
   }
 
   async function handleAddCat() {
@@ -4179,7 +4256,7 @@ function JournalCalendarPage({ onOpenNote }: { onOpenNote: (id: string, title: s
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p
                           style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#37352F', cursor: 'pointer', display: 'inline-block' }}
-                          onClick={() => onOpenNote(String(note.id), note.title)}
+                          onClick={() => onOpenNote(note.id, note.title, { source: 'calendar' })}
                           title="클릭하여 노트 열기"
                           onMouseEnter={e => (e.currentTarget.style.color = '#6366f1')}
                           onMouseLeave={e => (e.currentTarget.style.color = '#37352F')}
@@ -4907,8 +4984,7 @@ function FortuneReadingCalendar({ readingLogs, selectedDate, onSelectDate }: {
   const datesWithReadings = useMemo(() => {
     const set = new Set<string>()
     for (const r of readingLogs) {
-      const d = new Date(r.created_at)
-      set.add(toYMD(d))
+      set.add(r.event_date ?? toYMD(new Date(r.created_at)))
     }
     return set
   }, [readingLogs])
@@ -4959,6 +5035,8 @@ function toDatetimeLocal(iso: string): string {
   return `${y}-${m}-${day}T${h}:${min}`
 }
 
+const DEFAULT_FORTUNE_TYPES = ['직장운', '애정운', '재물운', '건강운', '학업운', '인간관계운', '기타']
+
 function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   log: ReadingLogRow
   onClose: () => void
@@ -4968,21 +5046,38 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   const [question, setQuestion] = useState(log.question)
   const [notes, setNotes] = useState(log.notes ?? '')
   const [createdAt, setCreatedAt] = useState(toDatetimeLocal(log.created_at))
+  const [fortuneType, setFortuneType] = useState(log.fortune_type ?? '')
+  const [fortuneScore, setFortuneScore] = useState(log.fortune_score ?? '')
+  const [fortuneOutcome, setFortuneOutcome] = useState<'good' | 'bad' | ''>(log.fortune_outcome ?? '')
+  const [accuracyScore, setAccuracyScore] = useState(log.accuracy_score ?? '')
+  const [relatedPeople, setRelatedPeople] = useState(log.related_people ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   useEffect(() => {
     setQuestion(log.question)
     setNotes(log.notes ?? '')
     setCreatedAt(toDatetimeLocal(log.created_at))
-  }, [log.id, log.question, log.notes, log.created_at])
+    setFortuneType(log.fortune_type ?? '')
+    setFortuneScore(log.fortune_score != null ? String(log.fortune_score) : '')
+    setFortuneOutcome(log.fortune_outcome ?? '')
+    setAccuracyScore(log.accuracy_score != null ? String(log.accuracy_score) : '')
+    setRelatedPeople(log.related_people ?? '')
+  }, [log.id, log.question, log.notes, log.created_at, log.fortune_type, log.fortune_score, log.fortune_outcome, log.accuracy_score, log.related_people])
 
   async function handleSave() {
     if (!question.trim()) return
     setSaving(true)
-    const updated = await updateReadingLog(log.id, {
+    const fs = fortuneScore === '' ? undefined : Math.min(100, Math.max(1, parseInt(fortuneScore, 10) || 0))
+    const acc = accuracyScore === '' ? undefined : Math.min(100, Math.max(1, parseInt(accuracyScore, 10) || 0))
+    const updated = await updateFortuneEvent(log.id, {
       question: question.trim(),
       notes: notes.trim() || undefined,
       created_at: new Date(createdAt).toISOString(),
+      fortune_type: fortuneType.trim() || null,
+      fortune_score: fs ?? null,
+      fortune_outcome: (fortuneOutcome === 'good' || fortuneOutcome === 'bad') ? fortuneOutcome : null,
+      accuracy_score: acc ?? null,
+      related_people: relatedPeople.trim() || null,
     })
     setSaving(false)
     if (updated) {
@@ -4994,7 +5089,7 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
 
   async function handleDelete() {
     if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
-    const ok = await deleteReadingLog(log.id)
+    const ok = await deleteFortuneEvent(log.id)
     if (ok) {
       onDeleted()
       onClose()
@@ -5032,6 +5127,45 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
             ))}
           </div>
         )}
+        <div style={{ marginBottom: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>점괘 종류</label>
+            <input list="fortune-types" value={fortuneType} onChange={e => setFortuneType(e.target.value)} placeholder="직장운, 애정운 등"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+            />
+            <datalist id="fortune-types">{DEFAULT_FORTUNE_TYPES.map(t => <option key={t} value={t} />)}</datalist>
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>운세 좋음/나쁨</label>
+            <select value={fortuneOutcome} onChange={e => setFortuneOutcome(e.target.value as 'good' | 'bad' | '')}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+            >
+              <option value="">선택 안 함</option>
+              <option value="good">좋은 운세</option>
+              <option value="bad">나쁜 운세</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ marginBottom: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>점괘 점수 (1~100)</label>
+            <input type="number" min={1} max={100} value={fortuneScore} onChange={e => setFortuneScore(e.target.value)} placeholder="점수"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>적중도 (1~100)</label>
+            <input type="number" min={1} max={100} value={accuracyScore} onChange={e => setAccuracyScore(e.target.value)} placeholder="실제로 맞았는지"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+            />
+          </div>
+        </div>
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>관련 인물</label>
+          <input type="text" value={relatedPeople} onChange={e => setRelatedPeople(e.target.value)} placeholder="예: 엄마, 직장 동료, 친구"
+            style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+          />
+        </div>
         <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>나의 해석 / 코멘트</label>
           <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="점괘에 대한 피드백, 해석, 느낀 점을 적어보세요..."
@@ -5044,6 +5178,178 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
             {saving ? '저장 중…' : saved ? '저장됨 ✓' : '수정 ✏️'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function FortuneRecordsSheet({ readingLogs, onSelectLog, onDeleteLog, onNavigateToDate }: {
+  readingLogs: ReadingLogRow[]
+  onSelectLog: (log: ReadingLogRow) => void
+  onDeleteLog: (log: ReadingLogRow) => void
+  onNavigateToDate?: (date: string) => void
+}) {
+  const isMobile = useIsMobile()
+  const [filterType, setFilterType] = useState<string>('')
+  const [filterOutcome, setFilterOutcome] = useState<'good' | 'bad' | ''>('')
+  const [filterMinScore, setFilterMinScore] = useState('')
+  const [filterMinAccuracy, setFilterMinAccuracy] = useState('')
+  const [filterYear, setFilterYear] = useState<string>('')
+  const [filterMonth, setFilterMonth] = useState<string>('')
+  const [sortBy, setSortBy] = useState<'date' | 'score' | 'accuracy' | 'type'>('date')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const allYears = useMemo(() => {
+    const set = new Set<number>()
+    for (const r of readingLogs) {
+      const ed = r.event_date ?? r.created_at?.slice(0, 10)
+      if (ed) set.add(parseInt(ed.slice(0, 4), 10))
+    }
+    return Array.from(set).sort((a, b) => b - a)
+  }, [readingLogs])
+
+  const allTypes = useMemo(() => {
+    const set = new Set<string>(DEFAULT_FORTUNE_TYPES)
+    for (const r of readingLogs) {
+      if (r.fortune_type?.trim()) set.add(r.fortune_type.trim())
+    }
+    return Array.from(set).sort()
+  }, [readingLogs])
+
+  const getLogDate = (r: ReadingLogRow) => r.event_date ?? r.created_at?.slice(0, 10) ?? ''
+
+  const filteredAndSorted = useMemo(() => {
+    let list = [...readingLogs]
+    if (filterType) list = list.filter(r => (r.fortune_type ?? '') === filterType)
+    if (filterOutcome) list = list.filter(r => r.fortune_outcome === filterOutcome)
+    const minScore = filterMinScore === '' ? 0 : Math.max(0, parseInt(filterMinScore, 10) || 0)
+    if (minScore > 0) list = list.filter(r => (r.fortune_score ?? 0) >= minScore)
+    const minAcc = filterMinAccuracy === '' ? 0 : Math.max(0, parseInt(filterMinAccuracy, 10) || 0)
+    if (minAcc > 0) list = list.filter(r => (r.accuracy_score ?? 0) >= minAcc)
+    if (filterYear) list = list.filter(r => getLogDate(r).slice(0, 4) === filterYear)
+    if (filterMonth) list = list.filter(r => getLogDate(r).slice(5, 7) === filterMonth)
+    list.sort((a, b) => {
+      const mul = sortAsc ? 1 : -1
+      if (sortBy === 'date') return mul * ((getLogDate(a) || '9999').localeCompare(getLogDate(b) || '9999'))
+      if (sortBy === 'score') return mul * ((a.fortune_score ?? 0) - (b.fortune_score ?? 0))
+      if (sortBy === 'accuracy') return mul * ((a.accuracy_score ?? 0) - (b.accuracy_score ?? 0))
+      if (sortBy === 'type') return mul * ((a.fortune_type ?? '').localeCompare(b.fortune_type ?? ''))
+      return 0
+    })
+    return list
+  }, [readingLogs, filterType, filterOutcome, filterMinScore, filterMinAccuracy, filterYear, filterMonth, sortBy, sortAsc])
+
+  const hasFilters = filterType || filterOutcome || filterMinScore || filterMinAccuracy || filterYear || filterMonth
+  function clearFilters() {
+    setFilterType('')
+    setFilterOutcome('')
+    setFilterMinScore('')
+    setFilterMinAccuracy('')
+    setFilterYear('')
+    setFilterMonth('')
+  }
+
+  return (
+    <div style={{ marginTop: '24px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+      <h2 style={{ margin: 0, padding: '14px 16px', fontSize: '12px', fontWeight: 800, color: '#37352F', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+        📋 점괘 아카이브 리스트
+      </h2>
+      <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#F8F8F6' }}>
+        <select value={filterYear} onChange={e => setFilterYear(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="연도 필터">
+          <option value="">연도 전체</option>
+          {allYears.map(y => <option key={y} value={String(y)}>{y}년</option>)}
+        </select>
+        <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="월 필터">
+          <option value="">월 전체</option>
+          {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={String(m).padStart(2,'0')}>{m}월</option>)}
+        </select>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}>
+          <option value="">점괘 종류 전체</option>
+          {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={filterOutcome} onChange={e => setFilterOutcome(e.target.value as 'good' | 'bad' | '')} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}>
+          <option value="">운세 전체</option>
+          <option value="good">좋은 운세</option>
+          <option value="bad">나쁜 운세</option>
+        </select>
+        <input type="number" min={1} max={100} value={filterMinScore} onChange={e => setFilterMinScore(e.target.value)} placeholder="점수 이상"
+          style={{ width: '80px', padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}
+        />
+        <input type="number" min={1} max={100} value={filterMinAccuracy} onChange={e => setFilterMinAccuracy(e.target.value)} placeholder="적중도 이상"
+          style={{ width: '90px', padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}
+        />
+        <span style={{ fontSize: '11px', color: '#787774', marginLeft: '4px' }}>정렬:</span>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}>
+          <option value="date">날짜순</option>
+          <option value="score">점수순</option>
+          <option value="accuracy">적중도순</option>
+          <option value="type">점괘종류순</option>
+        </select>
+        <button onClick={() => setSortAsc(a => !a)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+          {sortAsc ? '↑ 오름차순' : '↓ 내림차순'}
+        </button>
+        {hasFilters && (
+          <button onClick={clearFilters} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.15)', background: '#fff', fontSize: '11px', color: '#787774', cursor: 'pointer' }}>필터 초기화</button>
+        )}
+      </div>
+      <div style={{ overflowX: 'auto', maxHeight: isMobile ? '400px' : '500px', overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <thead style={{ position: 'sticky', top: 0, background: '#F4F4F2', zIndex: 1 }}>
+            <tr>
+              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '100px' }}>날짜</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '140px' }}>질문/타이틀</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '80px' }}>점괘종류</th>
+              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '60px' }}>점수</th>
+              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '70px' }}>운세</th>
+              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '60px' }}>적중도</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '90px' }}>관련 인물</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '80px' }}>카드</th>
+              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', width: '70px' }}>작업</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredAndSorted.length === 0 ? (
+              <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#9B9A97', fontSize: '13px' }}>기록이 없습니다. 위 필터를 조정해보세요.</td></tr>
+            ) : (
+              filteredAndSorted.map(log => {
+                const logDate = getLogDate(log)
+                const d = logDate ? new Date(logDate + 'T12:00:00') : new Date(log.created_at)
+                const dateStr = d.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', year: 'numeric' })
+                const timeStr = new Date(log.created_at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
+                const drawn = log.drawn_cards ?? []
+                const preview = log.question.length > 30 ? log.question.slice(0, 30) + '…' : log.question
+                return (
+                  <tr key={log.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}
+                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.04)' }}
+                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent' }}
+                  >
+                    <td style={{ padding: '10px 12px', color: '#787774', whiteSpace: 'nowrap', cursor: onNavigateToDate && logDate ? 'pointer' : 'default' }} onClick={() => onNavigateToDate?.(logDate)} title={onNavigateToDate && logDate ? '클릭 시 캘린더에서 해당 날짜 보기' : undefined}>{dateStr} {timeStr}</td>
+                    <td style={{ padding: '10px 12px', color: '#37352F', cursor: 'pointer', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }} onClick={() => onSelectLog(log)} title={log.question}>{preview}</td>
+                    <td style={{ padding: '10px 12px', color: '#37352F' }}>{log.fortune_type ?? '-'}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center', color: '#37352F' }}>{log.fortune_score != null ? log.fortune_score : '-'}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                      {log.fortune_outcome === 'good' ? <span style={{ color: '#22c55e', fontWeight: 600 }}>좋음</span> : log.fortune_outcome === 'bad' ? <span style={{ color: '#ef4444', fontWeight: 600 }}>나쁨</span> : '-'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center', color: '#37352F' }}>{log.accuracy_score != null ? log.accuracy_score : '-'}</td>
+                    <td style={{ padding: '10px 12px', color: '#37352F', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={log.related_people ?? ''}>{log.related_people ?? '-'}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      {drawn.length > 0 ? (
+                        <span style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {drawn.slice(0, 2).map((c, i) => <span key={i} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(124,58,237,0.1)', color: '#7C3AED' }}>{c.emoji} {c.name_ko}</span>)}
+                          {drawn.length > 2 && <span style={{ fontSize: '10px', color: '#787774' }}>+{drawn.length - 2}</span>}
+                        </span>
+                      ) : '-'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                      <button onClick={() => onSelectLog(log)} title="수정" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', cursor: 'pointer', fontSize: '10px', marginRight: '4px' }}>✏️</button>
+                      <button onClick={() => onDeleteLog(log)} title="삭제" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: '10px' }}>🗑️</button>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -5069,17 +5375,11 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
   const filteredReadingLogs = useMemo(() => {
     if (!selectedCalendarDate) return readingLogs
     const sel = selectedCalendarDate
-    return readingLogs.filter(r => {
-      const d = new Date(r.created_at)
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      return `${y}-${m}-${day}` === sel
-    })
+    return readingLogs.filter(r => (r.event_date ?? toYMD(new Date(r.created_at))) === sel)
   }, [readingLogs, selectedCalendarDate])
 
   useEffect(() => {
-    fetchReadingLogs().then(setReadingLogs)
+    fetchFortuneEvents().then(setReadingLogs)
   }, [])
 
   useEffect(() => {
@@ -5109,7 +5409,7 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
 
   async function handleDeleteReading(log: ReadingLogRow) {
     if (!window.confirm('이 기록을 정말 삭제하시겠습니까?')) return
-    const ok = await deleteReadingLog(log.id)
+    const ok = await deleteFortuneEvent(log.id)
     if (ok) {
       setReadingLogs(prev => prev.filter(r => r.id !== log.id))
       if (detailLog?.id === log.id) setDetailLog(null)
@@ -5121,10 +5421,11 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
     const text = fortuneFeedback.trim()
     if (!text) return
     setSavingFeedback(true)
-    const row = await insertReadingLog(text, [])
+    const todayStr = toYMD(new Date())
+    const row = await insertFortuneFeedback(text, todayStr)
     setSavingFeedback(false)
     if (row) {
-      setReadingLogs(prev => [row, ...prev])
+      fetchFortuneEvents().then(setReadingLogs)
       setFortuneFeedback('')
       setSavedFeedback(true)
       setTimeout(() => setSavedFeedback(false), 2000)
@@ -5337,6 +5638,13 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
         </div>
       </div>
 
+      <FortuneRecordsSheet
+        readingLogs={readingLogs}
+        onSelectLog={log => setDetailLog(log)}
+        onDeleteLog={handleDeleteReading}
+        onNavigateToDate={date => setSelectedCalendarDate(date)}
+      />
+
       {deckFormState && (
         <DeckFormModal
           editingDeckId={deckFormState === 'add' ? null : deckFormState.id}
@@ -5358,7 +5666,7 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
         <ReadingLogEditModal
           log={detailLog}
           onClose={() => setDetailLog(null)}
-          onSaved={updated => { setReadingLogs(prev => prev.map(r => r.id === updated.id ? updated : r)); setDetailLog(updated); fetchReadingLogs().then(setReadingLogs) }}
+          onSaved={updated => { setReadingLogs(prev => prev.map(r => r.id === updated.id ? updated : r)); setDetailLog(updated); fetchFortuneEvents().then(setReadingLogs) }}
           onDeleted={() => { setReadingLogs(prev => prev.filter(r => r.id !== detailLog.id)); setDetailLog(null); onReadingSaved?.() }}
         />
       )}
@@ -5413,7 +5721,7 @@ function FortuneSpreadView({
       return
     }
     const drawnCards = flippedCards.map(c => ({ emoji: c.emoji, name_ko: c.name_ko, name_en: c.name_en }))
-    const row = await insertReadingLog(question, drawnCards)
+    const row = await insertFortuneEvent(question, drawnCards)
     if (row) {
       setFlippedCards([])
       onReadingSaved?.()
@@ -5609,21 +5917,77 @@ function FortunePage({ onReadingSaved }: { onReadingSaved?: () => void }) {
 // ═══════════════════════════════════════ TRAVEL ══════════════════════════════
 const TRAVEL_KEY = 'creative_os_travel_v1'
 const TRAVEL_TRIPS_KEY = 'creative_os_travel_trips_v1'
+const TRAVEL_TRIP_ORDER_KEY = 'creative_os_travel_trip_order_v1'
+const TRAVEL_HIDDEN_IDS_KEY = 'creative_os_travel_hidden_ids_v1'
+const TRAVEL_TRIP_OVERRIDES_KEY = 'creative_os_travel_trip_overrides_v1'
 
-type TravelTrip = { id: string; title: string; startDate: string; endDate: string; color: string; note: string; countryFlag?: string }
-const DEFAULT_TRAVEL_TRIPS: TravelTrip[] = [
-  { id: 'osaka-2026', title: '오사카 여행', startDate: '2026-04-27', endDate: '2026-04-30', color: '#f97316', note: '오사카성 · 만화박물관 · 도톤보리 거리 탐방', countryFlag: '🇯🇵' },
+const COUNTRY_OPTIONS: { code: string; name: string; flag: string }[] = [
+  { code: 'KR', name: '한국', flag: '🇰🇷' },
+  { code: 'JP', name: '일본', flag: '🇯🇵' },
+  { code: 'US', name: '미국', flag: '🇺🇸' },
+  { code: 'CN', name: '중국', flag: '🇨🇳' },
+  { code: 'TH', name: '태국', flag: '🇹🇭' },
+  { code: 'VN', name: '베트남', flag: '🇻🇳' },
+  { code: 'TW', name: '대만', flag: '🇹🇼' },
+  { code: 'SG', name: '싱가포르', flag: '🇸🇬' },
+  { code: 'MY', name: '말레이시아', flag: '🇲🇾' },
+  { code: 'GB', name: '영국', flag: '🇬🇧' },
+  { code: 'FR', name: '프랑스', flag: '🇫🇷' },
+  { code: 'IT', name: '이탈리아', flag: '🇮🇹' },
+  { code: 'ES', name: '스페인', flag: '🇪🇸' },
+  { code: 'AU', name: '호주', flag: '🇦🇺' },
+  { code: 'ETC', name: '기타', flag: '🌍' },
 ]
+
+type TravelTrip = { id: string; title: string; startDate: string; endDate: string; color: string; note: string; countryFlag?: string; isDomestic?: boolean }
+const DEFAULT_TRAVEL_TRIPS: TravelTrip[] = [
+  { id: 'osaka-2026', title: '오사카 여행', startDate: '2026-04-27', endDate: '2026-04-30', color: '#f97316', note: '오사카성 · 만화박물관 · 도톤보리 거리 탐방', countryFlag: '🇯🇵', isDomestic: false },
+  { id: 'busan-2025', title: '부산 여행', startDate: '2025-01-15', endDate: '2025-01-18', color: '#6366f1', note: '해운대 · 감천문화마을 · 자갈치시장', countryFlag: '🇰🇷', isDomestic: true },
+]
+
+/** 국내/국외 구분: isDomestic 우선, 없으면 countryFlag 🇰🇷 또는 제목에 한국 도시명 포함 시 국내 */
+function isDomesticTrip(trip: TravelTrip): boolean {
+  if (typeof trip.isDomestic === 'boolean') return trip.isDomestic
+  if (trip.countryFlag === '🇰🇷') return true
+  const domesticKeywords = ['부산', '서울', '제주', '강릉', '대구', '인천', '광주', '대전', '수원', '춘천', '전주', '여수']
+  return domesticKeywords.some(k => trip.title?.includes(k))
+}
 
 const TRIP_COLORS = ['#f97316', '#6366f1', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#7C3AED']
 
+function loadHiddenTripIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(TRAVEL_HIDDEN_IDS_KEY)
+    if (!raw) return new Set()
+    return new Set(JSON.parse(raw) as string[])
+  } catch { return new Set() }
+}
+function saveHiddenTripIds(ids: Set<string>) {
+  localStorage.setItem(TRAVEL_HIDDEN_IDS_KEY, JSON.stringify([...ids]))
+}
+
+function loadTripOverrides(): Record<string, Partial<TravelTrip>> {
+  try {
+    const raw = localStorage.getItem(TRAVEL_TRIP_OVERRIDES_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+function saveTripOverrides(overrides: Record<string, Partial<TravelTrip>>) {
+  localStorage.setItem(TRAVEL_TRIP_OVERRIDES_KEY, JSON.stringify(overrides))
+}
+
 function loadTravelTrips(): TravelTrip[] {
   try {
+    const hidden = loadHiddenTripIds()
+    const overrides = loadTripOverrides()
     const raw = localStorage.getItem(TRAVEL_TRIPS_KEY)
-    if (!raw) return DEFAULT_TRAVEL_TRIPS
+    if (!raw) {
+      return DEFAULT_TRAVEL_TRIPS.filter(t => !hidden.has(t.id)).map(t => ({ ...t, ...overrides[t.id] }))
+    }
     const saved = JSON.parse(raw) as TravelTrip[]
     const defaultIds = new Set(DEFAULT_TRAVEL_TRIPS.map(t => t.id))
-    return [...DEFAULT_TRAVEL_TRIPS, ...saved.filter(t => !defaultIds.has(t.id))]
+    const defaults = DEFAULT_TRAVEL_TRIPS.filter(t => !hidden.has(t.id)).map(t => ({ ...t, ...overrides[t.id] }))
+    return [...defaults, ...saved.filter(t => !defaultIds.has(t.id) && !hidden.has(t.id))]
   } catch { return DEFAULT_TRAVEL_TRIPS }
 }
 function saveTravelTrips(trips: TravelTrip[]) {
@@ -5631,6 +5995,21 @@ function saveTravelTrips(trips: TravelTrip[]) {
   const custom = trips.filter(t => !defaultIds.has(t.id))
   localStorage.setItem(TRAVEL_TRIPS_KEY, JSON.stringify(custom))
   kvSet(TRAVEL_TRIPS_KEY, custom)
+}
+
+function loadManualOrderIds(tripIds: string[]): string[] {
+  try {
+    const raw = localStorage.getItem(TRAVEL_TRIP_ORDER_KEY)
+    if (!raw) return tripIds
+    const saved = JSON.parse(raw) as string[]
+    const idSet = new Set(tripIds)
+    const valid = saved.filter(id => idSet.has(id))
+    const newIds = tripIds.filter(id => !valid.includes(id))
+    return [...valid, ...newIds]
+  } catch { return tripIds }
+}
+function saveManualOrderIds(ids: string[]) {
+  localStorage.setItem(TRAVEL_TRIP_ORDER_KEY, JSON.stringify(ids))
 }
 
 /** 2026.04.27 ~ 2026.04.30 형식 (년도 포함) */
@@ -5669,6 +6048,54 @@ function calcDDay(startDate: string): { text: string; isPast: boolean } {
   if (days > 0) return { text: `D-${days}`, isPast: false }
   if (days === 0) return { text: 'D-Day', isPast: false }
   return { text: '여행완료', isPast: true }
+}
+
+/** 천 단위 콤마 포맷 (예: 1,250,000) */
+function formatAmount(n: number): string {
+  return n.toLocaleString('ko-KR')
+}
+
+/** 카드 목록용 우측 정보: 연도 · 총점(게이지) · D-Day · 지출액 */
+function CardRightInfo({ year, totalScore, expenseTotal, ddayText }: { year: string; totalScore: number; expenseTotal: number; ddayText: string }) {
+  const pct = Math.min(100, Math.max(0, totalScore))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, minWidth: 88 }}>
+      <span style={{ fontSize: 14, fontWeight: 700, color: '#37352F', letterSpacing: '0.03em', textAlign: 'right' }}>{year}년</span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, width: '100%' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', textAlign: 'right' }}>{totalScore} / 100</span>
+        <div style={{ width: '100%', height: 4, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 999, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: '#8B5CF6', transition: 'width 0.3s ease' }} />
+        </div>
+      </div>
+      <span style={{ fontSize: 15, fontWeight: 700, color: '#475569', letterSpacing: '-0.02em', textAlign: 'right' }}>{ddayText}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', textAlign: 'right' }}>{formatAmount(expenseTotal)}원</span>
+    </div>
+  )
+}
+
+/** 대시보드 헤더 요약: 여행 총점(게이지) · D-Day · 가계부 총액 */
+function HeaderSummary({ totalScore, expenseTotal, ddayText }: { totalScore?: number; expenseTotal: number; ddayText: string }) {
+  const score = typeof totalScore === 'number' ? totalScore : 0
+  const pct = Math.min(100, Math.max(0, score))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, alignSelf: 'stretch', minWidth: 90 }}>
+      {/* 여행 총점: 2026년 아래, D-38 위 */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, width: '100%' }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: '#FFFFFF', textShadow: '0 1px 4px rgba(0,0,0,0.3)', textAlign: 'right' }}>
+          {score} / 100
+        </span>
+        <div style={{ width: '100%', height: 5, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 999, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: '#8B5CF6', transition: 'width 0.3s ease' }} />
+        </div>
+      </div>
+      <span style={{ fontSize: 22, fontWeight: 700, color: '#FFFFFF', textShadow: '0 1px 8px rgba(0,0,0,0.3)', textAlign: 'right' }}>
+        {ddayText}
+      </span>
+      <span style={{ fontSize: 15, fontWeight: 700, color: 'rgba(255,255,255,0.95)', textShadow: '0 1px 4px rgba(0,0,0,0.3)', textAlign: 'right' }}>
+        {formatAmount(expenseTotal)}원
+      </span>
+    </div>
+  )
 }
 
 type PackItem     = { id: string; label: string; checked: boolean }
@@ -5713,7 +6140,7 @@ type RetroTextQuestion = { id: string; label: string; placeholder?: string; sort
 type RetrospectiveTemplates = { ratingItems: RetroRatingItem[]; textQuestions: RetroTextQuestion[] }
 
 type TravelExpense = { id: string; date: string; category: string; usage: string; amount: number }
-type TravelReview = { ratings: Record<string, number>; textAnswers: Record<string, string> }
+type TravelReview = { ratings: Record<string, number>; textAnswers: Record<string, string>; totalScore?: number }
 type TripDetailData = {
   packing: PackCategory[]
   spots: TravelSpot[]
@@ -5993,7 +6420,8 @@ function TravelSettingsEditModal({
 
 function getDefaultTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
   const isOsaka = tripId === 'osaka-2026' || trip?.title?.includes('오사카')
-  return {
+  const isBusan = trip?.title?.includes('부산')
+  const base: TripDetailData = {
     packing: DEFAULT_PACKING.map(cat => ({ ...cat, items: cat.items.map(i => ({ ...i, checked: false })) })),
     spots: isOsaka ? [...DEFAULT_TRAVEL_SPOTS] : [],
     spotMemos: {},
@@ -6007,6 +6435,14 @@ function getDefaultTripDetail(tripId: string, trip?: TravelTrip): TripDetailData
       { icon: '🕐', text: '교토 당일치기 → 아침 일찍 출발해 후시미이나리 인파 피하기' },
     ] : [],
   }
+  if (isBusan) {
+    return {
+      ...base,
+      expenses: [{ id: 'ex_busan', date: '2025-01-15', category: 'other', usage: '예시', amount: 850000 }],
+      review: { ratings: {}, textAnswers: {}, totalScore: 92 },
+    }
+  }
+  return base
 }
 
 function loadTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
@@ -6041,7 +6477,10 @@ function loadTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
 function migrateReview(r: unknown): TravelReview | null {
   if (!r || typeof r !== 'object') return null
   const o = r as Record<string, unknown>
-  if (o.ratings && o.textAnswers && typeof o.ratings === 'object' && typeof o.textAnswers === 'object') return r as TravelReview
+  if (o.ratings && o.textAnswers && typeof o.ratings === 'object' && typeof o.textAnswers === 'object') {
+    const tr = r as TravelReview
+    return { ...tr, totalScore: typeof o.totalScore === 'number' ? o.totalScore : tr.totalScore }
+  }
   const ratings: Record<string, number> = {}
   const textAnswers: Record<string, string> = {}
   if (typeof o.satisfaction === 'number') ratings.satisfaction = o.satisfaction
@@ -6049,8 +6488,9 @@ function migrateReview(r: unknown): TravelReview | null {
   if (typeof o.weather === 'number') ratings.weather = o.weather
   if (typeof o.bestMoment === 'string') textAnswers.bestMoment = o.bestMoment
   if (typeof o.inspiration === 'string') textAnswers.inspiration = o.inspiration
-  if (Object.keys(ratings).length === 0 && Object.keys(textAnswers).length === 0) return null
-  return { ratings, textAnswers }
+  const totalScore = typeof o.totalScore === 'number' ? o.totalScore : undefined
+  if (Object.keys(ratings).length === 0 && Object.keys(textAnswers).length === 0 && totalScore == null) return null
+  return { ratings, textAnswers, totalScore }
 }
 
 function saveTripDetail(tripId: string, data: TripDetailData) {
@@ -6320,10 +6760,11 @@ function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBas
   const [form, setForm] = useState<TravelReview>(() => ({
     ratings: { ...review?.ratings },
     textAnswers: { ...review?.textAnswers },
+    totalScore: review?.totalScore,
   }))
 
   useEffect(() => {
-    if (review) setForm({ ratings: { ...review.ratings }, textAnswers: { ...review.textAnswers } })
+    if (review) setForm({ ratings: { ...review.ratings }, textAnswers: { ...review.textAnswers }, totalScore: review.totalScore })
   }, [review])
 
   const handleSave = () => {
@@ -6334,10 +6775,12 @@ function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBas
   const ratingItems = [...templates.ratingItems].sort((a, b) => a.sort_order - b.sort_order)
   const textQuestions = [...templates.textQuestions].sort((a, b) => a.sort_order - b.sort_order)
 
+  const starSize = isCompact ? 18 : 20
+  const starGap = isCompact ? 2 : 3
   const StarRating = ({ value, onChange, max = 5, emoji = '⭐' }: { value: number; onChange: (n: number) => void; max?: number; emoji?: string }) => (
-    <div style={{ display: 'flex', gap: 4 }}>
+    <div style={{ display: 'flex', gap: starGap, flexWrap: 'nowrap', minWidth: 0, alignItems: 'center' }}>
       {Array.from({ length: max }, (_, i) => (
-        <button key={i} type="button" onClick={() => onChange(i + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 24, opacity: i < value ? 1 : 0.25, transition: 'opacity 0.2s' }}>
+        <button key={i} type="button" onClick={() => onChange(i + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, fontSize: starSize, lineHeight: 1, opacity: i < value ? 1 : 0.25, transition: 'opacity 0.2s', flexShrink: 0 }}>
           {emoji}
         </button>
       ))}
@@ -6355,9 +6798,10 @@ function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBas
   }
 
   if (!editing && review) {
+    const hasTotalScore = typeof review.totalScore === 'number'
     const hasRatings = ratingItems.some(r => (review.ratings[r.id] ?? 0) > 0)
     const hasText = textQuestions.some(q => (review.textAnswers[q.id] ?? '').trim())
-    const hasContent = hasRatings || hasText
+    const hasContent = hasTotalScore || hasRatings || hasText
     return (
       <div style={{ width: '100%', padding: isCompact ? 20 : 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
@@ -6378,13 +6822,25 @@ function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBas
             <p style={{ margin: 0, fontSize: 14, color: '#9B9A97', fontStyle: 'italic' }}>아직 작성된 내용이 없어요. 편집 버튼을 눌러 회고록을 작성해보세요.</p>
           ) : (
           <>
+          {hasTotalScore && (
+            <div style={{ marginBottom: 16, minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 4 }}>총점</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: '#6366f1' }}>{review.totalScore}</span>
+                <span style={{ fontSize: 14, color: '#9B9A97' }}>/ 100</span>
+              </div>
+              <div style={{ height: 8, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 4, overflow: 'hidden', marginTop: 6 }}>
+                <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, review.totalScore ?? 0))}%`, borderRadius: 4, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', transition: 'width 0.3s ease' }} />
+              </div>
+            </div>
+          )}
           {ratingItems.map(r => {
             const v = review.ratings[r.id] ?? 0
             if (v <= 0) return null
             return (
-              <div key={r.id} style={{ marginBottom: 16 }}>
+              <div key={r.id} style={{ marginBottom: 16, minWidth: 0 }}>
                 <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 4 }}>{r.label}</p>
-                <span style={{ fontSize: 18 }}>{r.emoji.repeat(v)}</span>
+                <span style={{ fontSize: isCompact ? 16 : 18 }}>{r.emoji.repeat(v)}</span>
               </div>
             )
           })}
@@ -6424,16 +6880,38 @@ function TripRetrospective({ review, templates, onSave, onOpenSettings, inputBas
       )}
       <div style={cardStyle}>
         <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#787774', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 20 }}>여행 회고록</p>
-        {ratingItems.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: isCompact ? `repeat(${Math.min(ratingItems.length, 3)}, 1fr)` : `repeat(${Math.min(ratingItems.length, 4)}, 1fr)`, gap: isCompact ? 12 : 20, marginBottom: 20 }}>
-            {ratingItems.map(r => (
-              <div key={r.id}>
-                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8 }}>{r.label}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: `minmax(72px, 1fr) repeat(${ratingItems.length}, minmax(0, 1fr))`, gap: isCompact ? 16 : 24, marginBottom: 20, minWidth: 0, alignItems: 'stretch' }}>
+          {/* 총점 (만족도 별점 왼쪽) */}
+          <div style={{ minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8 }}>총점</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6, minHeight: 28 }}>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={form.totalScore ?? ''}
+                onChange={e => {
+                  const v = e.target.value === '' ? undefined : Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0))
+                  setForm(f => ({ ...f, totalScore: v }))
+                }}
+                placeholder="0"
+                style={{ width: 36, border: 'none', background: 'transparent', fontSize: 18, fontWeight: 800, color: '#6366f1', outline: 'none', fontFamily: 'inherit' }}
+              />
+              <span style={{ fontSize: 13, color: '#9B9A97', fontWeight: 500 }}>/ 100</span>
+            </div>
+            <div style={{ height: 8, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, form.totalScore ?? 0))}%`, borderRadius: 4, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+          {ratingItems.map(r => (
+            <div key={r.id} style={{ minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</p>
+              <div style={{ minHeight: 36, display: 'flex', alignItems: 'center' }}>
                 <StarRating value={form.ratings[r.id] ?? 0} onChange={v => setForm(f => ({ ...f, ratings: { ...f.ratings, [r.id]: v } }))} emoji={r.emoji} />
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ))}
+        </div>
         {textQuestions.map(q => (
           <div key={q.id} style={{ marginBottom: 20 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#787774', marginBottom: 8 }}>{q.label}</label>
@@ -7108,6 +7586,19 @@ function TravelPage() {
   const [retrospectiveTemplates, setRetrospectiveTemplates] = useState<RetrospectiveTemplates>(getDefaultRetrospectiveTemplates())
   const [travelSettingsOpen, setTravelSettingsOpen] = useState(false)
 
+  const [sortOrder, setSortOrder] = useState<'manual' | 'score' | 'expense' | 'date' | 'domestic'>('manual')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [filterYearStart, setFilterYearStart] = useState<number | ''>('')
+  const [filterYearEnd, setFilterYearEnd] = useState<number | ''>('')
+  const [filterDomestic, setFilterDomestic] = useState<'all' | 'domestic' | 'international'>('all')
+  const [filterCompleted, setFilterCompleted] = useState<'all' | 'planned' | 'completed'>('all')
+  const [filterMinScore, setFilterMinScore] = useState<number | ''>('')
+  const [filterMinAmount, setFilterMinAmount] = useState<number | ''>('')
+  const [manualOrderIds, setManualOrderIds] = useState<string[]>(() => loadManualOrderIds(loadTravelTrips().map(t => t.id)))
+  const [manageMode, setManageMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+
   useEffect(() => {
     loadExpenseCategories().then(setExpenseCategories)
     loadRetrospectiveTemplates().then(setRetrospectiveTemplates)
@@ -7115,6 +7606,66 @@ function TravelPage() {
 
   const trips = getTripsWithCalendarDates(tripsBase)
   const currentTrip = trips.find(t => t.id === selectedTrip)
+
+  // manualOrderIds 동기화 (trips 변경 시)
+  useEffect(() => {
+    const ids = trips.map(t => t.id)
+    const next = loadManualOrderIds(ids)
+    saveManualOrderIds(next)
+    setManualOrderIds(next)
+  }, [tripsBase])
+
+  // 정렬 및 필터 적용된 카드 목록
+  const sortedTrips = (() => {
+    const s = typeof filterYearStart === 'number' ? filterYearStart : null
+    const e = typeof filterYearEnd === 'number' ? filterYearEnd : null
+    const [startY, endY] = s != null && e != null && s > e ? [e, s] : [s, e]
+    const minScore = typeof filterMinScore === 'number' ? filterMinScore : null
+    const minAmount = typeof filterMinAmount === 'number' ? filterMinAmount : null
+    const filtered = trips.filter(trip => {
+      const y = parseInt(trip.startDate.split('-')[0], 10)
+      if (startY != null && y < startY) return false
+      if (endY != null && y > endY) return false
+      if (filterDomestic !== 'all') {
+        const dom = isDomesticTrip(trip)
+        if (filterDomestic === 'domestic' && !dom) return false
+        if (filterDomestic === 'international' && dom) return false
+      }
+      if (filterCompleted !== 'all') {
+        const dday = calcDDay(trip.startDate)
+        if (filterCompleted === 'planned' && dday.isPast) return false
+        if (filterCompleted === 'completed' && !dday.isPast) return false
+      }
+      if (minScore != null) {
+        const d = loadTripDetail(trip.id, trip)
+        const score = d.review?.totalScore ?? 0
+        if (score < minScore) return false
+      }
+      if (minAmount != null) {
+        const d = loadTripDetail(trip.id, trip)
+        const total = (d.expenses ?? []).reduce((s, e) => s + e.amount, 0)
+        if (total < minAmount) return false
+      }
+      return true
+    })
+    if (sortOrder === 'manual') {
+      const orderMap = new Map(manualOrderIds.map((id, i) => [id, i]))
+      return [...filtered].sort((a, b) => (orderMap.get(a.id) ?? 9999) - (orderMap.get(b.id) ?? 9999))
+    }
+    const withMeta = filtered.map(trip => {
+      const d = loadTripDetail(trip.id, trip)
+      return { trip, totalScore: d.review?.totalScore ?? 0, expenseTotal: (d.expenses ?? []).reduce((s, e) => s + e.amount, 0), isDomestic: isDomesticTrip(trip) }
+    })
+    const mult = sortDirection === 'desc' ? 1 : -1
+    const sorted = [...withMeta].sort((a, b) => {
+      if (sortOrder === 'score') return mult * (b.totalScore - a.totalScore)
+      if (sortOrder === 'expense') return mult * (b.expenseTotal - a.expenseTotal)
+      if (sortOrder === 'date') return mult * b.trip.startDate.localeCompare(a.trip.startDate)
+      if (sortOrder === 'domestic') return mult * ((b.isDomestic ? 1 : 0) - (a.isDomestic ? 1 : 0))
+      return 0
+    })
+    return sorted.map(x => x.trip)
+  })()
 
   // 여행별 상세 데이터 (선택된 여행에 따라 로드)
   const [detail, setDetail] = useState<TripDetailData>(() =>
@@ -7133,6 +7684,70 @@ function TravelPage() {
       saveTravelTrips(next)
       return next
     })
+    setManualOrderIds(prev => {
+      const next = [...prev, trip.id]
+      saveManualOrderIds(next)
+      return next
+    })
+  }
+
+  function updateTrip(tripId: string, patch: Partial<TravelTrip>) {
+    const p = { ...patch }
+    if (patch.countryFlag === '🇰🇷') p.isDomestic = true
+    else if (patch.countryFlag) p.isDomestic = false
+    const defaultIds = new Set(DEFAULT_TRAVEL_TRIPS.map(t => t.id))
+    if (defaultIds.has(tripId)) {
+      const overrides = loadTripOverrides()
+      overrides[tripId] = { ...overrides[tripId], ...p }
+      saveTripOverrides(overrides)
+    }
+    setTripsBase(prev => {
+      const next = prev.map(t => t.id === tripId ? { ...t, ...p } : t)
+      saveTravelTrips(next)
+      return next
+    })
+  }
+
+  function handleRemoveSelected() {
+    const idsToRemove = [...selectedIds]
+    const defaultIds = new Set(DEFAULT_TRAVEL_TRIPS.map(t => t.id))
+    idsToRemove.forEach(tripId => {
+      if (defaultIds.has(tripId)) {
+        const hidden = loadHiddenTripIds()
+        hidden.add(tripId)
+        saveHiddenTripIds(hidden)
+      }
+    })
+    setTripsBase(prev => {
+      const next = prev.filter(t => !selectedIds.has(t.id))
+      saveTravelTrips(next)
+      return next
+    })
+    setManualOrderIds(prev => {
+      const next = prev.filter(id => !selectedIds.has(id))
+      saveManualOrderIds(next)
+      return next
+    })
+    if (selectedIds.has(selectedTrip ?? '')) setSelectedTrip(null)
+    setSelectedIds(new Set())
+    setManageMode(false)
+    setDeleteConfirmOpen(false)
+  }
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const oldIdx = manualOrderIds.indexOf(active.id as string)
+    const newIdx = manualOrderIds.indexOf(over.id as string)
+    if (oldIdx === -1 || newIdx === -1) return
+    const next = arrayMove(manualOrderIds, oldIdx, newIdx)
+    setManualOrderIds(next)
+    saveManualOrderIds(next)
   }
 
   function persist(next: TripDetailData) {
@@ -7320,6 +7935,61 @@ function TravelPage() {
     outline: 'none', resize: 'none', boxSizing: 'border-box', lineHeight: '1.7', fontFamily: 'inherit',
   }
 
+  function SortableTripCard({ trip, dday, totalScore, expenseTotal, year, manageMode, selectedIds, onToggleSelect, onSelect, onUpdateCountry }: {
+    trip: TravelTrip
+    dday: { text: string; isPast: boolean }
+    totalScore: number
+    expenseTotal: number
+    year: string
+    manageMode: boolean
+    selectedIds: Set<string>
+    onToggleSelect: (e: React.MouseEvent) => void
+    onSelect?: () => void
+    onUpdateCountry: (flag: string) => void
+  }) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: trip.id })
+    const style: React.CSSProperties = {
+      display: 'flex', flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-between', gap: '16px',
+      padding: '28px 22px 24px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#FFFFFF',
+      boxShadow: isDragging ? '0 12px 28px rgba(0,0,0,0.2)' : '0 2px 12px rgba(0,0,0,0.06)',
+      cursor: manageMode ? 'default' : 'pointer', textAlign: 'left', transition, position: 'relative' as const,
+      transform: CSS.Transform.toString(transform), opacity: isDragging ? 0.9 : 1,
+    }
+    return (
+      <div ref={setNodeRef} style={style} onClick={onSelect} role="button" tabIndex={0}>
+        {manageMode && (
+          <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 1 }} onClick={e => { e.stopPropagation(); onToggleSelect(e); }}>
+            <input type="checkbox" checked={selectedIds.has(trip.id)} readOnly style={{ width: 18, height: 18, cursor: 'pointer', pointerEvents: 'none' }} />
+          </div>
+        )}
+        <div style={{ position: 'absolute', top: 12, right: 12, cursor: 'grab', touchAction: 'none', zIndex: 1 }} {...attributes} {...listeners} title="드래그하여 순서 변경">
+          <GripVertical size={18} color="#9B9A97" />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '10px', minWidth: 0, flex: 1, marginLeft: manageMode ? 28 : 0, marginRight: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: 6, ...(isDomesticTrip(trip) ? { color: '#16a34a', backgroundColor: '#f0fdf4' } : { color: '#2563eb', backgroundColor: '#eff6ff' }) }}>
+              {isDomesticTrip(trip) ? '국내' : '국외'}
+            </span>
+          </div>
+          <select value={COUNTRY_OPTIONS.find(c => c.flag === (trip.countryFlag ?? '🗾'))?.code ?? 'ETC'} onChange={e => { e.stopPropagation(); const o = COUNTRY_OPTIONS.find(c => c.code === e.target.value); if (o) onUpdateCountry(o.flag) }} onClick={e => e.stopPropagation()} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
+            {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
+          </select>
+          <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <span style={{ fontSize: '20px', lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
+            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#37352F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trip.title}</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
+            <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
+          </div>
+          {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
+        </div>
+        <CardRightInfo year={year} totalScore={totalScore} expenseTotal={expenseTotal} ddayText={dday.text} />
+      </div>
+    )
+  }
+
   // ── 목록 뷰 (List View) - image_0 스타일 + 국기/D-Day ──
   if (!selectedTrip) {
     return (
@@ -7337,69 +8007,196 @@ function TravelPage() {
             </span>
           )}
         </div>
+        {/* 정렬 및 연도 필터 */}
+        {trips.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginBottom: 20, padding: '14px 18px', background: 'rgba(99,102,241,0.06)', borderRadius: 12, border: '1px solid rgba(99,102,241,0.15)' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em' }}>정렬</span>
+            <select
+              value={sortOrder}
+              onChange={e => setSortOrder(e.target.value as 'manual' | 'score' | 'expense' | 'date' | 'domestic')}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#37352F', fontSize: 13, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+            >
+              <option value="date">날짜순</option>
+              <option value="score">총점순</option>
+              <option value="domestic">국내/국외순</option>
+              <option value="expense">가계부 금액순</option>
+              <option value="manual">자유 정렬 (Manual)</option>
+            </select>
+            {sortOrder !== 'manual' && (
+              <button
+                type="button"
+                onClick={() => setSortDirection(d => d === 'desc' ? 'asc' : 'desc')}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: sortDirection === 'desc' ? 'rgba(99,102,241,0.15)' : '#fff', color: '#4F46E5', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                title={sortDirection === 'desc' ? '내림차순 (클릭 시 오름차순)' : '오름차순 (클릭 시 내림차순)'}
+              >
+                {sortDirection === 'desc' ? '↓ 내림차순' : '↑ 오름차순'}
+              </button>
+            )}
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em', marginLeft: 8 }}>연도 필터</span>
+            <select
+              value={filterYearStart === '' ? '' : filterYearStart}
+              onChange={e => setFilterYearStart(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#37352F', fontSize: 13, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+            >
+              <option value="">전체</option>
+              {Array.from({ length: 31 }, (_, i) => 2000 + i).map(y => (
+                <option key={y} value={y}>{y}년</option>
+              ))}
+            </select>
+            <span style={{ fontSize: 13, color: '#9B9A97' }}>~</span>
+            <select
+              value={filterYearEnd === '' ? '' : filterYearEnd}
+              onChange={e => setFilterYearEnd(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#37352F', fontSize: 13, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+            >
+              <option value="">전체</option>
+              {Array.from({ length: 31 }, (_, i) => 2000 + i).map(y => (
+                <option key={y} value={y}>{y}년</option>
+              ))}
+            </select>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em', marginLeft: 12 }}>국내/국외</span>
+            <select value={filterDomestic} onChange={e => setFilterDomestic(e.target.value as 'all' | 'domestic' | 'international')} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#37352F', fontSize: 13, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
+              <option value="all">전체</option>
+              <option value="domestic">국내만</option>
+              <option value="international">국외만</option>
+            </select>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em', marginLeft: 8 }}>완료 여부</span>
+            <select value={filterCompleted} onChange={e => setFilterCompleted(e.target.value as 'all' | 'planned' | 'completed')} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#37352F', fontSize: 13, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
+              <option value="all">전체</option>
+              <option value="planned">예정</option>
+              <option value="completed">완료</option>
+            </select>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em', marginLeft: 8 }}>점수</span>
+            <input type="number" min={1} max={100} placeholder="이상" value={filterMinScore === '' ? '' : filterMinScore} onChange={e => setFilterMinScore(e.target.value === '' ? '' : Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0)))} style={{ width: 56, padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', fontSize: 13, outline: 'none' }} />
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', letterSpacing: '0.05em', marginLeft: 8 }}>금액</span>
+            <input type="number" min={0} placeholder="원 이상" value={filterMinAmount === '' ? '' : filterMinAmount} onChange={e => setFilterMinAmount(e.target.value === '' ? '' : Math.max(0, parseInt(String(e.target.value).replace(/\D/g, ''), 10) || 0))} style={{ width: 100, padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', fontSize: 13, outline: 'none' }} />
+            {(filterYearStart !== '' || filterYearEnd !== '' || filterDomestic !== 'all' || filterCompleted !== 'all' || filterMinScore !== '' || filterMinAmount !== '') && (
+              <button type="button" onClick={() => { setFilterYearStart(''); setFilterYearEnd(''); setFilterDomestic('all'); setFilterCompleted('all'); setFilterMinScore(''); setFilterMinAmount('') }} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: 'rgba(99,102,241,0.2)', color: '#4F46E5', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                필터 초기화
+              </button>
+            )}
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+              {manageMode ? (
+                <>
+                  {selectedIds.size > 0 && (
+                    <>
+                      <span style={{ fontSize: 13, color: '#6366f1', fontWeight: 600 }}>{selectedIds.size}개 선택</span>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirmOpen(true)}
+                        style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        선택 항목 삭제
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setManageMode(false); setSelectedIds(new Set()) }}
+                    style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.3)', background: '#fff', color: '#4F46E5', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    완료
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setManageMode(true)}
+                  style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  카드 관리
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         <div style={{
           display: 'grid',
           gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
           gap: '20px',
         }}>
-          {trips.map(trip => {
-            const dday = calcDDay(trip.startDate)
-            return (
-              <button
-                key={trip.id}
-                onClick={() => setSelectedTrip(trip.id)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  gap: '12px',
-                  padding: '24px 22px',
-                  borderRadius: '16px',
-                  border: '1px solid rgba(0,0,0,0.06)',
-                  backgroundColor: '#FFFFFF',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  transition: 'transform 0.2s, box-shadow 0.2s',
-                  position: 'relative',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = 'translateY(-4px)'
-                  e.currentTarget.style.boxShadow = '0 12px 28px rgba(0,0,0,0.12)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = 'translateY(0)'
-                  e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)'
-                }}
-              >
-                {/* 카드 우측 상단: 년도 */}
-                <span style={{ position: 'absolute', top: '16px', right: '18px', fontSize: '13px', fontWeight: 800, color: '#37352F', letterSpacing: '0.03em' }}>
-                  {trip.startDate.split('-')[0]}년
-                </span>
-                {/* 비행기 아이콘 (좌상단) */}
-                <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
-                {/* 녹색 일본 지도 + 제목 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '20px', lineHeight: 1, filter: 'hue-rotate(100deg) saturate(1.3)', display: 'inline-block' }} title="일본">🗾</span>
-                  <p style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#37352F' }}>{trip.title}</p>
-                </div>
-                {/* 국기 + 날짜 + D-Day (한 줄) */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px', minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: '1 1 auto', overflow: 'hidden' }}>
-                    <span style={{ width: 18, height: 14, borderRadius: 2, overflow: 'hidden', display: 'inline-block', flexShrink: 0 }}>
-                      <svg width="18" height="14" viewBox="0 0 20 15" xmlns="http://www.w3.org/2000/svg">
-                        <rect width="20" height="15" fill="#fff"/>
-                        <circle cx="10" cy="7.5" r="3.3" fill="#bc002d"/>
-                      </svg>
-                    </span>
-                    <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
+          {sortOrder === 'manual' ? (
+            <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={sortedTrips.map(t => t.id)} strategy={rectSortingStrategy}>
+                {sortedTrips.map(trip => (
+                  <SortableTripCard
+                    key={trip.id}
+                    trip={trip}
+                    dday={calcDDay(trip.startDate)}
+                    totalScore={loadTripDetail(trip.id, trip).review?.totalScore ?? 0}
+                    expenseTotal={(loadTripDetail(trip.id, trip).expenses ?? []).reduce((s, e) => s + e.amount, 0)}
+                    year={trip.startDate.split('-')[0]}
+                    manageMode={manageMode}
+                    selectedIds={selectedIds}
+                    onToggleSelect={e => { e.stopPropagation(); setSelectedIds(prev => { const n = new Set(prev); if (n.has(trip.id)) n.delete(trip.id); else n.add(trip.id); return n }) }}
+                    onSelect={manageMode ? undefined : () => setSelectedTrip(trip.id)}
+                    onUpdateCountry={flag => updateTrip(trip.id, { countryFlag: flag })}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            sortedTrips.map(trip => {
+              const dday = calcDDay(trip.startDate)
+              const detail = loadTripDetail(trip.id, trip)
+              const totalScore = detail.review?.totalScore ?? 0
+              const expenseTotal = (detail.expenses ?? []).reduce((s, e) => s + e.amount, 0)
+              const year = trip.startDate.split('-')[0]
+              return (
+                <div
+                  key={trip.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => !manageMode && setSelectedTrip(trip.id)}
+                  onKeyDown={e => { if (!manageMode && (e.key === 'Enter' || e.key === ' ')) setSelectedTrip(trip.id) }}
+                  style={{
+                    display: 'flex', flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-between', gap: '16px',
+                    padding: '28px 22px 24px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#FFFFFF',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.06)', cursor: manageMode ? 'default' : 'pointer', textAlign: 'left',
+                    transition: 'transform 0.2s, box-shadow 0.2s', position: 'relative',
+                  }}
+                  onMouseEnter={e => { if (!manageMode) { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 12px 28px rgba(0,0,0,0.12)' } }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)' }}
+                >
+                  {manageMode && (
+                    <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 1 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(trip.id)}
+                        onChange={ev => { ev.stopPropagation(); setSelectedIds(prev => { const n = new Set(prev); if (n.has(trip.id)) n.delete(trip.id); else n.add(trip.id); return n }) }}
+                        onClick={e => e.stopPropagation()}
+                        style={{ width: 18, height: 18, cursor: 'pointer' }}
+                      />
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '10px', minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', marginLeft: manageMode ? 28 : 0 }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: 6,
+                        ...(isDomesticTrip(trip) ? { color: '#16a34a', backgroundColor: '#f0fdf4' } : { color: '#2563eb', backgroundColor: '#eff6ff' }),
+                      }}>
+                        {isDomesticTrip(trip) ? '국내' : '국외'}
+                      </span>
+                    </div>
+                    <select value={COUNTRY_OPTIONS.find(c => c.flag === (trip.countryFlag ?? '🗾'))?.code ?? 'ETC'} onChange={e => { e.stopPropagation(); const o = COUNTRY_OPTIONS.find(c => c.code === e.target.value); if (o) updateTrip(trip.id, { countryFlag: o.flag }) }} onClick={e => e.stopPropagation()} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
+                      {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
+                    </select>
+                    <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                      <span style={{ fontSize: '20px', lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
+                      <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#37352F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trip.title}</p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                      <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
+                      <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
+                    </div>
+                    {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
                   </div>
-                  <span style={{ fontSize: '16px', color: dday.isPast ? '#94a3b8' : '#475569', fontWeight: 600, flexShrink: 0, letterSpacing: '-0.02em' }}>{dday.text}</span>
+                  <CardRightInfo year={year} totalScore={totalScore} expenseTotal={expenseTotal} ddayText={dday.text} />
                 </div>
-                {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
-              </button>
-            )
-          })}
+              )
+            })
+          )}
           <button
             onClick={() => setAddTripOpen(true)}
             style={{
@@ -7431,6 +8228,18 @@ function TravelPage() {
           </button>
         </div>
       </div>
+      {deleteConfirmOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setDeleteConfirmOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, maxWidth: 360, boxShadow: '0 2px 24px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#37352F' }}>삭제하시겠습니까?</p>
+            <p style={{ margin: '8px 0 16px', fontSize: 14, color: '#787774' }}>선택한 {selectedIds.size}개의 여행이 삭제됩니다.</p>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button onClick={() => setDeleteConfirmOpen(false)} style={{ padding: '10px 20px', borderRadius: 10, border: '1px solid rgba(0,0,0,0.12)', background: 'transparent', color: '#787774', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>취소</button>
+              <button onClick={handleRemoveSelected} style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: '#ef4444', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
       {addTripOpen && <AddTripModal onClose={() => setAddTripOpen(false)} onAdded={handleAddTrip} />}
       </>
     )
@@ -7541,7 +8350,7 @@ function TravelPage() {
         )}
 
         {/* 3-column Grid: 좌(캘린더) | 중(타이틀⬅️➡️메모) | 우(연도/아이콘/D-day) */}
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 1fr auto', gap: 32, alignItems: 'stretch', minHeight: 160 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 1fr auto', gap: 32, alignItems: 'stretch', minHeight: 180 }}>
           {/* 좌측: 캘린더 (Glassmorphism) */}
           {currentTrip && (() => {
             const [sy, sm, sd] = currentTrip.startDate.split('-').map(Number)
@@ -7549,10 +8358,10 @@ function TravelPage() {
             const start = new Date(sy, sm - 1, sd)
             const end = new Date(ey, em - 1, ed)
             const sameMonth = sy === ey && sm === em
-            const calW = isMobile ? 120 : 130
+            const calW = isMobile ? 130 : 150
             if (!sameMonth) {
               return (
-                <div style={{ width: calW, padding: '12px 10px', borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <div style={{ width: calW, padding: 16, borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, boxSizing: 'border-box' }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>📅</span>
                   <span style={{ fontSize: 12, fontWeight: 600, color: '#fff' }}>{sm}/{sd}~{em}/{ed}</span>
                 </div>
@@ -7567,9 +8376,9 @@ function TravelPage() {
               return dte >= start && dte <= end
             }
             return (
-              <div style={{ width: calW, padding: '12px 10px', borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{year}.{String(month + 1).padStart(2,'0')}</span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, width: '100%', justifyItems: 'center' }}>
+              <div style={{ width: calW, padding: 16, borderRadius: 14, background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, boxSizing: 'border-box' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.9)', flexShrink: 0 }}>{year}.{String(month + 1).padStart(2,'0')}</span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, width: '100%', justifyItems: 'center', minWidth: 0, overflow: 'hidden' }}>
                   {['일','월','화','수','목','금','토'].map(d => <span key={d} style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', textAlign: 'center', fontWeight: 600 }}>{d}</span>)}
                   {Array.from({ length: firstDay }, (_, i) => <span key={`e${i}`} />)}
                   {Array.from({ length: daysInMonth }, (_, i) => {
@@ -7578,7 +8387,7 @@ function TravelPage() {
                     return (
                       <span key={d} style={{
                         fontSize: 10, fontWeight: active ? 700 : 500, color: active ? '#fff' : 'rgba(255,255,255,0.5)',
-                        background: active ? ACCENT : 'transparent', borderRadius: 4, textAlign: 'center', padding: '2px 0', minWidth: 16, boxSizing: 'border-box',
+                        background: active ? ACCENT : 'transparent', borderRadius: 4, textAlign: 'center', padding: '2px 0', minWidth: 14, maxWidth: 18, boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis',
                       }}>{d}</span>
                     )
                   })}
@@ -7587,9 +8396,9 @@ function TravelPage() {
             )
           })()}
 
-          {/* 중앙: 타이틀(좌) ⬅️ ➡️ 메모장(우, flex-1) — 가로 한 줄, 절대 밑으로 안 떨어짐 */}
-          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 28, minWidth: 0, flex: 1, flexWrap: 'nowrap' }}>
-            <div style={{ flexShrink: 0, minWidth: 0, paddingTop: 2 }}>
+          {/* 중앙: 타이틀(좌) ⬅️ ➡️ 메모장(우, flex-1) — 하단 정렬, 메모장 세로 꽉 채움 */}
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 28, minWidth: 0, flex: 1, flexWrap: 'nowrap', alignSelf: 'stretch' }}>
+            <div style={{ flexShrink: 0, minWidth: 0, paddingBottom: 2 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span onClick={() => { const v = window.prompt('아이콘: 이모지 또는 URL', detail.heroIcon ?? '✈️'); if (v !== null) persist({ ...detail, heroIcon: v.trim() || '✈️' }) }} style={{ fontSize: 24, lineHeight: 1, cursor: 'pointer', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.4))' }}>
                   {detail.heroIcon?.startsWith('http') || detail.heroIcon?.startsWith('data:') ? (
@@ -7615,9 +8424,9 @@ function TravelPage() {
               value={detail.heroMemo ?? ''}
               onChange={e => persist({ ...detail, heroMemo: e.target.value })}
               placeholder="여행에 대한 메모를 자유롭게 적어보세요"
-              rows={2}
+              rows={4}
               style={{
-                flex: 1, minWidth: 180, maxWidth: '100%', minHeight: 72, padding: '12px 16px', borderRadius: 12,
+                flex: 1, minWidth: 180, maxWidth: '100%', minHeight: 100, alignSelf: 'stretch', padding: '12px 16px', borderRadius: 12,
                 border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.9)',
                 fontSize: 14, outline: 'none', resize: 'none', boxSizing: 'border-box',
               }}
@@ -7626,7 +8435,7 @@ function TravelPage() {
             />
           </div>
 
-          {/* 우측: 2026년(타이틀보다 작게) + 아이콘(소) + D-day(하단 정렬) */}
+          {/* 우측: 2026년 + 아이콘 + HeaderSummary(총점 · D-Day · 가계부 총액) */}
           {currentTrip && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', minWidth: 90 }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
@@ -7643,9 +8452,11 @@ function TravelPage() {
                   )}
                 </div>
               </div>
-              <span style={{ fontSize: 22, fontWeight: 700, color: ACCENT, marginTop: 'auto', textShadow: '0 1px 8px rgba(0,0,0,0.3)' }}>
-                {ddayResult.text}
-              </span>
+              <HeaderSummary
+                totalScore={review?.totalScore}
+                expenseTotal={expenses.reduce((s, e) => s + e.amount, 0)}
+                ddayText={ddayResult.text}
+              />
             </div>
           )}
         </div>
@@ -8111,6 +8922,20 @@ export default function App() {
         const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY]
         passThrough.forEach(k => { if (all[k]) localStorage.setItem(k, JSON.stringify(all[k])) })
       }),
+
+      // ⑥ CalStore → calendar_events 1회 마이그레이션
+      (async () => {
+        if (localStorage.getItem('cal_store_migrated_v1')) return
+        const events = (await fetchCalendarEventsByType('event')).length
+        if (events > 0) { localStorage.setItem('cal_store_migrated_v1', '1'); return }
+        const cal = loadCalendar()
+        for (const ev of cal.events) {
+          if (ev.startDate && ev.title) {
+            await insertEventEvent({ startDate: ev.startDate, endDate: ev.endDate ?? ev.startDate, color: ev.color ?? '#6366f1', note: ev.note ?? '', title: ev.title })
+          }
+        }
+        localStorage.setItem('cal_store_migrated_v1', '1')
+      })(),
     ])
       .then(() => { setSyncStatus('synced'); setTimeout(() => setSyncStatus('idle'), 3000) })
       .catch(() => { setSyncStatus('error'); setTimeout(() => setSyncStatus('idle'), 5000) })
@@ -8873,7 +9698,7 @@ export default function App() {
       {activePage === 'calendar' && (
         <UnifiedCalendar
           userQuests={userQuests}
-          onOpenNote={(id, title) => setNoteTarget({ table: 'journals', id, title })}
+          onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
           refreshTrigger={calendarRefreshKey}
         />
       )}
@@ -8893,6 +9718,8 @@ export default function App() {
           completedQuests={completedQuests}
           xpState={xpState}
           userQuests={userQuests}
+          onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
+          onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
         />
       )}
       {activePage === 'dashboard' && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
