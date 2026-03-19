@@ -2,7 +2,7 @@ import { createClient, type Session } from '@supabase/supabase-js'
 
 export type { Session }
 
-const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL      as string | undefined
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 
 export const supabase = (supabaseUrl && supabaseAnonKey)
@@ -34,7 +34,7 @@ export async function getSession(): Promise<Session | null> {
 }
 
 export function onAuthStateChange(callback: (session: Session | null) => void): () => void {
-  if (!supabase) return () => {}
+  if (!supabase) return () => { }
   const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
     callback(session)
   })
@@ -188,23 +188,32 @@ export async function fetchIdentities(): Promise<IdentityRow[]> {
   } catch (e) { console.error('[Supabase] fetchIdentities 예외:', e); return [] }
 }
 
-export async function insertIdentity(name: string, role_model?: string | null): Promise<IdentityRow | null> {
-  if (!supabase) return null
+export type InsertIdentityResult = { row: IdentityRow } | { error: string }
+
+export async function insertIdentity(name: string, role_model?: string | null): Promise<InsertIdentityResult> {
+  if (!supabase) return { error: 'Supabase가 연결되지 않았습니다. .env에 VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY를 확인하세요.' }
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: '로그인이 필요합니다.' }
   const { data, error } = await supabase
     .from('identities')
-    .insert({ name, role_model: role_model ?? null })
+    .insert({ user_id: user.id, name, role_model: role_model ?? null })
     .select('id, name, role_model, time_spent_sec, xp, sort_order, created_at')
     .single()
-  if (error) { console.error('[Supabase] insertIdentity 실패:', error.message); return null }
+  if (error) {
+    console.error('[Supabase] insertIdentity 실패:', error.message)
+    return { error: error.message || '정체성 추가에 실패했습니다.' }
+  }
   const r = data as Record<string, unknown>
   return {
-    id: String(r.id),
-    name: r.name as string,
-    role_model: r.role_model as string | null | undefined,
-    time_spent_sec: (r.time_spent_sec ?? 0) as number,
-    xp: (r.xp ?? 0) as number,
-    sort_order: r.sort_order as number | undefined,
-    created_at: r.created_at as string | undefined,
+    row: {
+      id: String(r.id),
+      name: r.name as string,
+      role_model: r.role_model as string | null | undefined,
+      time_spent_sec: (r.time_spent_sec ?? 0) as number,
+      xp: (r.xp ?? 0) as number,
+      sort_order: r.sort_order as number | undefined,
+      created_at: r.created_at as string | undefined,
+    },
   }
 }
 
@@ -229,6 +238,65 @@ export async function addIdentityTimeAndXp(id: string, additionalSec: number, ad
     .update({ time_spent_sec: curSec + additionalSec, xp: curXp + additionalXp })
     .eq('id', id)
   if (error) console.error('[Supabase] addIdentityTimeAndXp 실패:', error.message)
+}
+
+/** 현재 활성화된 정체성 ID 조회 (user_settings.current_identity_id) */
+export async function fetchActiveIdentity(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+  const { data, error } = await supabase
+    .from('user_settings')
+    .select('current_identity_id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (error) { console.error('[Supabase] fetchActiveIdentity 실패:', error.message); return null }
+  return data?.current_identity_id ? String(data.current_identity_id) : null
+}
+
+/** 활성 정체성 업데이트 (user_settings.current_identity_id) */
+export async function updateActiveIdentity(identityId: string | null): Promise<boolean> {
+  if (!supabase) return false
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return false
+  const { error } = await supabase.from('user_settings').upsert(
+    { user_id: user.id, current_identity_id: identityId, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' }
+  )
+  if (error) { console.error('[Supabase] updateActiveIdentity 실패:', error.message); return false }
+  return true
+}
+
+/** 집중 세션 완료: 활성 태세에 XP/시간 적립 + calendar_events에 focus_log 추가
+ * XP = 분 × 10 (최소 1)
+ * @returns { xpGain, identityName } 성공 시, null 실패 시 */
+export type AddFocusSessionResult = { xpGain: number; identityName: string } | { error: string }
+
+export async function addFocusSession(seconds: number): Promise<AddFocusSessionResult> {
+  if (!supabase || seconds <= 0) return { error: '유효하지 않은 집중 시간입니다.' }
+  const identityId = await fetchActiveIdentity()
+  if (!identityId) return { error: '먼저 태세를 선택해주세요.' }
+  const { data: identity } = await supabase.from('identities').select('id, name, time_spent_sec, xp').eq('id', identityId).single()
+  if (!identity) return { error: '선택한 정체성을 찾을 수 없습니다.' }
+  const curSec = (identity.time_spent_sec ?? 0) as number
+  const curXp = (identity.xp ?? 0) as number
+  const xpGain = Math.max(1, Math.floor(seconds / 60) * 10)
+  const newSec = curSec + seconds
+  const newXp = curXp + xpGain
+  const { error: updErr } = await supabase.from('identities').update({ time_spent_sec: newSec, xp: newXp }).eq('id', identityId)
+  if (updErr) { console.error('[Supabase] addFocusSession identities 업데이트 실패:', updErr.message); return { error: 'XP 적립에 실패했습니다.' } }
+  const today = new Date().toISOString().split('T')[0]
+  const minutes = Math.floor(seconds / 60)
+  const title = `[집중] ${identity.name} 태세로 ${minutes}분 몰입`
+  const content = { identity_id: identityId, identity_name: identity.name, seconds, minutes, xp_gain: xpGain }
+  const { error: insErr } = await supabase.from('calendar_events').insert({
+    event_date: today,
+    event_type: 'focus_log',
+    title,
+    content,
+  })
+  if (insErr) console.error('[Supabase] addFocusSession focus_log insert 실패:', insErr.message)
+  return { xpGain, identityName: identity.name as string }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -394,7 +462,7 @@ export async function fetchUserCreatedQuests(): Promise<UserQuestRow[]> {
       } catch { /* ignore */ }
       return {
         ...r,
-        id:         String(r.id),
+        id: String(r.id),
         project_id: r.project_id != null ? String(r.project_id) : null,
         identity_id: r.identity_id != null ? String(r.identity_id) : null,
         tags,
@@ -632,8 +700,8 @@ export async function fetchJournalNotes(params?: {
       .select('id, record_date, title, content, group_name, sub_name, created_at')
       .order('record_date', { ascending: false })
     if (params?.record_date) q = q.eq('record_date', params.record_date)
-    if (params?.group_name)  q = q.eq('group_name', params.group_name)
-    if (params?.sub_name)    q = q.eq('sub_name', params.sub_name)
+    if (params?.group_name) q = q.eq('group_name', params.group_name)
+    if (params?.sub_name) q = q.eq('sub_name', params.sub_name)
     const { data, error } = await q
     if (error || !data) { if (error) console.error('[Supabase] fetchJournalNotes 실패:', error.message); return [] }
     return data as JournalNoteRow[]
@@ -964,7 +1032,7 @@ export async function insertFortuneCard(deckId: string, nameKo: string, nameEn?:
 //  event_type으로 엄격히 구분, 공통 CRUD: insertCalendarEvent, updateCalendarEvent, deleteCalendarEvent
 //  각 도메인별 fetch* 함수가 event_type 필터로 해당 데이터만 조회
 // ══════════════════════════════════════════════════════════════════════════════
-export type CalendarEventType = 'fortune' | 'journal' | 'quest' | 'travel' | 'event'
+export type CalendarEventType = 'fortune' | 'journal' | 'quest' | 'travel' | 'event' | 'focus_log'
 
 export interface CalendarEventRow {
   id: string
@@ -1276,6 +1344,86 @@ export async function deleteEventEvent(id: string): Promise<boolean> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  calendar_events (travel) — 여행 프로젝트
+//  event_type='travel', content: { endDate, note, color, countryFlag?, spots? }
+//  note: "오사카성 · 도톤보리" 등 상세 내용
+// ══════════════════════════════════════════════════════════════════════════════
+export type TravelTripRow = {
+  id: string
+  title: string
+  startDate: string
+  endDate: string
+  color: string
+  note: string
+  countryFlag?: string
+  isDomestic?: boolean
+}
+
+/** calendar_events (travel) → TravelTripRow 변환 (content.note 등 파싱) */
+function calendarEventToTravelTrip(ce: CalendarEventRow): TravelTripRow {
+  const c = (ce.content ?? {}) as Record<string, unknown>
+  const note = String(c?.note ?? '').trim()
+  const spots = (c?.spots as unknown[]) ?? []
+  const spotNames = spots.map((s: unknown) => {
+    const o = s as Record<string, unknown>
+    return String(o?.name ?? o?.name_ko ?? o?.title ?? '')
+  }).filter(Boolean)
+  const noteDisplay = note || (spotNames.length ? spotNames.join(' · ') : '')
+  return {
+    id: String(ce.id),
+    title: ce.title || '여행',
+    startDate: ce.event_date ?? '',
+    endDate: String(c?.endDate ?? ce.event_date ?? ''),
+    color: String(c?.color ?? '#f97316'),
+    note: noteDisplay,
+    countryFlag: c?.countryFlag != null ? String(c.countryFlag) : undefined,
+    isDomestic: c?.isDomestic != null ? Boolean(c.isDomestic) : undefined,
+  }
+}
+
+/** 여행용: calendar_events에서 travel 타입 전체 조회 */
+export async function fetchTravelEvents(): Promise<TravelTripRow[]> {
+  const rows = await fetchCalendarEventsByType('travel')
+  return rows.map(calendarEventToTravelTrip)
+}
+
+/** 여행용: calendar_events에 여행 저장 */
+export async function insertTravelEvent(trip: Omit<TravelTripRow, 'id'>): Promise<TravelTripRow | null> {
+  const content: Record<string, unknown> = {
+    endDate: trip.endDate,
+    note: trip.note,
+    color: trip.color,
+  }
+  if (trip.countryFlag != null) content.countryFlag = trip.countryFlag
+  if (trip.isDomestic != null) content.isDomestic = trip.isDomestic
+  const row = await insertCalendarEvent('travel', trip.startDate, trip.title, content)
+  return row ? calendarEventToTravelTrip(row) : null
+}
+
+/** 여행용: calendar_events 여행 수정 */
+export async function updateTravelEvent(id: string, patch: Partial<Omit<TravelTripRow, 'id'>>): Promise<TravelTripRow | null> {
+  const existing = (await fetchCalendarEventsByType('travel')).find(r => String(r.id) === id)
+  if (!existing) return null
+  const c = { ...(existing.content as Record<string, unknown>) }
+  if (patch.endDate !== undefined) c.endDate = patch.endDate
+  if (patch.note !== undefined) c.note = patch.note
+  if (patch.color !== undefined) c.color = patch.color
+  if (patch.countryFlag !== undefined) c.countryFlag = patch.countryFlag
+  if (patch.isDomestic !== undefined) c.isDomestic = patch.isDomestic
+  const row = await updateCalendarEvent(id, {
+    event_date: patch.startDate ?? existing.event_date,
+    title: patch.title ?? existing.title,
+    content: c,
+  })
+  return row ? calendarEventToTravelTrip(row) : null
+}
+
+/** 여행용: calendar_events 여행 삭제 */
+export async function deleteTravelEvent(id: string): Promise<boolean> {
+  return deleteCalendarEvent(id)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  reading_logs (점괘 기록) — 레거시, calendar_events로 통합됨
 //  하위 호환을 위해 ReadingLogRow 타입 유지, calendar_events ↔ ReadingLogRow 변환
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1315,9 +1463,26 @@ export async function insertReadingLog(question: string, drawnCards: DrawnCardIt
     question,
     drawn_cards: payload,
     notes: null,
-  }).select().single()
+  }).select('id, question, drawn_cards, notes, created_at').single()
   if (error) { console.error('[Supabase] insertReadingLog 실패:', error.message); return null }
-  return { ...data, id: String(data.id), drawn_cards: normalizeDrawnCards(data.drawn_cards), notes: (data as { notes?: string }).notes ?? null } as ReadingLogRow
+  return data ? readingLogRowFromLegacy(data) : null
+}
+
+/** reading_logs → ReadingLogRow 변환 (기본 컬럼만 조회, 확장 필드는 null) */
+function readingLogRowFromLegacy(r: { id: unknown; question?: unknown; drawn_cards?: unknown; notes?: unknown; created_at?: unknown }): ReadingLogRow {
+  return {
+    id: String(r.id),
+    question: String(r.question ?? ''),
+    drawn_cards: normalizeDrawnCards(r.drawn_cards),
+    notes: (r.notes as string)?.trim() || null,
+    created_at: String(r.created_at ?? new Date().toISOString()),
+    event_date: (r.created_at as string)?.slice(0, 10) ?? undefined,
+    fortune_type: null,
+    fortune_score: null,
+    fortune_outcome: null,
+    accuracy_score: null,
+    related_people: null,
+  }
 }
 
 export async function fetchReadingLogs(): Promise<ReadingLogRow[]> {
@@ -1325,20 +1490,10 @@ export async function fetchReadingLogs(): Promise<ReadingLogRow[]> {
   try {
     const { data, error } = await supabase
       .from('reading_logs')
-      .select('id, question, drawn_cards, notes, created_at, fortune_type, fortune_score, fortune_outcome, accuracy_score, related_people')
+      .select('id, question, drawn_cards, notes, created_at')
       .order('created_at', { ascending: false })
     if (error || !data) { if (error) console.error('[Supabase] fetchReadingLogs 실패:', error.message); return [] }
-    return data.map(r => ({
-      ...r,
-      id: String(r.id),
-      drawn_cards: normalizeDrawnCards((r as { drawn_cards?: unknown }).drawn_cards),
-      notes: (r as { notes?: string }).notes ?? null,
-      fortune_type: (r as { fortune_type?: string }).fortune_type ?? null,
-      fortune_score: (r as { fortune_score?: number }).fortune_score ?? null,
-      fortune_outcome: (r as { fortune_outcome?: 'good' | 'bad' }).fortune_outcome ?? null,
-      accuracy_score: (r as { accuracy_score?: number }).accuracy_score ?? null,
-      related_people: (r as { related_people?: string }).related_people ?? null,
-    })) as ReadingLogRow[]
+    return data.map(r => readingLogRowFromLegacy(r))
   } catch (e) { console.error('[Supabase] fetchReadingLogs 예외:', e); return [] }
 }
 
@@ -1349,22 +1504,12 @@ export async function fetchReadingLogsInRange(startDate: string, endDate: string
     const endTs = `${endDate}T23:59:59.999Z`
     const { data, error } = await supabase
       .from('reading_logs')
-      .select('id, question, drawn_cards, notes, created_at, fortune_type, fortune_score, fortune_outcome, accuracy_score, related_people')
+      .select('id, question, drawn_cards, notes, created_at')
       .gte('created_at', startTs)
       .lte('created_at', endTs)
       .order('created_at', { ascending: false })
     if (error || !data) { if (error) console.error('[Supabase] fetchReadingLogsInRange 실패:', error.message); return [] }
-    return data.map(r => ({
-      ...r,
-      id: String(r.id),
-      drawn_cards: normalizeDrawnCards((r as { drawn_cards?: unknown }).drawn_cards),
-      notes: (r as { notes?: string }).notes ?? null,
-      fortune_type: (r as { fortune_type?: string }).fortune_type ?? null,
-      fortune_score: (r as { fortune_score?: number }).fortune_score ?? null,
-      fortune_outcome: (r as { fortune_outcome?: 'good' | 'bad' }).fortune_outcome ?? null,
-      accuracy_score: (r as { accuracy_score?: number }).accuracy_score ?? null,
-      related_people: (r as { related_people?: string }).related_people ?? null,
-    })) as ReadingLogRow[]
+    return data.map(r => readingLogRowFromLegacy(r))
   } catch (e) { console.error('[Supabase] fetchReadingLogsInRange 예외:', e); return [] }
 }
 
@@ -1377,9 +1522,9 @@ export async function deleteReadingLog(id: string): Promise<boolean> {
 
 export async function updateReadingLogNotes(id: string, notes: string): Promise<ReadingLogRow | null> {
   if (!supabase) return null
-  const { data, error } = await supabase.from('reading_logs').update({ notes: notes.trim() || null }).eq('id', id).select().single()
+  const { data, error } = await supabase.from('reading_logs').update({ notes: notes.trim() || null }).eq('id', id).select('id, question, drawn_cards, notes, created_at').single()
   if (error) { console.error('[Supabase] updateReadingLogNotes 실패:', error.message); return null }
-  return { ...data, id: String(data.id), drawn_cards: normalizeDrawnCards((data as { drawn_cards?: unknown }).drawn_cards), notes: (data as { notes?: string }).notes ?? null } as ReadingLogRow
+  return data ? readingLogRowFromLegacy(data) : null
 }
 
 export type ReadingLogPatch = {
@@ -1392,21 +1537,17 @@ export type ReadingLogPatch = {
   accuracy_score?: number | null
   related_people?: string | null
 }
+/** reading_logs 업데이트: 기본 컬럼(question, notes, created_at)만 사용 (확장 컬럼 없음) */
 export async function updateReadingLog(id: string, patch: ReadingLogPatch): Promise<ReadingLogRow | null> {
   if (!supabase) return null
   const payload: Record<string, unknown> = {}
   if (patch.question !== undefined) payload.question = patch.question
-  if (patch.notes !== undefined) payload.notes = patch.notes.trim() || null
+  if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null
   if (patch.created_at !== undefined) payload.created_at = patch.created_at
-  if (patch.fortune_type !== undefined) payload.fortune_type = patch.fortune_type ?? null
-  if (patch.fortune_score !== undefined) payload.fortune_score = patch.fortune_score ?? null
-  if (patch.fortune_outcome !== undefined) payload.fortune_outcome = patch.fortune_outcome ?? null
-  if (patch.accuracy_score !== undefined) payload.accuracy_score = patch.accuracy_score ?? null
-  if (patch.related_people !== undefined) payload.related_people = patch.related_people?.trim() || null
   if (Object.keys(payload).length === 0) return null
-  const { data, error } = await supabase.from('reading_logs').update(payload).eq('id', id).select().single()
+  const { data, error } = await supabase.from('reading_logs').update(payload).eq('id', id).select('id, question, drawn_cards, notes, created_at').single()
   if (error) { console.error('[Supabase] updateReadingLog 실패:', error.message); return null }
-  return { ...data, id: String(data.id), drawn_cards: normalizeDrawnCards((data as { drawn_cards?: unknown }).drawn_cards), notes: (data as { notes?: string }).notes ?? null } as ReadingLogRow
+  return data ? readingLogRowFromLegacy(data) : null
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
