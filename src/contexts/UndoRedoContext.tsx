@@ -84,7 +84,7 @@ export function UndoRedoProvider({ children }: { children: ReactNode }) {
 
   return (
     <UndoRedoContext.Provider value={value}>
-      <UndoRedoKeyListener undo={undo} redo={redo} canUndo={canUndo} canRedo={canRedo} />
+      <UndoRedoKeyListener undo={undo} redo={redo} />
       {children}
     </UndoRedoContext.Provider>
   )
@@ -95,34 +95,66 @@ function isTypingInEditable(): boolean {
   const el = document.activeElement
   if (!el) return false
   const tag = el.tagName?.toUpperCase()
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return true
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
   if ((el as HTMLElement).isContentEditable) return true
   return false
 }
 
-function UndoRedoKeyListener({ undo, redo, canUndo, canRedo }: {
+/**
+ * 전역 단축키 (포커스가 입력 필드가 아닐 때만)
+ * - Undo: Ctrl+Z / Cmd+Z
+ * - Redo: Ctrl+Shift+Z / Cmd+Shift+Z, Windows: Ctrl+Y
+ * canUndo/canRedo에 의존하지 않고 undo()/redo() 내부에서 스택 검사 (클로저/리렌더 타이밍 이슈 방지)
+ */
+function UndoRedoKeyListener({ undo, redo }: {
   undo: () => Promise<void>
   redo: () => Promise<void>
-  canUndo: boolean
-  canRedo: boolean
 }) {
+  const undoRef = useRef(undo)
+  const redoRef = useRef(redo)
+  undoRef.current = undo
+  redoRef.current = redo
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return
       if (isTypingInEditable()) return
-      const isMac = navigator.platform?.toLowerCase().includes('mac')
+
+      const isMac = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac')
       const mod = isMac ? e.metaKey : e.ctrlKey
-      if (!mod) return
-      if (e.key === 'z' || e.key === 'Z') {
-        if (e.shiftKey) {
-          if (canRedo) { e.preventDefault(); redo() }
-        } else {
-          if (canUndo) { e.preventDefault(); undo() }
-        }
+      if (!mod || e.altKey) return
+
+      const code = e.code
+      const isZ = code === 'KeyZ'
+      const isY = code === 'KeyY'
+
+      // Redo: Shift+Z (또는 Mac에서 흔한 조합)
+      if (isZ && e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        void redoRef.current()
+        return
+      }
+
+      // Undo: Z (Shift 없음)
+      if (isZ && !e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        void undoRef.current()
+        return
+      }
+
+      // Windows/Linux: Ctrl+Y = Redo (Office 등과 동일)
+      if (!isMac && isY && !e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        void redoRef.current()
+        return
       }
     }
     window.addEventListener('keydown', handler, { capture: true })
     return () => window.removeEventListener('keydown', handler, { capture: true })
-  }, [undo, redo, canUndo, canRedo])
+  }, [])
   return null
 }
 

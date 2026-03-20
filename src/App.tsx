@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { kvSet, kvGet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
 import {
@@ -33,6 +34,22 @@ import {
   type Session,
   type JournalCategoryRow, type JournalNoteRow, type ProjectRow, type AreaRow,
 } from './supabase'
+import { ManifestationPage } from './Manifestation'
+import { SettlementReviewPage } from './SettlementReviewPage'
+import { loadSettlementStore, SETTLEMENT_KEY, type SettlementEntry } from './settlementData'
+import { QuantumFlowPage } from './QuantumFlowPage'
+import { AccountLedgerPage } from './AccountLedgerPage'
+import { EvolutionPage } from './EvolutionPage'
+import { GoalsPage } from './GoalsPage'
+import { NetworkPage } from './NetworkPage'
+import { loadQuantumFlowStore, QUANTUM_FLOW_KEY, canReadLetter, type QuantumLetter } from './quantumFlowData'
+import { ACCOUNT_LEDGER_KEY } from './accountLedgerData'
+import { EVOLUTION_KEY } from './evolutionData'
+import { FragmentPage } from './FragmentPage'
+import { MasterBoardPage } from './MasterBoardPage'
+import { FRAGMENT_KEY } from './fragmentData'
+import { LevelupRpgPage } from './LevelupRpgPage'
+import { ProjectHubPage, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY } from './ProjectHubPage'
 import { loadStatus, recordFocusSession } from './utils/storage'
 import { useUndoRedo } from './contexts/UndoRedoContext'
 import Calendar from 'react-calendar'
@@ -40,8 +57,9 @@ import 'react-calendar/dist/Calendar.css'
 import {
   Trophy, BarChart3, BookOpen, Archive, CalendarDays,
   CheckCircle2, PenLine,
-  Scroll, Sparkles, Plus, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown,
-  Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, MoreVertical, Image, CalendarRange, Move, Settings, GripVertical,
+  Scroll, Sparkles, Plus, X, List, ChevronRight, ChevronLeft, ChevronUp, ChevronDown,
+  Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, MoreVertical, Image, File, FileText, FileSpreadsheet, Presentation, CalendarRange, Move, Settings, GripVertical,
+  type LucideIcon,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
@@ -54,20 +72,24 @@ import { Solar } from 'lunar-javascript'
 // ═══════════════════════════════════════ RESPONSIVE ═══════════════════════════
 /** GNB + HashRouter 경로 (하이픈 포함) */
 type PageId =
-  | 'beautiful-life'
+  | 'life'
+  | 'goals'
+  | 'evolution'
   | 'fortune'
   | 'manifestation'
-  | 'possession'
+  | 'act'
   | 'master-board'
   | 'levelup'
   | 'project'
   | 'quest'
+  | 'network'
   | 'review'
+  | 'quantum'
   | 'account'
   | 'travel'
   | 'fragment'
 
-const PAGE_IDS: PageId[] = ['beautiful-life', 'fortune', 'manifestation', 'possession', 'master-board', 'levelup', 'project', 'quest', 'review', 'account', 'travel', 'fragment']
+const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'levelup', 'project', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
 
 /** 오늘 날짜의 만세력 월·일 기둥 (예: 辛卯월 癸巳일) — lunar-javascript EightChar */
 function formatTodayGanzhiLine(d = new Date()): string {
@@ -75,6 +97,20 @@ function formatTodayGanzhiLine(d = new Date()): string {
   const lunar = solar.getLunar()
   const ec = lunar.getEightChar()
   return `${ec.getMonth()}월 ${ec.getDay()}일`
+}
+
+/** ISO 8601 주차 (1–53), 로컬 달력 날짜 기준 */
+function getISOWeekNumber(d: Date): number {
+  const date = new Date(d.getTime())
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7))
+  const week1 = new Date(date.getFullYear(), 0, 4)
+  return (
+    1 +
+    Math.round(
+      ((date.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7,
+    )
+  )
 }
 
 function useIsMobile(): boolean {
@@ -198,7 +234,7 @@ import '@blocknote/core/fonts/inter.css'
 import { useCreateBlockNote, useEditorChange } from '@blocknote/react'
 import { BlockNoteView } from '@blocknote/ariakit'
 import '@blocknote/ariakit/style.css'
-import type { PartialBlock } from '@blocknote/core'
+import type { BlockNoteEditor, PartialBlock } from '@blocknote/core'
 
 function blockNoteToPlainPreview(value: string, maxLen = 80): string {
   if (!value?.trim()) return ''
@@ -347,21 +383,226 @@ function RichEditor({ value, onChange, placeholder, minHeight = 400, readOnly, c
   )
 }
 
+/** Manifest 노트와 동일: 이미지·영상·오디오·파일 드롭 + / 슬래시 메뉴, notes에는 BlockNote JSON 저장 */
+function guessFortuneMediaKind(file: File): 'image' | 'video' | 'audio' | 'file' {
+  const t = (file.type || '').toLowerCase()
+  if (t.startsWith('image/')) return 'image'
+  if (t.startsWith('video/')) return 'video'
+  if (t.startsWith('audio/')) return 'audio'
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext)) return 'image'
+  if (['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v', 'mkv', 'avi'].includes(ext)) return 'video'
+  if (['mp3', 'wav', 'aac', 'm4a', 'flac', 'oga'].includes(ext)) return 'audio'
+  return 'file'
+}
+
+function fortuneFileToMediaBlock(file: File, url: string): PartialBlock {
+  const name = file.name || '파일'
+  const kind = guessFortuneMediaKind(file)
+  if (kind === 'image') return { type: 'image', props: { url, name } }
+  if (kind === 'video') return { type: 'video', props: { url, name, showPreview: true } }
+  if (kind === 'audio') return { type: 'audio', props: { url, name, showPreview: true } }
+  return { type: 'file', props: { url, name } }
+}
+
+function insertFortuneMediaBlocks(editor: BlockNoteEditor, blocks: PartialBlock[]) {
+  if (blocks.length === 0) return
+  const doc = editor.document
+  let refId: string | undefined
+  try {
+    const pos = editor.getTextCursorPosition()
+    if (pos?.block?.id) refId = pos.block.id
+  } catch { /* no cursor */ }
+  if (!refId && doc.length > 0) refId = doc[doc.length - 1].id
+  if (!refId) {
+    editor.replaceBlocks(doc, blocks)
+    return
+  }
+  editor.insertBlocks(blocks, refId, 'after')
+}
+
+function FortuneReadingBlockNoteSection({
+  bootstrapKey,
+  initialNotes,
+  onSerializedChange,
+}: {
+  bootstrapKey: string | number
+  initialNotes: string
+  onSerializedChange: (json: string) => void
+}) {
+  const initialBlocks = useMemo(() => parseToInitialBlocks(initialNotes), [bootstrapKey, initialNotes])
+
+  const uploadFile = useCallback(async (file: File): Promise<string> => {
+    try {
+      if (_sbClient) {
+        const { data: { session } } = await _sbClient.auth.getSession()
+        if (session) return await uploadImageToMedia(file)
+      }
+    } catch (e) {
+      console.warn('[운세 기록 본문 업로드]', e)
+    }
+    return await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result as string)
+      r.onerror = () => reject(new Error('파일 읽기 실패'))
+      r.readAsDataURL(file)
+    })
+  }, [])
+
+  const editor = useCreateBlockNote({ initialContent: initialBlocks, uploadFile }, [bootstrapKey])
+
+  useEditorChange(() => {
+    if (!editor) return
+    onSerializedChange(JSON.stringify(editor.document))
+  }, editor)
+
+  const [dropUploading, setDropUploading] = useState(false)
+  const [dragOverEditor, setDragOverEditor] = useState(false)
+
+  const handleEditorDragOver = useCallback((e: React.DragEvent) => {
+    if (!editor) return
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }, [editor])
+
+  const handleEditorDragEnter = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      setDragOverEditor(true)
+    }
+  }, [])
+
+  const handleEditorDragLeave = useCallback((e: React.DragEvent) => {
+    const related = e.relatedTarget as Node | null
+    if (!related || !e.currentTarget.contains(related)) setDragOverEditor(false)
+  }, [])
+
+  const handleEditorDrop = useCallback(
+    async (e: React.DragEvent) => {
+      if (!editor) return
+      setDragOverEditor(false)
+      const files = Array.from(e.dataTransfer?.files ?? []).filter(f => f.size > 0)
+      if (files.length === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      setDropUploading(true)
+      try {
+        const blocks: PartialBlock[] = []
+        for (const file of files) {
+          const url = await uploadFile(file)
+          blocks.push(fortuneFileToMediaBlock(file, url))
+        }
+        insertFortuneMediaBlocks(editor, blocks)
+      } catch (err) {
+        console.error('[운세 기록 드롭 삽입]', err)
+      } finally {
+        setDropUploading(false)
+      }
+    },
+    [editor, uploadFile],
+  )
+
+  return (
+    <div
+      className="bn-fortune-reading-editor"
+      style={{
+        marginTop: 4,
+        minHeight: 320,
+        position: 'relative',
+        borderRadius: 10,
+        border: '1px solid rgba(0,0,0,0.08)',
+        outline: dragOverEditor ? '2px dashed rgba(99,102,241,0.55)' : 'none',
+        outlineOffset: 2,
+        background: dragOverEditor ? 'rgba(99,102,241,0.04)' : '#fff',
+        transition: 'outline 0.12s ease, background 0.12s ease',
+        padding: '8px 4px 12px',
+      }}
+      data-color-scheme="light"
+      onDragEnter={handleEditorDragEnter}
+      onDragLeave={handleEditorDragLeave}
+      onDragOver={handleEditorDragOver}
+      onDrop={handleEditorDrop}
+    >
+      {dropUploading && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#4f46e5',
+            padding: '6px 12px',
+            borderRadius: 8,
+            background: 'rgba(99,102,241,0.12)',
+            border: '1px solid rgba(99,102,241,0.25)',
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 14,
+              height: 14,
+              border: '2px solid #6366f1',
+              borderTopColor: 'transparent',
+              borderRadius: '50%',
+              animation: 'fortune-note-spin 0.75s linear infinite',
+            }}
+          />
+          파일 넣는 중…
+        </div>
+      )}
+      {!editor ? (
+        <p style={{ color: '#9ca3af', fontSize: 14, padding: '8px 8px' }}>편집기 준비 중…</p>
+      ) : (
+        <BlockNoteView editor={editor} theme="light" editable />
+      )}
+      <style>{`
+        .bn-fortune-reading-editor .bn-editor {
+          font-size: 16px !important;
+          line-height: 1.7 !important;
+          background: transparent !important;
+          border: none !important;
+          padding: 4px 8px !important;
+        }
+        .bn-fortune-reading-editor {
+          --bn-colors-editor-background: #ffffff;
+          --bn-colors-editor-text: #37352f;
+        }
+        .bn-fortune-reading-editor img { max-width: 100% !important; border-radius: 8px !important; }
+        .bn-fortune-reading-editor video { max-width: 100% !important; border-radius: 8px !important; }
+        .bn-fortune-reading-editor audio { width: 100%; max-width: 560px; }
+        @keyframes fortune-note-spin { to { transform: rotate(360deg); } }
+      `}</style>
+    </div>
+  )
+}
+
 // ── MobileBottomNav ───────────────────────────────────────────────────────────
 function MobileBottomNav({ active }: { active: PageId }) {
   const ITEMS: { id: PageId; emoji: string; label: string }[] = [
-    { id: 'beautiful-life', emoji: '📅', label: 'Life' },
+    { id: 'life', emoji: '📅', label: 'Life' },
+    { id: 'goals', emoji: '🎯', label: 'Goals' },
+    { id: 'evolution', emoji: '🧬', label: 'Evo' },
     { id: 'fortune', emoji: '🔮', label: 'Fortune' },
     { id: 'manifestation', emoji: '✨', label: 'Cause' },
-    { id: 'possession', emoji: '🎭', label: 'Poss' },
+    { id: 'act', emoji: '🎭', label: 'Act' },
     { id: 'master-board', emoji: '📋', label: 'Board' },
     { id: 'levelup', emoji: '⬆️', label: 'Lv' },
     { id: 'project', emoji: '📁', label: 'Proj' },
     { id: 'quest', emoji: '⚡', label: 'Quest' },
     { id: 'review', emoji: '📓', label: 'Review' },
+    { id: 'quantum', emoji: '✦', label: 'Q' },
+    { id: 'network', emoji: '🌐', label: 'Net' },
     { id: 'account', emoji: '💰', label: 'Acct' },
     { id: 'travel', emoji: '✈️', label: 'Trip' },
-    { id: 'fragment', emoji: '◇', label: '···' },
+    { id: 'fragment', emoji: '◇', label: 'Note' },
   ]
   return (
     <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 500, display: 'flex', overflowX: 'auto', WebkitOverflowScrolling: 'touch', backgroundColor: 'rgba(255,255,255,0.95)', borderTop: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
@@ -2467,15 +2708,14 @@ function PomodoroModal({
 const WORLDS_KEY = 'creative_os_worlds_v1'
 
 // ═══════════════════════════════════════ REVIEW PAGE (구 Journal) ════════════
-function ReviewPage({ completedQuests, xpState, userQuests, onOpenNote, onJournalChange }: {
+function ReviewPage({ completedQuests, xpState, userQuests, onJournalChange }: {
   completedQuests: string[]
   xpState: XpState
   userQuests: Card[]
-  onOpenNote?: (id: string, title: string, meta?: { source?: 'calendar' }) => void
   onJournalChange?: () => void
 }) {
   const isMobile = useIsMobile()
-  const [journalTab, setJournalTab] = useState<'diary' | 'calendar'>('diary')
+  const [journalTab, setJournalTab] = useState<'diary' | 'settlement'>('diary')
   const todayKey = getTodayKey()
   const [store, setStore] = useState<JournalStore>(() => loadJournal())
   const [activeKey, setActiveKey] = useState(todayKey)
@@ -2546,14 +2786,14 @@ function ReviewPage({ completedQuests, xpState, userQuests, onOpenNote, onJourna
   if (!entryKeys.includes(todayKey)) entryKeys.unshift(todayKey)
   const totalXp = activeBlocks.length * XP_PER_QUEST
 
-  if (journalTab === 'calendar' && onOpenNote && onJournalChange) {
+  if (journalTab === 'settlement') {
     return (
       <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 48px' }}>
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '1px solid rgba(0,0,0,0.06)', paddingBottom: '12px' }}>
-          <button onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>창작 일지</button>
-          <button onClick={() => setJournalTab('calendar')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>저널 캘린더</button>
+          <button type="button" onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>창작 일지</button>
+          <button type="button" onClick={() => setJournalTab('settlement')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>결산</button>
         </div>
-        <JournalCalendarPage onOpenNote={onOpenNote} onJournalChange={onJournalChange} />
+        <SettlementReviewPage onSaved={onJournalChange} />
       </div>
     )
   }
@@ -2563,10 +2803,10 @@ function ReviewPage({ completedQuests, xpState, userQuests, onOpenNote, onJourna
       maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 48px',
       display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : 'calc(100vh - 52px)', overflow: isMobile ? 'visible' : 'hidden',
     }}>
-      {/* ── 탭 (창작 일지 / 저널 캘린더) ── */}
+      {/* ── 탭 (창작 일지 / 결산) — 저널 캘린더는 Beautiful Life → 저널 캘린더 ── */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0 }}>
-        <button onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>창작 일지</button>
-        <button onClick={() => setJournalTab('calendar')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>저널 캘린더</button>
+        <button type="button" onClick={() => setJournalTab('diary')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #6366f1', background: 'rgba(99,102,241,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>창작 일지</button>
+        <button type="button" onClick={() => setJournalTab('settlement')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', cursor: 'pointer', fontSize: '13px', color: '#787774' }}>결산</button>
       </div>
 
       {/* ── diary 본문: 좌측 날짜 목록 + 우측 에디터 ── */}
@@ -3223,14 +3463,24 @@ function getWeekEvents(week: string[], events: CalEvent[]): WeekEvent[] {
 // ══════════════════════════════════════════════════════════════════════════════
 //  UNIFIED CALENDAR — 퀘스트 마감일 + 데일리 저널 + 운세/기운 기록 통합
 // ══════════════════════════════════════════════════════════════════════════════
-type UnifiedEventType = 'quest' | 'journal' | 'fortune' | 'event'
+type UnifiedEventType = 'quest' | 'journal' | 'fortune' | 'event' | 'settlement' | 'quantum'
 type UnifiedEvent = { id: string; date: string; type: UnifiedEventType; title: string; meta?: unknown }
 
 function toYMD(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpenNote: (id: string, title: string, meta?: { source?: 'calendar' }) => void; userQuests: Card[]; refreshTrigger?: number }) {
+const SETTLEMENT_KIND_LABEL: Record<string, string> = {
+  daily: '일일',
+  weekly: '주간',
+  monthly: '월간',
+  quarterly: '분기',
+  yearly: '년간',
+  daeun: '대운',
+  topic: '주제별',
+}
+
+function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests: Card[]; refreshTrigger?: number }) {
   const isMobile = useIsMobile()
   const todayStr = toYMD(new Date())
   const [viewDate, setViewDate] = useState(new Date())
@@ -3239,6 +3489,10 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
   const [filterJournal, setFilterJournal] = useState(true)
   const [filterFortune, setFilterFortune] = useState(true)
   const [filterEvent, setFilterEvent] = useState(true)
+  const [filterSettlement, setFilterSettlement] = useState(true)
+  const [filterQuantum, setFilterQuantum] = useState(true)
+  const settlementStore = useMemo(() => loadSettlementStore(), [refreshTrigger])
+  const quantumStore = useMemo(() => loadQuantumFlowStore(), [refreshTrigger])
   const [dailyLogs, setDailyLogs] = useState<{ log_date: string; fortune_feedback?: string | null }[]>([])
   const [journalNotes, setJournalNotes] = useState<JournalNoteRow[]>([])
   const [journalEvents, setJournalEvents] = useState<Array<Omit<JournalNoteRow, 'id'> & { id: string }>>([])
@@ -3310,8 +3564,31 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
         out.push({ id: `f-${r.id}`, date: dateKey, type: 'fortune', title, meta: r })
       }
     }
+    if (filterSettlement) {
+      for (const e of settlementStore.entries) {
+        const kl = SETTLEMENT_KIND_LABEL[e.kind] ?? e.kind
+        out.push({
+          id: `st-${e.id}`,
+          date: e.anchorDate,
+          type: 'settlement',
+          title: `[결산] ${kl}`,
+          meta: e,
+        })
+      }
+    }
+    if (filterQuantum) {
+      for (const q of quantumStore.letters) {
+        out.push({
+          id: `qf-${q.id}`,
+          date: q.openDate,
+          type: 'quantum',
+          title: `[시공] ${q.title}`,
+          meta: q,
+        })
+      }
+    }
     return out
-  }, [userQuests, journalNotes, journalEvents, calEvents, readingLogs, filterQuest, filterJournal, filterEvent, filterFortune])
+  }, [userQuests, journalNotes, journalEvents, calEvents, readingLogs, settlementStore.entries, quantumStore.letters, filterQuest, filterJournal, filterEvent, filterFortune, filterSettlement, filterQuantum])
 
   const eventsByDate = useMemo(() => {
     const m: Record<string, UnifiedEvent[]> = {}
@@ -3329,12 +3606,16 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
     const hasJournal = evs.some(e => e.type === 'journal')
     const hasEvent = evs.some(e => e.type === 'event')
     const hasFortune = evs.some(e => e.type === 'fortune')
+    const hasSettlement = evs.some(e => e.type === 'settlement')
+    const hasQuantum = evs.some(e => e.type === 'quantum')
     return (
       <div style={{ display: 'flex', gap: '3px', justifyContent: 'center', marginTop: '2px' }}>
         {hasQuest && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'block' }} title="퀘스트 마감일" />}
         {hasJournal && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', display: 'block' }} title="데일리 저널" />}
         {hasEvent && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#34d399', display: 'block' }} title="캘린더 이벤트" />}
         {hasFortune && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#7C3AED', display: 'block' }} title="운세/기운 기록" />}
+        {hasSettlement && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#f59e0b', display: 'block' }} title="결산 기록" />}
+        {hasQuantum && <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22d3ee', display: 'block', boxShadow: '0 0 6px rgba(34,211,238,0.9)' }} title="시공편지 도착일" />}
       </div>
     )
   }, [eventsByDate])
@@ -3346,6 +3627,8 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
   const dayFortuneFeedback = dayReadings.filter(r => (r.drawn_cards ?? []).length === 0)
   const dayTarotReadings = dayReadings.filter(r => (r.drawn_cards ?? []).length > 0)
   const dayCalEvents = Array.from(new Map(dayEvents.filter(e => e.type === 'event').map(e => [(e.meta as { id: string }).id, e.meta as typeof calEvents[0]])).values())
+  const daySettlements = dayEvents.filter(e => e.type === 'settlement').map(e => e.meta as SettlementEntry)
+  const dayQuantum = dayEvents.filter(e => e.type === 'quantum').map(e => e.meta as QuantumLetter)
 
   function fmtDateKo(dk: string) {
     const d = new Date(dk + 'T00:00:00')
@@ -3365,7 +3648,7 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
     <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 44px' }}>
       <div style={{ marginBottom: '24px' }}>
         <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>📅 통합 캘린더</h1>
-        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세 기록을 한눈에 확인하세요</p>
+        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세, 결산, 시공편지 도착일을 한눈에 확인하세요</p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: '24px', alignItems: 'start' }}>
@@ -3389,6 +3672,14 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
               <input type="checkbox" checked={filterFortune} onChange={e => setFilterFortune(e.target.checked)} />
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#7C3AED' }} /> 운세/기운 기록
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterSettlement} onChange={e => setFilterSettlement(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#f59e0b' }} /> 결산 (Review)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#37352F' }}>
+              <input type="checkbox" checked={filterQuantum} onChange={e => setFilterQuantum(e.target.checked)} />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22d3ee', boxShadow: '0 0 4px rgba(34,211,238,0.8)' }} /> 시공편지
             </label>
           </div>
 
@@ -3414,7 +3705,7 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
             {selectedDate ? fmtDateKo(selectedDate) : '날짜를 선택하세요'}
           </h3>
           {!selectedDate ? (
-            <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>캘린더에서 날짜를 클릭하면 해당 날짜의 퀘스트, 저널, 운세 기록을 볼 수 있습니다.</p>
+            <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>캘린더에서 날짜를 클릭하면 해당 날짜의 퀘스트, 저널, 운세, 결산, 시공편지를 볼 수 있습니다.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {dayQuests.length > 0 && (
@@ -3433,7 +3724,7 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
                   <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
                     {dayJournals.map(n => (
                       <li key={n.id} style={{ marginBottom: '6px' }}>
-                        <Link to={`/review?note=${n.id}${(n as { fromCalendar?: boolean }).fromCalendar ? '&source=calendar' : ''}`} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left', textDecoration: 'none' }}>{n.title}</Link>
+                        <Link to={`/life?tab=journal&note=${n.id}${(n as { fromCalendar?: boolean }).fromCalendar ? '&source=calendar' : ''}`} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left', textDecoration: 'none' }}>{n.title}</Link>
                       </li>
                     ))}
                   </ul>
@@ -3518,7 +3809,42 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
                   </ul>
                 </div>
               )}
-              {dayQuests.length === 0 && dayJournals.length === 0 && dayReadings.length === 0 && dayCalEvents.length === 0 && (
+              {daySettlements.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#f59e0b', letterSpacing: '0.05em' }}>결산 (Review)</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
+                    {daySettlements.map(s => (
+                      <li key={s.id} style={{ marginBottom: '6px', fontSize: '13px', color: '#37352F' }}>
+                        <Link to="/review" style={{ color: '#6366f1', fontWeight: 600, textDecoration: 'none' }} title="Review → 결산 탭에서 편집">
+                          {SETTLEMENT_KIND_LABEL[s.kind] ?? s.kind} · {s.periodKey}
+                        </Link>
+                        {s.topicLabel && <span style={{ marginLeft: '6px', color: '#787774', fontSize: '12px' }}>({s.topicLabel})</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dayQuantum.length > 0 && (
+                <div>
+                  <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#0891b2', letterSpacing: '0.05em' }}>시공편지 (Quantum)</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
+                    {dayQuantum.map(q => {
+                      const readable = canReadLetter(q, todayStr)
+                      return (
+                        <li key={q.id} style={{ marginBottom: '8px', fontSize: '13px', color: '#37352F' }}>
+                          <Link to="/quantum" style={{ color: '#0891b2', fontWeight: 600, textDecoration: 'none' }} title="Quantum에서 열기">
+                            {q.title}
+                          </Link>
+                          {q.lockUntilOpen && !readable && (
+                            <span style={{ marginLeft: '8px', fontSize: '11px', color: '#787774' }}>🔒 도착일 전 잠금</span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+              {dayQuests.length === 0 && dayJournals.length === 0 && dayReadings.length === 0 && dayCalEvents.length === 0 && daySettlements.length === 0 && dayQuantum.length === 0 && (
                 <p style={{ margin: 0, fontSize: '13px', color: '#9B9A97' }}>이 날짜에 기록된 내용이 없습니다.</p>
               )}
             </div>
@@ -3583,6 +3909,78 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
         </div>
       )}
     </div>
+  )
+}
+
+/** Beautiful Life · 통합 캘린더 ↔ 저널 캘린더 탭 (`?tab=journal` + `note` 딥링크) */
+function BeautifulLifeSection({
+  userQuests,
+  onOpenNote,
+  calendarRefreshKey,
+  onJournalChange,
+}: {
+  userQuests: Card[]
+  onOpenNote: (id: string, title: string, meta?: { source?: 'calendar' }) => void
+  calendarRefreshKey: number
+  onJournalChange: () => void
+}) {
+  const isMobile = useIsMobile()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('tab') === 'journal' ? 'journal' : 'calendar'
+  const noteFromUrl = searchParams.get('note')
+
+  useEffect(() => {
+    if (noteFromUrl && tab === 'calendar') {
+      const next = new URLSearchParams(searchParams)
+      next.set('tab', 'journal')
+      setSearchParams(next, { replace: true })
+    }
+  }, [noteFromUrl, tab, searchParams, setSearchParams])
+
+  function setTab(next: 'calendar' | 'journal') {
+    const nextParams = new URLSearchParams(searchParams)
+    if (next === 'calendar') {
+      nextParams.delete('tab')
+      nextParams.delete('note')
+      nextParams.delete('source')
+    } else {
+      nextParams.set('tab', 'journal')
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
+
+  return (
+    <>
+      <div style={{
+        maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px 0' : '24px 48px 0',
+        display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center',
+        borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0,
+      }}>
+        <span style={{ fontSize: '11px', fontWeight: 800, color: '#9B9A97', marginRight: '8px', letterSpacing: '0.08em' }}>BEAUTIFUL LIFE</span>
+        <button type="button" onClick={() => setTab('calendar')} style={{
+          padding: '8px 16px', borderRadius: '8px',
+          border: tab === 'calendar' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+          background: tab === 'calendar' ? 'rgba(99,102,241,0.1)' : 'transparent',
+          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'calendar' ? 600 : 500,
+          color: tab === 'calendar' ? '#4F46E5' : '#787774',
+        }}>통합 캘린더</button>
+        <button type="button" onClick={() => setTab('journal')} style={{
+          padding: '8px 16px', borderRadius: '8px',
+          border: tab === 'journal' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+          background: tab === 'journal' ? 'rgba(99,102,241,0.1)' : 'transparent',
+          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'journal' ? 600 : 500,
+          color: tab === 'journal' ? '#4F46E5' : '#787774',
+        }}>저널 캘린더</button>
+      </div>
+      {tab === 'calendar' ? (
+        <UnifiedCalendar
+          userQuests={userQuests}
+          refreshTrigger={calendarRefreshKey}
+        />
+      ) : (
+        <JournalCalendarPage onOpenNote={onOpenNote} onJournalChange={onJournalChange} />
+      )}
+    </>
   )
 }
 
@@ -3867,7 +4265,7 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '8px' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <Link
-                          to={`/review?note=${note.id}&source=calendar`}
+                          to={`/life?tab=journal&note=${note.id}&source=calendar`}
                           style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#37352F', cursor: 'pointer', display: 'inline-block', textDecoration: 'none' }}
                           title="클릭하여 노트 열기 (Ctrl+클릭: 새 탭)"
                           onMouseEnter={e => (e.currentTarget.style.color = '#6366f1')}
@@ -4263,6 +4661,9 @@ function CalendarPage() {
   )
 }
 
+const ACT_ROLE_REF_KEY = 'act-role-reference-v1'
+const ACT_MASTER_KEY = 'act-master-area-v1'
+
 // ═══════════════════════════════════════ IDENTITY PAGE ══════════════════════════
 function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast }: {
   identities: IdentityRow[]
@@ -4272,6 +4673,8 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
   onToast?: (msg: string) => void
 }) {
   const isMobile = useIsMobile()
+  const [roleRefText, setRoleRefText] = useState('')
+  const [masterText, setMasterText] = useState('')
   const [newName, setNewName] = useState('')
   const [newRoleModel, setNewRoleModel] = useState('')
   const [adding, setAdding] = useState(false)
@@ -4279,6 +4682,33 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editRoleModel, setEditRoleModel] = useState('')
+
+  useEffect(() => {
+    try {
+      setRoleRefText(localStorage.getItem(ACT_ROLE_REF_KEY) ?? '')
+      setMasterText(localStorage.getItem(ACT_MASTER_KEY) ?? '')
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const persistRoleRef = useCallback((v: string) => {
+    setRoleRefText(v)
+    try {
+      localStorage.setItem(ACT_ROLE_REF_KEY, v)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const persistMaster = useCallback((v: string) => {
+    setMasterText(v)
+    try {
+      localStorage.setItem(ACT_MASTER_KEY, v)
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   async function handleSwitchStance(id: string) {
     if (activeIdentityId === id) return
@@ -4350,15 +4780,60 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
     return `${m}m`
   }
 
+  const actBox: React.CSSProperties = {
+    backgroundColor: '#FFFFFF',
+    borderRadius: '16px',
+    border: '1px solid rgba(0,0,0,0.08)',
+    padding: isMobile ? '18px 16px' : '24px 22px',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+  }
+
   return (
     <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
-      <div style={{ marginBottom: '28px' }}>
-        <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em', textTransform: 'uppercase' }}>🎭 Identity</span>
-        <h1 style={{ margin: '8px 0 0', fontSize: '28px', fontWeight: 900, color: '#37352F' }}>정체성 (우디르 태세)</h1>
-        <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>작업할 때 어떤 정체성으로 몰입하는지 정의하고, 누적 시간과 XP를 확인하세요</p>
+      <div style={{ marginBottom: '24px' }}>
+        <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em', textTransform: 'uppercase' }}>🎭 Act</span>
+        <h1 style={{ margin: '8px 0 0', fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 900, color: '#37352F' }}>Act</h1>
+        <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>역할참조 · 정체성 · Master를 한 화면에서 정리합니다</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        {/* ① 역할참조 */}
+        <section style={actBox}>
+          <span style={{ fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em' }}>ROLE REF</span>
+          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>역할참조</h2>
+          <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
+            지금 맡은 역할·참고할 롤모델·기대 행동을 적어 두세요. (이 기기 브라우저에만 저장)
+          </p>
+          <textarea
+            value={roleRefText}
+            onChange={e => persistRoleRef(e.target.value)}
+            placeholder="예: 팀에서의 역할, 본받고 싶은 사람, 이 역할에서 지켜야 할 태도…"
+            style={{
+              width: '100%',
+              minHeight: '120px',
+              padding: '12px 14px',
+              fontSize: '14px',
+              lineHeight: 1.55,
+              borderRadius: '12px',
+              border: '1px solid rgba(0,0,0,0.08)',
+              backgroundColor: '#fafafa',
+              color: '#37352F',
+              resize: 'vertical',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+            }}
+          />
+        </section>
+
+        {/* ② 정체성 */}
+        <section style={actBox}>
+          <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.12em' }}>IDENTITY</span>
+          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>정체성 (우디르 태세)</h2>
+          <p style={{ margin: '0 0 20px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
+            작업할 때 어떤 정체성으로 몰입하는지 정의하고, 누적 시간과 XP를 확인하세요
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
         {identities.map(idn => {
           const isActive = activeIdentityId === idn.id
           return (
@@ -4442,6 +4917,36 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
           <input value={newRoleModel} onChange={e => setNewRoleModel(e.target.value)} placeholder="롤모델 (선택)" style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', outline: 'none', fontSize: '13px' }} />
           <button onClick={handleAdd} disabled={!newName.trim() || adding} style={{ padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: newName.trim() && !adding ? '#6366f1' : '#EBEBEA', color: newName.trim() && !adding ? '#fff' : '#9B9A97', fontSize: '13px', fontWeight: 700, cursor: newName.trim() && !adding ? 'pointer' : 'default' }}>{adding ? '저장 중…' : '추가'}</button>
         </div>
+          </div>
+        </section>
+
+        {/* ③ Master */}
+        <section style={actBox}>
+          <span style={{ fontSize: '10px', fontWeight: 800, color: '#0d9488', letterSpacing: '0.12em' }}>MASTER</span>
+          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>Master</h2>
+          <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
+            한 단계 위 시야·원칙·메모를 적어 두세요. (이 기기 브라우저에만 저장)
+          </p>
+          <textarea
+            value={masterText}
+            onChange={e => persistMaster(e.target.value)}
+            placeholder="예: 이번 분기 원칙, 절대 지키고 싶은 기준, 마스터 보드와 연결할 아이디어…"
+            style={{
+              width: '100%',
+              minHeight: '120px',
+              padding: '12px 14px',
+              fontSize: '14px',
+              lineHeight: 1.55,
+              borderRadius: '12px',
+              border: '1px solid rgba(0,0,0,0.08)',
+              backgroundColor: '#fafafa',
+              color: '#37352F',
+              resize: 'vertical',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+            }}
+          />
+        </section>
       </div>
     </div>
   )
@@ -4712,6 +5217,8 @@ function toDatetimeLocal(iso: string): string {
 
 const DEFAULT_FORTUNE_TYPES = ['직장운', '애정운', '재물운', '건강운', '학업운', '인간관계운', '기타']
 
+const FORTUNE_READING_EDIT_Z = 50025
+
 function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   log: ReadingLogRow
   onClose: () => void
@@ -4720,33 +5227,53 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
 }) {
   const [question, setQuestion] = useState(log.question)
   const [notes, setNotes] = useState(log.notes ?? '')
+  /** 저장 시 즉시 반영(디바운스보다 최신 JSON 보장) */
+  const notesJsonRef = useRef<string>(log.notes ?? '')
+  const [notesBootstrapKey, setNotesBootstrapKey] = useState(0)
+  const lastSyncedNotesFromLogRef = useRef<{ id: string; notes: string | null | undefined }>({ id: log.id, notes: log.notes })
   const [createdAt, setCreatedAt] = useState(toDatetimeLocal(log.created_at))
   const [fortuneType, setFortuneType] = useState(log.fortune_type ?? '')
-  const [fortuneScore, setFortuneScore] = useState(log.fortune_score ?? '')
+  const [fortuneScore, setFortuneScore] = useState(log.fortune_score != null ? String(log.fortune_score) : '')
   const [fortuneOutcome, setFortuneOutcome] = useState<'good' | 'bad' | ''>(log.fortune_outcome ?? '')
-  const [accuracyScore, setAccuracyScore] = useState(log.accuracy_score ?? '')
+  const [accuracyScore, setAccuracyScore] = useState(log.accuracy_score != null ? String(log.accuracy_score) : '')
   const [relatedPeople, setRelatedPeople] = useState(log.related_people ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   useEffect(() => {
     setQuestion(log.question)
-    setNotes(log.notes ?? '')
+    const n = log.notes ?? ''
+    setNotes(n)
+    notesJsonRef.current = n
     setCreatedAt(toDatetimeLocal(log.created_at))
     setFortuneType(log.fortune_type ?? '')
     setFortuneScore(log.fortune_score != null ? String(log.fortune_score) : '')
     setFortuneOutcome(log.fortune_outcome ?? '')
     setAccuracyScore(log.accuracy_score != null ? String(log.accuracy_score) : '')
     setRelatedPeople(log.related_people ?? '')
+    const prev = lastSyncedNotesFromLogRef.current
+    if (prev.id !== log.id || prev.notes !== log.notes) {
+      lastSyncedNotesFromLogRef.current = { id: log.id, notes: log.notes }
+      setNotesBootstrapKey(k => k + 1)
+    }
   }, [log.id, log.question, log.notes, log.created_at, log.fortune_type, log.fortune_score, log.fortune_outcome, log.accuracy_score, log.related_people])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   async function handleSave() {
     if (!question.trim()) return
     setSaving(true)
     const fs = fortuneScore === '' ? undefined : Math.min(100, Math.max(1, parseInt(fortuneScore, 10) || 0))
     const acc = accuracyScore === '' ? undefined : Math.min(100, Math.max(1, parseInt(accuracyScore, 10) || 0))
+    const notesPayload = (notesJsonRef.current || '').trim() || undefined
     const updated = await updateFortuneEvent(log.id, {
       question: question.trim(),
-      notes: notes.trim() || undefined,
+      notes: notesPayload,
       created_at: new Date(createdAt).toISOString(),
       fortune_type: fortuneType.trim() || null,
       fortune_score: fs ?? null,
@@ -4772,89 +5299,297 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   }
 
   const drawn = log.drawn_cards ?? []
+  const headerEmoji = drawn[0]?.emoji ?? '🔮'
 
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', backgroundColor: 'rgba(0,0,0,0.4)' }} onClick={onClose}>
-      <div style={{ maxWidth: '520px', width: '100%', maxHeight: '90vh', overflow: 'auto', backgroundColor: '#fff', borderRadius: '16px', boxShadow: '0 2px 24px rgba(0,0,0,0.2)', padding: '24px' }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#37352F' }}>✏️ 기록 수정</h3>
-          <button onClick={onClose} style={{ padding: '6px', border: 'none', background: 'rgba(0,0,0,0.06)', borderRadius: '8px', cursor: 'pointer', color: '#787774' }}>✕</button>
-        </div>
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>날짜 및 시간</label>
-          <input type="datetime-local" value={createdAt} onChange={e => setCreatedAt(e.target.value)}
-            style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: '14px', color: '#37352F', outline: 'none' }}
-          />
-        </div>
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>질문 / 타이틀</label>
-          <textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="질문이나 운세 내용..."
-            style={{ width: '100%', minHeight: '80px', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '14px', color: '#37352F', lineHeight: 1.5, resize: 'vertical', outline: 'none' }}
-          />
-        </div>
-        {drawn.length > 0 && (
-          <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
-            {drawn.map((c, i) => (
-              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', borderRadius: '8px', backgroundColor: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', fontSize: '12px', color: '#37352F', fontWeight: 600 }}>
-                <span>{c.emoji}</span>
-                {c.name_ko ?? c.name_en}
-              </span>
-            ))}
-          </div>
-        )}
-        <div style={{ marginBottom: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>점괘 종류</label>
-            <input list="fortune-types" value={fortuneType} onChange={e => setFortuneType(e.target.value)} placeholder="직장운, 애정운 등"
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
-            />
-            <datalist id="fortune-types">{DEFAULT_FORTUNE_TYPES.map(t => <option key={t} value={t} />)}</datalist>
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>운세 좋음/나쁨</label>
-            <select value={fortuneOutcome} onChange={e => setFortuneOutcome(e.target.value as 'good' | 'bad' | '')}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+  const fieldInp: React.CSSProperties = {
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: 10,
+    border: '1px solid rgba(0,0,0,0.08)',
+    background: '#fff',
+    fontSize: 14,
+    color: '#37352f',
+    outline: 'none',
+    boxSizing: 'border-box',
+  }
+
+  if (typeof document === 'undefined') return null
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fortune-reading-edit-title"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: FORTUNE_READING_EDIT_Z,
+        background: 'rgba(15, 23, 42, 0.42)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        style={{
+          width: 'min(820px, 100%)',
+          maxHeight: 'min(92vh, 960px)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          background: '#ffffff',
+          borderRadius: 12,
+          border: '1px solid rgba(0,0,0,0.06)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.03)',
+          position: 'relative',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          aria-label="닫기"
+          onClick={onClose}
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            padding: 8,
+            borderRadius: 8,
+            border: 'none',
+            background: 'rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+            zIndex: 5,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <X size={18} color="#64748b" strokeWidth={2} />
+        </button>
+
+        <div style={{ overflowY: 'auto', flex: 1, padding: '28px 36px 16px', minHeight: 0 }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '0.12em',
+              color: '#7C3AED',
+            }}
+          >
+            운세 · 기록
+          </p>
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginTop: 10 }}>
+            <span
+              style={{
+                width: 56,
+                flexShrink: 0,
+                padding: '4px 2px',
+                fontSize: 40,
+                lineHeight: 1,
+                textAlign: 'center',
+                userSelect: 'none',
+              }}
+              title="뽑은 카드 대표"
+              aria-hidden
             >
-              <option value="">선택 안 함</option>
-              <option value="good">좋은 운세</option>
-              <option value="bad">나쁜 운세</option>
-            </select>
-          </div>
-        </div>
-        <div style={{ marginBottom: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>점괘 점수 (1~100)</label>
-            <input type="number" min={1} max={100} value={fortuneScore} onChange={e => setFortuneScore(e.target.value)} placeholder="점수"
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
+              {headerEmoji}
+            </span>
+            <textarea
+              id="fortune-reading-edit-title"
+              value={question}
+              onChange={e => setQuestion(e.target.value)}
+              placeholder="질문 / 타이틀"
+              rows={2}
+              style={{
+                flex: 1,
+                margin: 0,
+                padding: '4px 36px 4px 0',
+                fontSize: 'clamp(22px, 3.8vw, 32px)',
+                fontWeight: 800,
+                color: '#111827',
+                lineHeight: 1.25,
+                border: 'none',
+                outline: 'none',
+                background: 'transparent',
+                fontFamily: 'inherit',
+                resize: 'none',
+                minHeight: 44,
+                maxHeight: 120,
+                overflowY: 'auto',
+              }}
             />
           </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>적중도 (1~100)</label>
-            <input type="number" min={1} max={100} value={accuracyScore} onChange={e => setAccuracyScore(e.target.value)} placeholder="실제로 맞았는지"
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
-            />
+
+          {drawn.length > 0 && (
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <List size={16} color="#9ca3af" strokeWidth={2} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#787774' }}>[뽑은 카드]</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 20px', alignItems: 'flex-start' }}>
+                {drawn.map((c, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 4,
+                      width: 76,
+                      textAlign: 'center',
+                    }}
+                  >
+                    <span style={{ fontSize: 30, lineHeight: 1 }}>{c.emoji}</span>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        lineHeight: 1.35,
+                        letterSpacing: '-0.015em',
+                        color: '#111827',
+                        wordBreak: 'keep-all',
+                        overflow: 'hidden',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        width: '100%',
+                      }}
+                    >
+                      {c.name_ko ?? c.name_en ?? ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <List size={16} color="#9ca3af" strokeWidth={2} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#787774' }}>[기록]</span>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>날짜 및 시간</label>
+              <input type="datetime-local" value={createdAt} onChange={e => setCreatedAt(e.target.value)} style={fieldInp} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>점괘 종류</label>
+                <input list="fortune-types" value={fortuneType} onChange={e => setFortuneType(e.target.value)} placeholder="직장운, 애정운 등" style={fieldInp} />
+                <datalist id="fortune-types">{DEFAULT_FORTUNE_TYPES.map(t => <option key={t} value={t} />)}</datalist>
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>운세 좋음/나쁨</label>
+                <select value={fortuneOutcome} onChange={e => setFortuneOutcome(e.target.value as 'good' | 'bad' | '')} style={{ ...fieldInp, cursor: 'pointer' }}>
+                  <option value="">선택 안 함</option>
+                  <option value="good">좋은 운세</option>
+                  <option value="bad">나쁜 운세</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>점괘 점수 (1~100)</label>
+                <input type="number" min={1} max={100} value={fortuneScore} onChange={e => setFortuneScore(e.target.value)} placeholder="점수" style={fieldInp} />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>적중도 (1~100)</label>
+                <input type="number" min={1} max={100} value={accuracyScore} onChange={e => setAccuracyScore(e.target.value)} placeholder="실제로 맞았는지" style={fieldInp} />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>관련 인물</label>
+              <input type="text" value={relatedPeople} onChange={e => setRelatedPeople(e.target.value)} placeholder="예: 엄마, 직장 동료, 친구" style={fieldInp} />
+            </div>
           </div>
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <List size={16} color="#9ca3af" strokeWidth={2} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#787774' }}>[나의 해석 / 코멘트]</span>
+            </div>
+            <p style={{ margin: '0 0 8px', fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>본문</p>
+            <FortuneReadingBlockNoteSection
+              key={`${log.id}-${notesBootstrapKey}`}
+              bootstrapKey={`${log.id}-${notesBootstrapKey}`}
+              initialNotes={notes}
+              onSerializedChange={json => {
+                notesJsonRef.current = json
+                setNotes(json)
+              }}
+            />
+            <p style={{ margin: '12px 0 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.55 }}>
+              본문에서 <strong style={{ color: '#6b7280' }}>/</strong> 로 블록을 넣거나, <strong style={{ color: '#6b7280' }}>탐색기에서 이미지·영상·파일을 끌어다 놓으면</strong> 삽입됩니다. (로그인 시 클라우드 업로드, 비로그인 시 이 기기에만 보이는 방식으로 저장될 수 있어요.)
+            </p>
+          </div>
+
+          <p style={{ margin: '16px 0 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.5 }}>
+            질문은 위 제목란에, 해석·본문은 아래 편집기에 적을 수 있어요. 날짜·점수·종류 등은 [기록]에서 수정됩니다.
+          </p>
         </div>
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>관련 인물</label>
-          <input type="text" value={relatedPeople} onChange={e => setRelatedPeople(e.target.value)} placeholder="예: 엄마, 직장 동료, 친구"
-            style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '13px', color: '#37352F', outline: 'none' }}
-          />
-        </div>
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>나의 해석 / 코멘트</label>
-          <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="점괘에 대한 피드백, 해석, 느낀 점을 적어보세요..."
-            style={{ width: '100%', minHeight: '100px', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: '#F8F8F6', fontSize: '14px', color: '#37352F', lineHeight: 1.6, resize: 'vertical', outline: 'none' }}
-          />
-        </div>
-        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          <button onClick={handleDelete} style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.3)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>🗑️ 삭제</button>
-          <button onClick={handleSave} disabled={saving} style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', backgroundColor: saved ? '#34d399' : '#7C3AED', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.7 : 1 }}>
-            {saving ? '저장 중…' : saved ? '저장됨 ✓' : '수정 ✏️'}
+
+        <div
+          style={{
+            borderTop: '1px solid rgba(0,0,0,0.06)',
+            padding: '14px 24px',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 10,
+            flexShrink: 0,
+            flexWrap: 'wrap',
+            background: '#fff',
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleDelete}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: '1px solid rgba(239,68,68,0.35)',
+              background: 'rgba(239,68,68,0.06)',
+              color: '#dc2626',
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <Trash2 size={14} /> 삭제
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '10px 20px',
+              borderRadius: 10,
+              border: 'none',
+              background: saved ? '#10b981' : 'linear-gradient(135deg,#7c3aed,#6d28d9)',
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: saving ? 'wait' : 'pointer',
+              opacity: saving ? 0.75 : 1,
+            }}
+          >
+            <Pencil size={14} /> {saving ? '저장 중…' : saved ? '저장됨 ✓' : '수정'}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -5179,7 +5914,8 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
                   const drawn = log.drawn_cards ?? []
                   const hasCards = drawn.length > 0
                   const preview = log.question.length > 45 ? log.question.slice(0, 45) + '…' : log.question
-                  const notesPreview = (log.notes ?? '').length > 50 ? (log.notes ?? '').slice(0, 50) + '…' : (log.notes ?? '')
+                  const notesPlain = blockNoteToPlainPreview(log.notes ?? '', 120)
+                  const notesPreview = notesPlain.length > 50 ? notesPlain.slice(0, 50) + '…' : notesPlain
                   return (
                     <li
                       key={log.id}
@@ -5802,6 +6538,8 @@ const DEFAULT_TRAVEL_SPOTS = [
 type TravelSpot = { id: string; name: string; emoji: string; tag: string; desc: string }
 type ScheduleItem = { id: string; date: string; title: string; note: string; time?: string }
 type PhotoItem = { id: string; url: string; caption?: string }
+/** PDF·기타 여행 관련 파일 (티켓, 예약증 등) */
+type TripDocumentItem = { id: string; url: string; name: string }
 type ItineraryStep = { id: string; title?: string; imageUrl?: string; note?: string }
 type ExpenseCategory = { id: string; label: string; emoji: string; sort_order: number }
 type RetroRatingItem = { id: string; label: string; emoji: string; sort_order: number }
@@ -5815,6 +6553,8 @@ type TripDetailData = {
   spots: TravelSpot[]
   spotMemos: Record<string, string>
   schedule: ScheduleItem[]
+  /** 여행 일정과 사진 사이 — PDF 등 문서 */
+  documents: TripDocumentItem[]
   photos: PhotoItem[]
   tips?: { icon: string; text: string }[]
   coverImageUrl?: string
@@ -6095,6 +6835,7 @@ function getDefaultTripDetail(tripId: string, trip?: TravelTrip): TripDetailData
     spots: isOsaka ? [...DEFAULT_TRAVEL_SPOTS] : [],
     spotMemos: {},
     schedule: [],
+    documents: [],
     photos: [],
     itinerarySteps: DEFAULT_ITINERARY_STEPS,
     tips: isOsaka ? [
@@ -6130,6 +6871,7 @@ function loadTripDetail(tripId: string, trip?: TravelTrip): TripDetailData {
       spots: saved.spots?.length ? saved.spots : def.spots,
       spotMemos: saved.spotMemos ?? {},
       schedule: saved.schedule ?? [],
+      documents: saved.documents ?? [],
       photos: saved.photos ?? [],
       tips: saved.tips?.length ? saved.tips : def.tips,
       coverImageUrl: saved.coverImageUrl ?? def.coverImageUrl,
@@ -6848,6 +7590,13 @@ function AddTripModal({ onClose, onAdded }: { onClose: () => void; onAdded: (tri
   )
 }
 
+/** 탐색기 드래그 시 MIME이 비어 있는 경우 대비 */
+function isLikelyImageFileForTravel(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'heic', 'avif'].includes(ext)
+}
+
 // ── ItineraryStepBox ────────────────────────────────────────────────────────
 function ItineraryStepBox({
   step,
@@ -6863,17 +7612,65 @@ function ItineraryStepBox({
   uploadImageToMedia: (file: File) => Promise<string>
 }) {
   const [uploading, setUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const handleImageUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file?.type.startsWith('image/')) return
-    setUploading(true)
-    try {
-      const url = await uploadImageToMedia(file)
-      onUpdate({ imageUrl: url })
-    } catch (err) { console.error('[이미지 업로드 실패]', err) }
-    finally { setUploading(false); e.target.value = '' }
-  }, [onUpdate, uploadImageToMedia])
+
+  const processImageFile = useCallback(
+    async (file: File) => {
+      if (!isLikelyImageFileForTravel(file)) return
+      setUploading(true)
+      try {
+        const url = await uploadImageToMedia(file)
+        onUpdate({ imageUrl: url })
+      } catch (err) {
+        console.error('[이미지 업로드 실패]', err)
+      } finally {
+        setUploading(false)
+      }
+    },
+    [onUpdate, uploadImageToMedia],
+  )
+
+  const handleImageUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (file) await processImageFile(file)
+      e.target.value = ''
+    },
+    [processImageFile],
+  )
+
+  const handleImageDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }, [])
+
+  const handleImageDragEnter = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      setDragOver(true)
+    }
+  }, [])
+
+  const handleImageDragLeave = useCallback((e: React.DragEvent) => {
+    const related = e.relatedTarget as Node | null
+    if (!related || !e.currentTarget.contains(related)) setDragOver(false)
+  }, [])
+
+  const handleImageDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDragOver(false)
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      const imageFile = files.find(f => isLikelyImageFileForTravel(f))
+      if (imageFile) await processImageFile(imageFile)
+    },
+    [processImageFile],
+  )
 
   return (
     <div style={{
@@ -6897,7 +7694,20 @@ function ItineraryStepBox({
         )}
       </div>
       <div
+        role="button"
+        tabIndex={0}
+        title="클릭하거나 탐색기에서 사진을 끌어다 놓기"
         onClick={() => fileRef.current?.click()}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            fileRef.current?.click()
+          }
+        }}
+        onDragEnter={handleImageDragEnter}
+        onDragLeave={handleImageDragLeave}
+        onDragOver={handleImageDragOver}
+        onDrop={handleImageDrop}
         style={{
           flex: 1,
           minHeight: 64,
@@ -6907,10 +7717,19 @@ function ItineraryStepBox({
           justifyContent: 'center',
           cursor: 'pointer',
           position: 'relative',
+          outline: dragOver ? '2px dashed rgba(99,102,241,0.65)' : 'none',
+          outlineOffset: -2,
+          boxShadow: dragOver ? 'inset 0 0 0 2px rgba(99,102,241,0.12)' : 'none',
+          transition: 'outline 0.12s ease, box-shadow 0.12s ease',
         }}
       >
         <input ref={fileRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
         {!step.imageUrl && (uploading ? <span style={{ fontSize: '11px', color: '#94a3b8' }}>업로드 중…</span> : <Image size={22} color="#94a3b8" />)}
+        {dragOver && !uploading && (
+          <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(99,102,241,0.12)', fontSize: 10, fontWeight: 800, color: '#4f46e5', pointerEvents: 'none' }}>
+            여기에 놓기
+          </span>
+        )}
       </div>
       <input
         value={step.title ?? ''}
@@ -7223,6 +8042,418 @@ function TripPhotosSection({
   )
 }
 
+/** 파일명 확장자 → 탐색기 스타일 아이콘·배지 색 */
+function getTravelDocVisual(fileName: string): { Icon: LucideIcon; iconColor: string; badge: string } {
+  const ext = (fileName.split('.').pop() || '').toLowerCase()
+  if (ext === 'pdf') return { Icon: FileText, iconColor: '#c62828', badge: 'PDF' }
+  if (ext === 'doc' || ext === 'docx') return { Icon: FileText, iconColor: '#1565c0', badge: 'DOC' }
+  if (ext === 'xls' || ext === 'xlsx') return { Icon: FileSpreadsheet, iconColor: '#2e7d32', badge: 'XLS' }
+  if (ext === 'ppt' || ext === 'pptx') return { Icon: Presentation, iconColor: '#e65100', badge: 'PPT' }
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return { Icon: Archive, iconColor: '#f57c00', badge: ext.toUpperCase() }
+  if (['txt', 'md', 'rtf', 'csv'].includes(ext)) return { Icon: FileText, iconColor: '#546e7a', badge: ext.toUpperCase() }
+  if (ext === 'hwp' || ext === 'hwpx') return { Icon: FileText, iconColor: '#3949ab', badge: 'HWP' }
+  return { Icon: File, iconColor: '#607d8b', badge: ext ? ext.toUpperCase().slice(0, 5) : 'FILE' }
+}
+
+/** 사진·영상·음원 제외 — 여행 문서(PDF 등)로 취급 */
+function isTravelDocumentFile(file: File): boolean {
+  const t = (file.type || '').toLowerCase()
+  if (t.startsWith('image/') || t.startsWith('video/') || t.startsWith('audio/')) return false
+  if (t) return true
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'hwp', 'hwpx', 'csv', 'md', 'zip', '7z', 'rar'].includes(ext)
+}
+
+// ── TripDocumentsSection (여행 일정 ↔ 여행 사진 사이) ─────────────────────────
+function TripDocumentsSection({
+  detail,
+  onAdd,
+  onUpdate,
+  onRemove,
+  inputBase,
+}: {
+  detail: TripDetailData
+  onAdd: (url: string, name: string) => void
+  onUpdate: (id: string, patch: Partial<TripDocumentItem>) => void
+  onRemove: (id: string) => void
+  inputBase: React.CSSProperties
+}) {
+  const [urlInput, setUrlInput] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const uploadOne = useCallback(
+    async (file: File) => {
+      if (!isTravelDocumentFile(file)) return
+      const url = await uploadImageToMedia(file)
+      onAdd(url, file.name || '문서')
+    },
+    [onAdd],
+  )
+
+  const handleUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      setUploading(true)
+      try {
+        await uploadOne(file)
+      } catch (err) {
+        console.error('[여행 문서 업로드 실패]', err)
+      } finally {
+        setUploading(false)
+        e.target.value = ''
+      }
+    },
+    [uploadOne],
+  )
+
+  const [isDragging, setIsDragging] = useState(false)
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer?.types?.includes('Files')) setIsDragging(true)
+  }, [])
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const related = e.relatedTarget as Node | null
+    if (!related || !e.currentTarget.contains(related)) setIsDragging(false)
+  }, [])
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragging(false)
+      const files = Array.from(e.dataTransfer?.files ?? []).filter(isTravelDocumentFile)
+      if (files.length === 0) return
+      setUploading(true)
+      try {
+        for (const file of files) {
+          await uploadOne(file)
+        }
+      } catch (err) {
+        console.error('[여행 문서 드롭 실패]', err)
+      } finally {
+        setUploading(false)
+      }
+    },
+    [uploadOne],
+  )
+
+  const handleAddByUrl = () => {
+    const url = urlInput.trim()
+    if (!url) return
+    const tail = url.split('/').pop()?.split('?')[0] || '문서'
+    let name = tail
+    try {
+      name = decodeURIComponent(tail)
+    } catch { /* keep */ }
+    onAdd(url, name)
+    setUrlInput('')
+  }
+
+  const docs = detail.documents ?? []
+  const [editingDocId, setEditingDocId] = useState<string | null>(null)
+  const [hoverDocId, setHoverDocId] = useState<string | null>(null)
+
+  return (
+    <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg,#14b8a6,#0d9488)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(20,184,166,0.35)' }}>
+            <FileText size={18} color="#fff" />
+          </div>
+          <div>
+            <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#0d9488', letterSpacing: '0.2em', textTransform: 'uppercase' }}>문서</p>
+            <p style={{ margin: 0, fontSize: '19px', fontWeight: 900, color: '#37352F' }}>여행 문서</p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.hwp,.hwpx,.zip,.csv,application/pdf,application/*"
+            onChange={handleUpload}
+            style={{ display: 'none' }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
+              border: '1px solid rgba(13,148,136,0.35)', backgroundColor: 'rgba(13,148,136,0.08)', color: '#0f766e',
+              fontSize: '11px', fontWeight: 700, cursor: uploading ? 'wait' : 'pointer',
+            }}
+          >
+            {uploading ? '업로드 중…' : '📤 문서 추가'}
+          </button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleAddByUrl()}
+              placeholder="파일 URL 붙여넣기"
+              style={{ ...inputBase, width: '200px', padding: '8px 12px' }}
+            />
+            <button
+              type="button"
+              onClick={handleAddByUrl}
+              style={{
+                padding: '8px 14px', borderRadius: '10px', border: 'none',
+                background: 'linear-gradient(135deg,#14b8a6,#0d9488)', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              추가
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        style={{
+          minHeight: '120px',
+          borderRadius: '4px',
+          border: isDragging ? '2px dashed rgba(13,148,136,0.55)' : '1px solid rgba(0,0,0,0.08)',
+          backgroundColor: isDragging ? 'rgba(13,148,136,0.08)' : '#fafafa',
+          transition: 'all 0.2s',
+        }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))',
+            gap: '4px 8px',
+            padding: docs.length > 0 ? '12px 10px' : '0',
+            alignItems: 'start',
+          }}
+        >
+          {docs.map(doc => {
+            const { Icon, iconColor, badge } = getTravelDocVisual(doc.name)
+            const isHover = hoverDocId === doc.id
+            const isEditing = editingDocId === doc.id
+            return (
+              <div
+                key={doc.id}
+                role="presentation"
+                onMouseEnter={() => setHoverDocId(doc.id)}
+                onMouseLeave={() => setHoverDocId(null)}
+                style={{
+                  position: 'relative',
+                  borderRadius: 2,
+                  border: isHover ? '1px solid #cce8ff' : '1px solid transparent',
+                  background: isHover ? '#e5f3ff' : 'transparent',
+                  padding: '6px 4px 8px',
+                  userSelect: isEditing ? 'text' : 'none',
+                }}
+              >
+                {!isEditing ? (
+                  <div
+                    role="link"
+                    tabIndex={0}
+                    onClick={e => {
+                      if ((e.target as HTMLElement).closest('[data-doc-tool]')) return
+                      window.open(doc.url, '_blank', 'noopener,noreferrer')
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        window.open(doc.url, '_blank', 'noopener,noreferrer')
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 6,
+                      cursor: 'pointer',
+                      outline: 'none',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'flex-start',
+                        gap: 3,
+                        paddingTop: 2,
+                      }}
+                    >
+                      <Icon size={32} color={iconColor} strokeWidth={1.65} aria-hidden />
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 800,
+                          letterSpacing: '0.04em',
+                          color: iconColor,
+                          lineHeight: 1,
+                          opacity: 0.95,
+                        }}
+                      >
+                        {badge}
+                      </span>
+                    </div>
+                    <p
+                      title={doc.name}
+                      style={{
+                        margin: 0,
+                        width: '100%',
+                        maxWidth: '100%',
+                        textAlign: 'center',
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                        lineHeight: 1.45,
+                        letterSpacing: '-0.015em',
+                        color: '#111827',
+                        fontFamily: 'system-ui, "Segoe UI", Roboto, "Noto Sans KR", sans-serif',
+                        wordBreak: 'break-word',
+                        overflow: 'hidden',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        padding: '2px 2px 0',
+                        WebkitFontSmoothing: 'antialiased',
+                      }}
+                    >
+                      {doc.name}
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 3,
+                        paddingTop: 2,
+                      }}
+                    >
+                      <Icon size={32} color={iconColor} strokeWidth={1.65} aria-hidden />
+                      <span style={{ fontSize: 9, fontWeight: 800, color: iconColor }}>{badge}</span>
+                    </div>
+                    <textarea
+                      value={doc.name}
+                      autoFocus
+                      onChange={e => onUpdate(doc.id, { name: e.target.value })}
+                      onClick={e => e.stopPropagation()}
+                      onMouseDown={e => e.stopPropagation()}
+                      onBlur={() => setEditingDocId(null)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          setEditingDocId(null)
+                        }
+                        if (e.key === 'Escape') setEditingDocId(null)
+                      }}
+                      style={{
+                        ...inputBase,
+                        width: '100%',
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                        lineHeight: 1.45,
+                        letterSpacing: '-0.015em',
+                        color: '#111827',
+                        fontFamily: 'system-ui, "Segoe UI", Roboto, "Noto Sans KR", sans-serif',
+                        padding: '6px 8px',
+                        resize: 'none',
+                        minHeight: 48,
+                        maxHeight: 72,
+                        textAlign: 'center',
+                        border: '1px solid #99c9ff',
+                        borderRadius: 2,
+                        boxSizing: 'border-box',
+                        WebkitFontSmoothing: 'antialiased',
+                      }}
+                    />
+                  </div>
+                )}
+                {isHover && !isEditing && (
+                  <>
+                    <button
+                      type="button"
+                      data-doc-tool
+                      onClick={e => {
+                        e.stopPropagation()
+                        setEditingDocId(doc.id)
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: 4,
+                        left: 4,
+                        width: 22,
+                        height: 22,
+                        borderRadius: 2,
+                        border: '1px solid rgba(0,0,0,0.12)',
+                        background: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        padding: 0,
+                        zIndex: 3,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                      }}
+                      title="이름 바꾸기"
+                    >
+                      <Pencil size={11} color="#374151" />
+                    </button>
+                    <button
+                      type="button"
+                      data-doc-tool
+                      onClick={e => {
+                        e.stopPropagation()
+                        onRemove(doc.id)
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: 4,
+                        right: 4,
+                        width: 22,
+                        height: 22,
+                        borderRadius: 2,
+                        border: '1px solid rgba(0,0,0,0.12)',
+                        background: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        padding: 0,
+                        zIndex: 3,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                      }}
+                      title="삭제"
+                    >
+                      <Trash2 size={11} color="#b91c1c" />
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        {docs.length === 0 && (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'inherit', fontSize: '13px' }}>
+            {isDragging ? (
+              <span style={{ color: '#0d9488', fontWeight: 600 }}>여기에 놓기</span>
+            ) : (
+              <span style={{ color: '#787774' }}>
+                PDF·예약증 등 여행 관련 파일이 없습니다. &quot;문서 추가&quot; 또는 URL로 추가하세요.
+                <br style={{ marginTop: '4px' }} />
+                <span style={{ fontSize: '11px', color: '#9B9A97' }}>탐색기에서 파일을 드래그해 이 영역에 놓을 수도 있어요 (사진·영상 제외)</span>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── TravelPage ────────────────────────────────────────────────────────────────
 function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' | 'synced' | 'error'; onToast?: (msg: string) => void }) {
   const [searchParams] = useSearchParams()
@@ -7504,6 +8735,23 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
   }
   function removePhoto(id: string) {
     persist({ ...detail, photos: detail.photos.filter(p => p.id !== id) })
+  }
+
+  const documents = detail.documents ?? []
+  function addDocument(url: string, name: string) {
+    persist({
+      ...detail,
+      documents: [...documents, { id: `doc_${Date.now()}`, url, name: name.trim() || '문서' }],
+    })
+  }
+  function updateDocument(id: string, patch: Partial<TripDocumentItem>) {
+    persist({
+      ...detail,
+      documents: documents.map(d => d.id === id ? { ...d, ...patch } : d),
+    })
+  }
+  function removeDocument(id: string) {
+    persist({ ...detail, documents: documents.filter(d => d.id !== id) })
   }
 
   async function handleCoverUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -8347,6 +9595,15 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
           </div>
         </div>
 
+        {/* ── 문서 (PDF 등) — 일정 아래 · 사진 위 ── */}
+        <TripDocumentsSection
+          detail={detail}
+          onAdd={addDocument}
+          onUpdate={updateDocument}
+          onRemove={removeDocument}
+          inputBase={inputBase}
+        />
+
         {/* ── 사진 (Photos) Section ── */}
         <TripPhotosSection detail={detail} onAdd={addPhoto} onUpdate={updatePhoto} onRemove={removePhoto} inputBase={inputBase} />
         {/* ── Gourmet & Diet Section ── */}
@@ -8383,80 +9640,6 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
   )
 }
 
-// ═════════════════ 신규 GNB 페이지 (1차 뼈대) ═══════════════════════════════════
-function ManifestationPage() {
-  const [sel, setSel] = useState<string | null>(null)
-  const causes = ['원인 카드 A', '원인 카드 B', '원인 카드 C']
-  const outcomes = [
-    '결과: 오늘의 메모와 연결된 흐름 (샘플)',
-    '결과: 다른 관점에서의 해석 (샘플)',
-    '결과: 기록용 한 줄 (샘플)',
-  ]
-  const idx = sel ? causes.indexOf(sel) : -1
-  const resultText = idx >= 0 ? outcomes[idx % outcomes.length] : '좌측에서 원인을 선택하면 우측에 매핑된 결과가 표시됩니다.'
-  return (
-    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '28px 44px' }}>
-      <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 800, color: '#37352F' }}>Manifestation</h1>
-      <p style={{ margin: '0 0 20px', fontSize: '13px', color: '#787774' }}>인과(Cause & Effect) — 좌측 원인 · 우측 결과 (보일러플레이트)</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px,1fr) minmax(280px,1.2fr)', gap: '20px', minHeight: '380px' }}>
-        <div style={{ border: '1px solid rgba(0,0,0,0.08)', borderRadius: '12px', padding: '16px', background: '#fff' }}>
-          {causes.map(c => (
-            <button key={c} type="button" onClick={() => setSel(c)} style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: '8px', padding: '12px 14px', borderRadius: '8px', border: sel === c ? '2px solid #6366f1' : '1px solid rgba(0,0,0,0.08)', background: sel === c ? 'rgba(99,102,241,0.08)' : '#fafafa', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#37352F' }}>{c}</button>
-          ))}
-        </div>
-        <div style={{ border: '1px solid rgba(0,0,0,0.08)', borderRadius: '12px', padding: '22px', background: '#f7f7f5', fontSize: '14px', color: '#37352F', lineHeight: 1.7 }}>{resultText}</div>
-      </div>
-    </div>
-  )
-}
-
-function MasterBoardPage() {
-  return (
-    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '28px 44px', minHeight: '70vh' }}>
-      <h1 style={{ margin: '0 0 12px', fontSize: '22px', fontWeight: 800 }}>MasterBoard</h1>
-      <p style={{ color: '#787774', fontSize: '13px', marginBottom: '20px' }}>추후 대시보드용 빈 캔버스</p>
-      <div style={{ border: '2px dashed rgba(0,0,0,0.12)', borderRadius: '16px', minHeight: '480px', background: 'repeating-linear-gradient(0deg, transparent, transparent 19px, rgba(0,0,0,0.03) 20px)' }} />
-    </div>
-  )
-}
-
-function LevelupPage() {
-  return (
-    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '28px 44px' }}>
-      <h1 style={{ margin: '0 0 12px', fontSize: '22px', fontWeight: 800 }}>Level up</h1>
-      <p style={{ color: '#787774', fontSize: '13px' }}>스탯·레벨 UI를 붙일 빈 페이지</p>
-      <div style={{ marginTop: '24px', padding: '32px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.08)', background: '#fff', textAlign: 'center', color: '#AEAAA4' }}>— 게이지·레벨 영역 예정 —</div>
-    </div>
-  )
-}
-
-/** 통합 가계부 — 스키마 안 (주석)
- *  제안: ledger_accounts(id, user_id, name, type)
- *        ledger_entries(id, user_id, amount, currency, category_id, note, occurred_at, source_type)
- *        travel_expenses 기존 테이블은 source_type='travel' | category_id=여행 하위로 편입하거나
- *        뷰(v_travel_expenses)로 기존 API 유지 후 점진 이전.
- */
-function AccountPage() {
-  return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '28px 44px' }}>
-      <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 800 }}>Account — 통합 가계부</h1>
-      <p style={{ color: '#787774', fontSize: '13px', marginBottom: '8px' }}>여행 가계부(travel_expenses)는 하위 카테고리로 편입 예정 — 코드 상단 주석에 스키마 초안 참고</p>
-      <pre style={{ fontSize: '11px', color: '#9B9A97', whiteSpace: 'pre-wrap', marginBottom: '20px', padding: '12px', background: '#f4f4f2', borderRadius: '8px' }}>
-        {`/* 스키마 구상안 */\nledger_entries + categories\n  └ travel 파트: 기존 travel_expenses 연동 또는 마이그레이션`}
-      </pre>
-      <div style={{ padding: '48px', border: '2px dashed rgba(0,0,0,0.1)', borderRadius: '12px', textAlign: 'center', color: '#AEAAA4' }}>거래 입력·목록 UI 예정</div>
-    </div>
-  )
-}
-
-function FragmentPage() {
-  return (
-    <div style={{ maxWidth: '800px', margin: '0 auto', padding: '28px 44px', minHeight: '50vh' }}>
-      <p style={{ margin: 0, fontSize: '14px', color: '#AEAAA4' }}>Fragment</p>
-    </div>
-  )
-}
-
 // ═══════════════════════════════════════ APP ═════════════════════════════════
 export default function App() {
   // ── Auth ──
@@ -8478,16 +9661,28 @@ export default function App() {
 
   useEffect(() => {
     const seg = location.pathname.replace(/^\//, '').split('/')[0]
+    if (seg === 'beautiful-life') {
+      navigate(`/life${location.search}`, { replace: true })
+      return
+    }
+    if (seg === 'possession') {
+      navigate(`/act${location.search}`, { replace: true })
+      return
+    }
+    if (seg === 'quantum-flow') {
+      navigate(`/quantum${location.search}`, { replace: true })
+      return
+    }
     const legacy: Record<string, string> = {
-      identity: '/possession',
-      journal: '/review',
-      calendar: '/beautiful-life',
+      identity: '/act',
+      journal: '/life?tab=journal',
+      calendar: '/life',
       dashboard: '/',
       library: '/quest',
       worlds: '/quest',
     }
     if (legacy[seg]) navigate(legacy[seg], { replace: true })
-  }, [location.pathname, navigate])
+  }, [location.pathname, location.search, navigate])
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0)
   const isMobile = useIsMobile()
 
@@ -8664,7 +9859,7 @@ export default function App() {
 
       // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
       kvGetAll().then(all => {
-        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY]
+        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, FRAGMENT_KEY]
         passThrough.forEach(k => { if (all[k] !== undefined && all[k] !== null) localStorage.setItem(k, JSON.stringify(all[k])) })
       }),
 
@@ -8928,6 +10123,25 @@ export default function App() {
     } else {
       fireToast('프로젝트 생성 실패')
     }
+  }
+
+  /** Project 허브 모달용 — 이름을 인자로 바로 추가 */
+  async function addAreaByName(name: string) {
+    const n = name.trim()
+    if (!n) return
+    const row = await insertArea(n)
+    if (row) { setAreas(prev => [...prev, row]); fireToast('Vision Area가 추가되었습니다') }
+    else fireToast('Area 생성 실패')
+  }
+  async function addProjectByName(name: string, areaId: string) {
+    const n = name.trim()
+    if (!n) { fireToast('프로젝트 이름을 입력해주세요'); return }
+    if (!areaId) { fireToast('Vision Area를 선택해주세요'); return }
+    const row = await insertProject(n, areaId)
+    if (row) {
+      setProjects(prev => [...prev, row])
+      fireToast('프로젝트가 추가되었습니다')
+    } else fireToast('프로젝트 생성 실패')
   }
 
   async function commitEditProject(id: string) {
@@ -9239,7 +10453,9 @@ export default function App() {
 
   const projectLabels = selectedProjects.map(id => userQuests.find(q => q.id === id)?.name ?? id)
   const questLabels = selectedQuests.map(id => userQuests.find(q => q.id === id)?.name ?? id)
-  const today = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+  const navNow = new Date()
+  const today = navNow.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+  const todayISOWeek = getISOWeekNumber(navNow)
 
   // ── Auth 게이트 ──
   if (session === 'loading') {
@@ -9334,6 +10550,9 @@ export default function App() {
               if (wasJournal && location.pathname === '/review') {
                 navigate('/review', { replace: true })
               }
+              if (wasJournal && location.pathname === '/life') {
+                navigate('/life?tab=journal', { replace: true })
+              }
             }}
             onUpdateQuestPomodoroCount={async (questId, newCount) => {
               await updateQuestPomodoroCount(questId, newCount)
@@ -9407,29 +10626,46 @@ export default function App() {
         <nav style={{ backgroundColor: '#FFFFFF', borderBottom: '1px solid rgba(0,0,0,0.06)', position: 'sticky', top: 0, zIndex: 100, display: isMobile ? 'none' : undefined }}>
           <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '0 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '48px', gap: '12px' }}>
 
-            {/* 좌측: 날짜 + 만세력 일간·월간 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, minWidth: 0 }}>
-              <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap' }}>{today}</p>
-              <span style={{ fontSize: '10px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title="만세력(월·일 기둥)">
-                {formatTodayGanzhiLine()}
-              </span>
+            {/* 좌측: 브랜딩 + 날짜(양력) / 주차+만세력 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <IcoPen />
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontWeight: 800, fontSize: '12px', color: '#37352F', lineHeight: 1 }}>창작 OS</p>
+                  <p style={{ margin: 0, fontSize: '9px', color: '#9B9A97', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session?.user?.email ?? ''}>
+                    {session?.user?.email ?? ''}
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px', minWidth: 0 }}>
+                <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap' }}>{today}</p>
+                <span style={{ fontSize: '10px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title="ISO 주차 · 만세력(월·일 기둥)">
+                  {todayISOWeek}주차 {formatTodayGanzhiLine(navNow)}
+                </span>
+              </div>
             </div>
 
             {/* 중앙: GNB */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flex: 1, justifyContent: 'center', flexWrap: 'wrap', minWidth: 0 }}>
               {([
-                { id: 'beautiful-life' as const, label: 'BeautifulLife', emoji: '📅' },
+                { id: 'life' as const, label: 'Life', emoji: '📅' },
+                { id: 'goals' as const, label: 'Goals', emoji: '🎯' },
+                { id: 'evolution' as const, label: 'Evolution', emoji: '🧬' },
                 { id: 'fortune' as const, label: 'Fortune', emoji: '🔮' },
-                { id: 'manifestation' as const, label: 'Manifestation', emoji: '✨' },
-                { id: 'possession' as const, label: 'Possession', emoji: '🎭' },
-                { id: 'master-board' as const, label: 'MasterBoard', emoji: '📋' },
+                { id: 'manifestation' as const, label: 'Manifest', emoji: '✨' },
+                { id: 'act' as const, label: 'Act', emoji: '🎭' },
+                { id: 'master-board' as const, label: 'Board', emoji: '📋' },
                 { id: 'levelup' as const, label: 'Levelup', emoji: '⬆️' },
                 { id: 'project' as const, label: 'Project', emoji: '📁' },
                 { id: 'quest' as const, label: 'Quest', emoji: '⚡' },
                 { id: 'review' as const, label: 'Review', emoji: '📓' },
+                { id: 'quantum' as const, label: 'Quantum', emoji: '✦' },
+                { id: 'network' as const, label: 'Network', emoji: '🌐' },
                 { id: 'account' as const, label: 'Account', emoji: '💰' },
                 { id: 'travel' as const, label: 'Travel', emoji: '✈️' },
-                { id: 'fragment' as const, label: 'Fragment', emoji: '◇' },
+                { id: 'fragment' as const, label: 'Note', emoji: '◇' },
               ]).map(p => (
                 <Link key={p.id} to={p.id === 'quest' ? '/' : `/${p.id}`} style={{
                   display: 'flex', alignItems: 'center', gap: '4px',
@@ -9445,19 +10681,8 @@ export default function App() {
               ))}
             </div>
 
-            {/* 우측: 로고 · 동기화 · 계정 · 로그아웃 */}
+            {/* 우측: 동기화 · 젠모드 · 로그아웃 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <IcoPen />
-                </div>
-                <div>
-                  <p style={{ margin: 0, fontWeight: 800, fontSize: '12px', color: '#37352F', lineHeight: 1 }}>창작 OS</p>
-                  <p style={{ margin: 0, fontSize: '9px', color: '#9B9A97', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session?.user?.email ?? ''}>
-                    {session?.user?.email ?? ''}
-                  </p>
-                </div>
-              </div>
               {isSupabaseReady && syncStatus !== 'idle' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}>
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
@@ -9496,16 +10721,19 @@ export default function App() {
 
         {/* ════════════════ BODY ════════════════ */}
         <div style={{ paddingBottom: isMobile ? '70px' : 0 }}>
-          {activePage === 'beautiful-life' && (
-            <UnifiedCalendar
+          {activePage === 'life' && (
+            <BeautifulLifeSection
               userQuests={userQuests}
               onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
-              refreshTrigger={calendarRefreshKey}
+              calendarRefreshKey={calendarRefreshKey}
+              onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
             />
           )}
+          {activePage === 'goals' && <GoalsPage />}
+          {activePage === 'evolution' && <EvolutionPage />}
           {activePage === 'fortune' && <FortunePage onReadingSaved={() => setCalendarRefreshKey(k => k + 1)} />}
           {activePage === 'manifestation' && <ManifestationPage />}
-          {activePage === 'possession' && (
+          {activePage === 'act' && (
             <PossessionPage
               identities={identities}
               activeIdentityId={activeIdentityId}
@@ -9514,21 +10742,98 @@ export default function App() {
               onToast={fireToast}
             />
           )}
-          {activePage === 'master-board' && <MasterBoardPage />}
-          {activePage === 'levelup' && <LevelupPage />}
-          {activePage === 'account' && <AccountPage />}
+          {activePage === 'master-board' && (() => {
+            const lv = calculateLevel(xpState.totalXp)
+            return (
+              <MasterBoardPage
+                xpTotal={xpState.totalXp}
+                currentLevel={lv.currentLevel}
+                levelTitle={getLevelTitle(lv.currentLevel)}
+                currentLevelXp={lv.currentLevelXp}
+                maxCurrentLevelXp={lv.maxCurrentLevelXp}
+                levelProgressPct={lv.progressPct}
+                dailyPomodoros={dailyLog?.total_pomodoros ?? 0}
+                dailyFocusSec={dailyLog?.total_time_sec ?? 0}
+                dailyTimeScore={dailyLog?.time_score_applied}
+                identities={identities}
+                activeIdentityId={activeIdentityId}
+                openQuestCount={userQuests.filter(q => q.status !== 'done').length}
+              />
+            )
+          })()}
+          {activePage === 'levelup' && (() => {
+            const lv = calculateLevel(xpState.totalXp)
+            return (
+              <LevelupRpgPage
+                appStats={stats.map(s => ({ id: s.id, label: s.label, value: s.value, unit: s.unit, emoji: s.emoji, col: s.col }))}
+                currentLevel={lv.currentLevel}
+                levelTitle={getLevelTitle(lv.currentLevel)}
+                currentLevelXp={lv.currentLevelXp}
+                maxCurrentLevelXp={lv.maxCurrentLevelXp}
+                totalXp={xpState.totalXp}
+                progressPct={lv.progressPct}
+                activeIdentityName={activeIdentityId ? (identities.find(i => i.id === activeIdentityId)?.name ?? null) : null}
+              />
+            )
+          })()}
+          {activePage === 'account' && <AccountLedgerPage />}
           {activePage === 'fragment' && <FragmentPage />}
           {activePage === 'travel' && <TravelPage syncStatus={syncStatus} onToast={fireToast} />}
+          {activePage === 'project' && (
+            <ProjectHubPage
+              areas={areas}
+              projects={projects}
+              userQuests={userQuests}
+              isMobile={isMobile}
+              newAreaName={newAreaName}
+              setNewAreaName={setNewAreaName}
+              addArea={addArea}
+              editingAreaId={editingAreaId}
+              setEditingAreaId={setEditingAreaId}
+              editingAreaName={editingAreaName}
+              setEditingAreaName={setEditingAreaName}
+              commitEditArea={commitEditArea}
+              removeArea={removeArea}
+              moveAreaUp={moveAreaUp}
+              moveAreaDown={moveAreaDown}
+              newProjectName={newProjectName}
+              setNewProjectName={setNewProjectName}
+              newProjectAreaId={newProjectAreaId}
+              setNewProjectAreaId={setNewProjectAreaId}
+              addProject={addProject}
+              editingProjectId={editingProjectId}
+              setEditingProjectId={setEditingProjectId}
+              editingProjectName={editingProjectName}
+              setEditingProjectName={setEditingProjectName}
+              commitEditProject={commitEditProject}
+              removeProject={removeProject}
+              renameProject={async (id, name) => {
+                const t = name.trim()
+                if (!t) return
+                await updateProject(id, t)
+                setProjects(prev => prev.map(p => p.id === id ? { ...p, name: t } : p))
+              }}
+              moveProjectUp={moveProjectUp}
+              moveProjectDown={moveProjectDown}
+              setNoteTarget={setNoteTarget}
+              onToast={fireToast}
+              addAreaByName={addAreaByName}
+              addProjectByName={addProjectByName}
+            />
+          )}
           {activePage === 'review' && (
             <ReviewPage
               completedQuests={completedQuests}
               xpState={xpState}
               userQuests={userQuests}
-              onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
               onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
             />
           )}
-          {(activePage === 'quest' || activePage === 'project') && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
+          {activePage === 'quantum' && (
+            <QuantumFlowPage onSaved={() => setCalendarRefreshKey(k => k + 1)} />
+          )}
+          {activePage === 'network' && <NetworkPage />}
+          {activePage === 'quest' && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
 
             {activePage === 'quest' && (
             <>
@@ -9559,13 +10864,13 @@ export default function App() {
                     )
                   })()
                 ) : (
-                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Possession 메뉴에서 정체성을 선택하세요</p>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Act 메뉴에서 정체성을 선택하세요</p>
                 )}
               </div>
               {activeIdentityId && identities.find(i => i.id === activeIdentityId) ? (
                 <button onClick={async () => { const ok = await updateActiveIdentity(null); if (ok) setActiveIdentityId(null) }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 종료</button>
               ) : (
-                <button onClick={() => setActivePage('possession')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
+                <button onClick={() => setActivePage('act')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
               )}
             </div>
 
@@ -9802,12 +11107,8 @@ export default function App() {
             </>
             )}
 
-            {activePage === 'project' && (
-              <h1 style={{ margin: '0 0 20px', fontSize: '22px', fontWeight: 800, color: '#37352F' }}>프로젝트 · Area & Real Projects</h1>
-            )}
-
-            {/* 2~3열 그리드: Area + 프로젝트 (+ 퀘스트는 Quest 탭에서만) */}
-            <div style={{ display: 'grid', gridTemplateColumns: activePage === 'project' ? (isMobile ? '1fr' : '1fr 1fr') : (isMobile ? '1fr' : '1fr 1fr 2fr'), gap: '16px', marginBottom: '20px' }}>
+            {/* 2~3열 그리드: Area + 프로젝트 + 퀘스트 (Quest 탭) — 상세 프로젝트 허브는 Project 메뉴 */}
+            <div style={{ display: 'grid', gridTemplateColumns: (isMobile ? '1fr' : '1fr 1fr 2fr'), gap: '16px', marginBottom: '20px' }}>
 
               {/* ── Area 관리 섹션 ── */}
               <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px' }}>

@@ -1,4 +1,4 @@
-import { createClient, type Session } from '@supabase/supabase-js'
+import { createClient, type Session, type PostgrestError } from '@supabase/supabase-js'
 
 export type { Session }
 
@@ -1589,4 +1589,352 @@ export async function uploadImageToMedia(file: File): Promise<string> {
   if (error) throw error
   const { data: urlData } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(data.path)
   return urlData.publicUrl
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Manifestation — causes / effects / cause_effect_links (인과 보드)
+//  SQL: 프로젝트 루트 supabase-manifestation.sql 참고
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface ManifestCauseRow {
+  id: string
+  title: string
+  description: string
+  icon: string
+  sort_order: number
+  created_at?: string
+}
+
+export interface ManifestEffectRow {
+  id: string
+  title: string
+  description: string
+  icon: string
+  sort_order: number
+  created_at?: string
+}
+
+export type ManifestLinkPair = { cause_id: string; effect_id: string }
+
+/** Postgrest/Supabase 에러를 F12 콘솔에서 그대로 추적할 수 있게 출력 */
+function logManifestPostgrestError(context: string, error: PostgrestError | null): void {
+  if (!error) return
+  const payload = {
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+    code: error.code,
+  }
+  console.error(`[Supabase] ${context}`, payload)
+  // 전체 객체(숨은 필드 포함) — 디버깅용
+  console.error(`[Supabase] ${context} (raw error object)`, error)
+}
+
+/**
+ * Manifestation insert/fetch용 로그인 유저 UUID.
+ * getSession()을 먼저 사용 — 클라이언트에서 세션이 있어도 getUser()만으로는 user가
+ * 잠깐 null이 되는 경우가 있어 FK(user_id → auth.users) 삽입 실패로 이어질 수 있음.
+ */
+async function _manifestUserId(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { session } } = await supabase.auth.getSession()
+  const fromSession = session?.user?.id
+  if (fromSession) return fromSession
+  const { data: { user }, error } = await supabase.auth.getUser()
+  if (error) {
+    console.warn('[Supabase] _manifestUserId getUser():', error.message)
+  }
+  return user?.id ?? null
+}
+
+export async function fetchManifestationCauses(): Promise<ManifestCauseRow[]> {
+  if (!supabase) return []
+  const uid = await _manifestUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('causes')
+      .select('id, title, description, icon, sort_order, created_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManifestationCauses 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({
+      id: String(r.id),
+      title: String(r.title ?? ''),
+      description: String(r.description ?? ''),
+      icon: String(r.icon ?? '✨'),
+      sort_order: Number(r.sort_order ?? 0),
+      created_at: r.created_at as string | undefined,
+    }))
+  } catch (e) {
+    console.error('[Supabase] fetchManifestationCauses 예외:', e)
+    return []
+  }
+}
+
+export async function fetchManifestationEffects(): Promise<ManifestEffectRow[]> {
+  if (!supabase) return []
+  const uid = await _manifestUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('effects')
+      .select('id, title, description, icon, sort_order, created_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManifestationEffects 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({
+      id: String(r.id),
+      title: String(r.title ?? ''),
+      description: String(r.description ?? ''),
+      icon: String(r.icon ?? '✨'),
+      sort_order: Number(r.sort_order ?? 0),
+      created_at: r.created_at as string | undefined,
+    }))
+  } catch (e) {
+    console.error('[Supabase] fetchManifestationEffects 예외:', e)
+    return []
+  }
+}
+
+export async function fetchManifestationLinks(): Promise<ManifestLinkPair[]> {
+  if (!supabase) return []
+  const uid = await _manifestUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('cause_effect_links')
+      .select('cause_id, effect_id')
+      .eq('user_id', uid)
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManifestationLinks 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({ cause_id: String(r.cause_id), effect_id: String(r.effect_id) }))
+  } catch (e) {
+    console.error('[Supabase] fetchManifestationLinks 예외:', e)
+    return []
+  }
+}
+
+/** insert 실패 시 UI/콘솔에서 원인 추적용 */
+export type ManifestInsertResult<T> =
+  | { ok: true; row: T }
+  | { ok: false; reason: 'no_supabase' | 'no_user'; message: string }
+  | { ok: false; reason: 'postgrest'; error: PostgrestError }
+
+export async function insertManifestCause(
+  title: string,
+  description = '',
+  icon = '✨',
+): Promise<ManifestInsertResult<ManifestCauseRow>> {
+  if (!supabase) {
+    console.error('[Supabase] insertManifestCause: supabase client null')
+    return { ok: false, reason: 'no_supabase', message: 'Supabase 클라이언트가 없습니다.' }
+  }
+  const uid = await _manifestUserId()
+  if (!uid) {
+    console.error('[Supabase] insertManifestCause: no user_id — getSession()/getUser() 모두 유저 없음. 로그인 상태를 확인하세요.')
+    return { ok: false, reason: 'no_user', message: '로그인된 사용자가 없습니다. 다시 로그인해 주세요.' }
+  }
+  const payload = {
+    user_id: uid,
+    title: title.trim(),
+    description: description.trim(),
+    icon,
+    sort_order: 0 as number,
+  }
+  const { data: maxRow } = await supabase.from('causes').select('sort_order').eq('user_id', uid).order('sort_order', { ascending: false }).limit(1).maybeSingle()
+  payload.sort_order = ((maxRow?.sort_order as number) ?? -1) + 1
+
+  console.info('[Supabase] insertManifestCause payload', {
+    user_id: uid,
+    title: payload.title,
+    descriptionLength: payload.description.length,
+    icon: payload.icon,
+    sort_order: payload.sort_order,
+  })
+
+  const { data, error } = await supabase
+    .from('causes')
+    .insert(payload)
+    .select('id, title, description, icon, sort_order, created_at')
+    .single()
+  if (error) {
+    logManifestPostgrestError('insertManifestCause', error)
+    return { ok: false, reason: 'postgrest', error }
+  }
+  return {
+    ok: true,
+    row: {
+      id: String(data.id),
+      title: String(data.title),
+      description: String(data.description ?? ''),
+      icon: String(data.icon ?? '✨'),
+      sort_order: Number(data.sort_order ?? 0),
+      created_at: data.created_at as string | undefined,
+    },
+  }
+}
+
+export async function updateManifestCause(
+  id: string,
+  fields: Partial<Pick<ManifestCauseRow, 'title' | 'description' | 'icon' | 'sort_order'>>,
+): Promise<boolean> {
+  if (!supabase) return false
+  const payload: Record<string, unknown> = {}
+  if (fields.title !== undefined) payload.title = fields.title.trim()
+  if (fields.description !== undefined) payload.description = fields.description
+  if (fields.icon !== undefined) payload.icon = fields.icon
+  if (fields.sort_order !== undefined) payload.sort_order = fields.sort_order
+  if (Object.keys(payload).length === 0) return true
+  const { error } = await supabase.from('causes').update(payload).eq('id', id)
+  if (error) {
+    console.error('[Supabase] updateManifestCause 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteManifestCause(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase.from('causes').delete().eq('id', id)
+  if (error) {
+    console.error('[Supabase] deleteManifestCause 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function insertManifestEffect(
+  title: string,
+  description = '',
+  icon = '✨',
+): Promise<ManifestInsertResult<ManifestEffectRow>> {
+  if (!supabase) {
+    console.error('[Supabase] insertManifestEffect: supabase client null')
+    return { ok: false, reason: 'no_supabase', message: 'Supabase 클라이언트가 없습니다.' }
+  }
+  const uid = await _manifestUserId()
+  if (!uid) {
+    console.error('[Supabase] insertManifestEffect: no user_id — getSession()/getUser() 모두 유저 없음.')
+    return { ok: false, reason: 'no_user', message: '로그인된 사용자가 없습니다. 다시 로그인해 주세요.' }
+  }
+  const payload = {
+    user_id: uid,
+    title: title.trim(),
+    description: description.trim(),
+    icon,
+    sort_order: 0 as number,
+  }
+  const { data: maxRow } = await supabase.from('effects').select('sort_order').eq('user_id', uid).order('sort_order', { ascending: false }).limit(1).maybeSingle()
+  payload.sort_order = ((maxRow?.sort_order as number) ?? -1) + 1
+
+  console.info('[Supabase] insertManifestEffect payload', {
+    user_id: uid,
+    title: payload.title,
+    descriptionLength: payload.description.length,
+    icon: payload.icon,
+    sort_order: payload.sort_order,
+  })
+
+  const { data, error } = await supabase
+    .from('effects')
+    .insert(payload)
+    .select('id, title, description, icon, sort_order, created_at')
+    .single()
+  if (error) {
+    logManifestPostgrestError('insertManifestEffect', error)
+    return { ok: false, reason: 'postgrest', error }
+  }
+  return {
+    ok: true,
+    row: {
+      id: String(data.id),
+      title: String(data.title),
+      description: String(data.description ?? ''),
+      icon: String(data.icon ?? '✨'),
+      sort_order: Number(data.sort_order ?? 0),
+      created_at: data.created_at as string | undefined,
+    },
+  }
+}
+
+export async function updateManifestEffect(
+  id: string,
+  fields: Partial<Pick<ManifestEffectRow, 'title' | 'description' | 'icon' | 'sort_order'>>,
+): Promise<boolean> {
+  if (!supabase) return false
+  const payload: Record<string, unknown> = {}
+  if (fields.title !== undefined) payload.title = fields.title.trim()
+  if (fields.description !== undefined) payload.description = fields.description
+  if (fields.icon !== undefined) payload.icon = fields.icon
+  if (fields.sort_order !== undefined) payload.sort_order = fields.sort_order
+  if (Object.keys(payload).length === 0) return true
+  const { error } = await supabase.from('effects').update(payload).eq('id', id)
+  if (error) {
+    console.error('[Supabase] updateManifestEffect 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteManifestEffect(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase.from('effects').delete().eq('id', id)
+  if (error) {
+    console.error('[Supabase] deleteManifestEffect 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+/** 원인 카드에 연결된 결과 ID 목록으로 교체 (고정 인과) */
+export async function replaceManifestLinksForCause(causeId: string, effectIds: string[]): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manifestUserId()
+  if (!uid) return false
+  const { error: delErr } = await supabase.from('cause_effect_links').delete().eq('cause_id', causeId).eq('user_id', uid)
+  if (delErr) {
+    console.error('[Supabase] replaceManifestLinksForCause delete 실패:', delErr.message)
+    return false
+  }
+  const uniq = [...new Set(effectIds.filter(Boolean))]
+  if (uniq.length === 0) return true
+  const rows = uniq.map(effect_id => ({ user_id: uid, cause_id: causeId, effect_id }))
+  const { error: insErr } = await supabase.from('cause_effect_links').insert(rows)
+  if (insErr) {
+    console.error('[Supabase] replaceManifestLinksForCause insert 실패:', insErr.message)
+    return false
+  }
+  return true
+}
+
+/** 결과 카드에 연결된 원인 ID 목록으로 교체 */
+export async function replaceManifestLinksForEffect(effectId: string, causeIds: string[]): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manifestUserId()
+  if (!uid) return false
+  const { error: delErr } = await supabase.from('cause_effect_links').delete().eq('effect_id', effectId).eq('user_id', uid)
+  if (delErr) {
+    console.error('[Supabase] replaceManifestLinksForEffect delete 실패:', delErr.message)
+    return false
+  }
+  const uniq = [...new Set(causeIds.filter(Boolean))]
+  if (uniq.length === 0) return true
+  const rows = uniq.map(cause_id => ({ user_id: uid, cause_id, effect_id: effectId }))
+  const { error: insErr } = await supabase.from('cause_effect_links').insert(rows)
+  if (insErr) {
+    console.error('[Supabase] replaceManifestLinksForEffect insert 실패:', insErr.message)
+    return false
+  }
+  return true
 }
