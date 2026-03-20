@@ -1594,7 +1594,7 @@ function persistStats(stats: StatDef[]) {
   upsertUserStats({ level: currentLevel, current_xp: 0, required_xp: maxCurrentLevelXp, total_xp: xp.totalXp, stats_json: payload })
 }
 
-// ── LoginView ──────────────────────────────────────────────────────────────
+// ── LoginView — RPG / 레트로 게임 로비 느낌 ───────────────────────────────────
 function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -1610,29 +1610,154 @@ function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
     else { setError('로그인 실패'); setLoading(false) }
   }
 
+  const fontSans = "'Noto Sans KR', system-ui, sans-serif"
+  const fontPixel = "'Press Start 2P', monospace"
+
   const inp: React.CSSProperties = {
-    width: '100%', boxSizing: 'border-box', padding: '13px 16px',
-    borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF',
-    color: '#37352F', fontSize: '14px', outline: 'none', marginBottom: '12px',
+    width: '100%', boxSizing: 'border-box', padding: '12px 14px',
+    borderRadius: '4px', border: '3px solid #3d3554', backgroundColor: '#f5f0e8',
+    color: '#2a2438', fontSize: '14px', fontFamily: fontSans, outline: 'none', marginBottom: '12px',
+    boxShadow: 'inset 2px 2px 0 rgba(255,255,255,0.6), inset -2px -2px 0 rgba(0,0,0,0.08)',
   }
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F4F2', padding: '20px' }}>
-      <div style={{ width: '100%', maxWidth: '400px', backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid rgba(99,102,241,0.2)', padding: '40px 36px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <p style={{ margin: '0 0 8px', fontSize: '28px' }}>⚡</p>
-          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>Creative OS</h1>
-          <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>웹툰 작가를 위한 성장형 창작 OS</p>
+
+  function BarRow({ icon, labelKo, current, max, fillCol, trackCol }: { icon: string; labelKo: string; current: number; max: number; fillCol: string; trackCol: string }) {
+    const pct = max > 0 ? Math.min(100, Math.round((current / max) * 100)) : 0
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '16px', width: '22px', textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ height: '14px', borderRadius: '2px', border: '2px solid #3d3554', backgroundColor: trackCol, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.25)' }}>
+            <div style={{ width: `${pct}%`, height: '100%', backgroundImage: fillCol.startsWith('linear') ? fillCol : undefined, backgroundColor: fillCol.startsWith('linear') ? undefined : fillCol, transition: 'width 0.4s ease' }} />
+          </div>
         </div>
-        <form onSubmit={handleSubmit}>
-          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="이메일" style={inp} onFocus={e => (e.target.style.borderColor = '#6366f1')} onBlur={e => (e.target.style.borderColor = '#EBEBEA')} />
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="비밀번호" style={inp} onFocus={e => (e.target.style.borderColor = '#6366f1')} onBlur={e => (e.target.style.borderColor = '#EBEBEA')} />
-          {error && <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#f87171', textAlign: 'center' }}>{error}</p>}
-          <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: 'none', backgroundColor: loading ? '#EBEBEA' : '#6366f1', color: loading ? '#787774' : '#fff', fontSize: '15px', fontWeight: 800, cursor: loading ? 'default' : 'pointer', transition: 'background 0.2s', boxShadow: loading ? 'none' : '0 0 24px rgba(99,102,241,0.4)' }}>
-            {loading ? '로그인 중…' : '로그인'}
-          </button>
-        </form>
+        <span style={{ fontFamily: fontSans, fontSize: '10px', fontWeight: 800, color: '#4a3f66', whiteSpace: 'nowrap', flexShrink: 0 }}>{current} / {max}</span>
+        <span style={{ fontFamily: fontSans, fontSize: '9px', fontWeight: 700, color: '#7a7190', width: '52px', textAlign: 'right', flexShrink: 0 }}>{labelKo}</span>
       </div>
-    </div>
+    )
+  }
+
+  return (
+    <>
+      <style>{`
+        @keyframes loginCloud {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-4px); }
+        }
+      `}</style>
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '20px',
+        backgroundImage: 'radial-gradient(circle at 20% 30%, rgba(124,58,237,0.15) 0%, transparent 45%), radial-gradient(circle at 80% 70%, rgba(234,179,8,0.08) 0%, transparent 40%), linear-gradient(165deg, #2d2240 0%, #1a1325 45%, #151020 100%)',
+        fontFamily: fontSans,
+      }}>
+        <div style={{
+          width: '100%', maxWidth: '440px',
+          background: 'linear-gradient(180deg, #ece8df 0%, #e0dcd2 100%)',
+          borderRadius: '6px',
+          border: '4px solid #5c4d78',
+          boxShadow: '0 0 0 2px #9b8cb8, 0 0 0 6px #3d3554, 8px 12px 0 rgba(0,0,0,0.35), inset 0 1px 0 rgba(255255255,0.85)',
+          padding: '22px 22px 26px',
+          position: 'relative',
+        }}>
+          {/* 상단 장식 코너 */}
+          <div style={{ position: 'absolute', top: '6px', left: '6px', right: '6px', height: '3px', background: 'repeating-linear-gradient(90deg, #7c6a9e 0px, #7c6a9e 6px, transparent 6px, transparent 12px)', opacity: 0.5, pointerEvents: 'none' }} />
+
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', marginBottom: '16px' }}>
+            <div style={{ flexShrink: 0, textAlign: 'center' }}>
+              <div style={{
+                width: '72px', height: '72px',
+                background: 'linear-gradient(145deg, #7c3aed 0%, #5b21b6 100%)',
+                border: '3px solid #3d3554',
+                borderRadius: '4px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '38px',
+                boxShadow: 'inset 2px 2px 0 rgba(255,255,255,0.2)',
+                animation: 'loginCloud 3s ease-in-out infinite',
+              }} title="모험가">🧙</div>
+              <p style={{ margin: '6px 0 0', fontFamily: fontPixel, fontSize: '8px', color: '#4a3f66', lineHeight: 1.6 }}>Lv. ?</p>
+            </div>
+            <div style={{ flex: 1, minWidth: 0, paddingTop: '2px' }}>
+              <BarRow icon="❤️" labelKo="체력" current={24} max={50} fillCol="linear-gradient(90deg,#ef4444,#f87171)" trackCol="#3d1f28" />
+              <BarRow icon="✨" labelKo="경험치" current={102} max={240} fillCol="linear-gradient(90deg,#eab308,#fde047)" trackCol="#3f3518" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: '#6b6280', fontWeight: 700 }}>
+                <span style={{ fontSize: '14px' }}>💎</span>
+                <span>Lv.10 달성 시 스킬 슬롯 오픈 (데모)</span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '14px', marginBottom: '14px', padding: '8px 12px', background: '#d4cfc4', border: '2px solid #8a7d9a', borderRadius: '4px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 800, color: '#4a3f66' }}>🪙 <span style={{ marginLeft: '4px' }}>15</span></span>
+            <span style={{ fontSize: '12px', fontWeight: 800, color: '#4a3f66' }}>💚 <span style={{ marginLeft: '4px' }}>46</span></span>
+            <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#6b6280', fontWeight: 700 }}>인벤토리 (장식)</span>
+          </div>
+
+          <div style={{
+            marginBottom: '18px', padding: '14px 16px',
+            background: '#fffefb', border: '3px solid #b8a89c', borderRadius: '4px',
+            boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.9)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div>
+                <p style={{ margin: 0, fontFamily: fontPixel, fontSize: '8px', color: '#7c3aed', lineHeight: 1.8, letterSpacing: '-0.02em' }}>QUEST</p>
+                <p style={{ margin: '4px 0 0', fontSize: '14px', fontWeight: 900, color: '#2a2438' }}>캐릭터 선택 — 로그인</p>
+                <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#6b6280', lineHeight: 1.5 }}>계정으로 입장하면 레벨·퀘스트·저널이 이어집니다.</p>
+              </div>
+              <div style={{
+                padding: '10px 14px', background: '#e8dcc8', border: '2px solid #9a8b78', borderRadius: '4px',
+                textAlign: 'center', minWidth: '64px',
+              }}>
+                <div style={{ fontSize: '18px' }}>🪙</div>
+                <div style={{ fontFamily: fontPixel, fontSize: '10px', color: '#5c4d40', marginTop: '4px' }}>0</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{
+            padding: '18px 16px 20px',
+            background: '#f7f4ed',
+            border: '3px solid #6b5b7e',
+            borderRadius: '4px',
+            boxShadow: 'inset 0 0 20px rgba(124,58,237,0.06)',
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: '18px' }}>
+              <p style={{ margin: 0, fontFamily: fontPixel, fontSize: '10px', color: '#5b21b6', letterSpacing: '0.02em', lineHeight: 1.8 }}>CREATIVE OS</p>
+              <h1 style={{ margin: '10px 0 0', fontSize: '20px', fontWeight: 900, color: '#2a2438', letterSpacing: '-0.02em' }}>성장형 창작 RPG</h1>
+            </div>
+            <form onSubmit={handleSubmit}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 800, color: '#5c4d78', marginBottom: '6px' }}>이메일 (아이디)</label>
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="hero@example.com" style={inp} onFocus={e => { e.target.style.borderColor = '#7c3aed'; e.target.style.boxShadow = 'inset 2px 2px 0 rgba(255,255,255,0.6), 0 0 0 2px rgba(124,58,237,0.35)' }} onBlur={e => { e.target.style.borderColor = '#3d3554'; e.target.style.boxShadow = 'inset 2px 2px 0 rgba(255,255,255,0.6), inset -2px -2px 0 rgba(0,0,0,0.08)' }} />
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 800, color: '#5c4d78', marginBottom: '6px' }}>비밀번호 (패스프레이즈)</label>
+              <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" style={inp} onFocus={e => { e.target.style.borderColor = '#7c3aed'; e.target.style.boxShadow = 'inset 2px 2px 0 rgba(255,255,255,0.6), 0 0 0 2px rgba(124,58,237,0.35)' }} onBlur={e => { e.target.style.borderColor = '#3d3554'; e.target.style.boxShadow = 'inset 2px 2px 0 rgba(255,255,255,0.6), inset -2px -2px 0 rgba(0,0,0,0.08)' }} />
+              {error && <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#b91c1c', textAlign: 'center', fontWeight: 700 }}>⚠ {error}</p>}
+              <button type="submit" disabled={loading} style={{
+                width: '100%', padding: '14px 16px', marginTop: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                cursor: loading ? 'default' : 'pointer',
+                fontFamily: fontSans,
+                fontSize: '15px', fontWeight: 900,
+                color: loading ? '#787774' : '#3f2f0a',
+                background: loading ? '#c9c4b8' : 'linear-gradient(180deg, #fde047 0%, #eab308 45%, #ca8a04 100%)',
+                boxShadow: loading ? 'inset 0 2px 4px rgba(0,0,0,0.1)' : '0 4px 0 #854d0e, 0 6px 0 #5c3508, 0 8px 16px rgba(0,0,0,0.25)',
+                textShadow: loading ? 'none' : '0 1px 0 rgba(255,255,255,0.4)',
+                transform: loading ? 'none' : 'translateY(0)',
+              }}
+              onMouseDown={e => { if (!loading) { (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(2px)'; (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 2px 0 #854d0e, 0 4px 8px rgba(0,0,0,0.2)' } }}
+              onMouseUp={e => { if (!loading) { (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)'; (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 4px 0 #854d0e, 0 6px 0 #5c3508, 0 8px 16px rgba(0,0,0,0.25)' } }}
+              onMouseLeave={e => { if (!loading) { (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)'; (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 4px 0 #854d0e, 0 6px 0 #5c3508, 0 8px 16px rgba(0,0,0,0.25)' } }}
+              >
+                {loading ? '⚔ 세계 연결 중…' : '⚔ 게임 시작 (로그인)'}
+              </button>
+            </form>
+          </div>
+
+          <p style={{ margin: '14px 0 0', textAlign: 'center', fontSize: '10px', color: '#6b6280', fontWeight: 600 }}>
+            웹툰 작가용 레벨업 OS · Supabase 인증
+          </p>
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -9566,7 +9691,31 @@ export default function App() {
 
   // ── Auth 게이트 ──
   if (session === 'loading') {
-    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F4F2', color: '#787774', fontSize: '14px' }}>⏳ 로그인 확인 중…</div>
+    return (
+      <>
+        <style>{`
+          @keyframes authLoadBar {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(350%); }
+          }
+        `}</style>
+        <div style={{
+          minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px',
+          backgroundImage: 'radial-gradient(circle at 50% 20%, rgba(124,58,237,0.12) 0%, transparent 50%), linear-gradient(165deg, #2d2240 0%, #151020 100%)',
+          color: '#c4b8d4', fontFamily: "'Noto Sans KR', system-ui, sans-serif", padding: '24px',
+        }}>
+          <p style={{ margin: 0, fontFamily: "'Press Start 2P', monospace", fontSize: '10px', color: '#eab308', textAlign: 'center', lineHeight: 2 }}>LOADING…</p>
+          <div style={{ width: 'min(280px, 80vw)', height: '16px', borderRadius: '4px', border: '3px solid #5c4d78', backgroundColor: '#2a2438', overflow: 'hidden', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)', position: 'relative' }}>
+            <div style={{
+              position: 'absolute', top: 0, left: 0, width: '35%', height: '100%',
+              background: 'linear-gradient(90deg, transparent, rgba(234,179,8,0.95), transparent)',
+              animation: 'authLoadBar 1.1s ease-in-out infinite',
+            }} />
+          </div>
+          <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#9b8cb8' }}>세이브 데이터 확인 중…</p>
+        </div>
+      </>
+    )
   }
   if (!session) {
     return <LoginView onLogin={s => setSession(s)} />
