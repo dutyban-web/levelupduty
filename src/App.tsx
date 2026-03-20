@@ -52,7 +52,30 @@ import { CSS } from '@dnd-kit/utilities'
 import { Solar } from 'lunar-javascript'
 
 // ═══════════════════════════════════════ RESPONSIVE ═══════════════════════════
-type PageId = 'identity' | 'dashboard' | 'worlds' | 'journal' | 'library' | 'calendar' | 'travel' | 'fortune'
+/** GNB + HashRouter 경로 (하이픈 포함) */
+type PageId =
+  | 'beautiful-life'
+  | 'fortune'
+  | 'manifestation'
+  | 'possession'
+  | 'master-board'
+  | 'levelup'
+  | 'project'
+  | 'quest'
+  | 'review'
+  | 'account'
+  | 'travel'
+  | 'fragment'
+
+const PAGE_IDS: PageId[] = ['beautiful-life', 'fortune', 'manifestation', 'possession', 'master-board', 'levelup', 'project', 'quest', 'review', 'account', 'travel', 'fragment']
+
+/** 오늘 날짜의 만세력 월·일 기둥 (예: 辛卯월 癸巳일) — lunar-javascript EightChar */
+function formatTodayGanzhiLine(d = new Date()): string {
+  const solar = Solar.fromDate(d)
+  const lunar = solar.getLunar()
+  const ec = lunar.getEightChar()
+  return `${ec.getMonth()}월 ${ec.getDay()}일`
+}
 
 function useIsMobile(): boolean {
   const [mob, setMob] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
@@ -327,22 +350,26 @@ function RichEditor({ value, onChange, placeholder, minHeight = 400, readOnly, c
 // ── MobileBottomNav ───────────────────────────────────────────────────────────
 function MobileBottomNav({ active }: { active: PageId }) {
   const ITEMS: { id: PageId; emoji: string; label: string }[] = [
-    { id: 'identity', emoji: '🎭', label: 'Identity' },
-    { id: 'dashboard', emoji: '⚡', label: 'Home' },
-    { id: 'worlds', emoji: '🌐', label: 'Worlds' },
-    { id: 'journal', emoji: '📓', label: 'Journal' },
-    { id: 'library', emoji: '📚', label: 'Library' },
-    { id: 'calendar', emoji: '📅', label: 'Cal' },
-    { id: 'travel', emoji: '✈️', label: 'Travel' },
+    { id: 'beautiful-life', emoji: '📅', label: 'Life' },
     { id: 'fortune', emoji: '🔮', label: 'Fortune' },
+    { id: 'manifestation', emoji: '✨', label: 'Cause' },
+    { id: 'possession', emoji: '🎭', label: 'Poss' },
+    { id: 'master-board', emoji: '📋', label: 'Board' },
+    { id: 'levelup', emoji: '⬆️', label: 'Lv' },
+    { id: 'project', emoji: '📁', label: 'Proj' },
+    { id: 'quest', emoji: '⚡', label: 'Quest' },
+    { id: 'review', emoji: '📓', label: 'Review' },
+    { id: 'account', emoji: '💰', label: 'Acct' },
+    { id: 'travel', emoji: '✈️', label: 'Trip' },
+    { id: 'fragment', emoji: '◇', label: '···' },
   ]
   return (
-    <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 500, display: 'flex', backgroundColor: 'rgba(255,255,255,0.95)', borderTop: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+    <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 500, display: 'flex', overflowX: 'auto', WebkitOverflowScrolling: 'touch', backgroundColor: 'rgba(255,255,255,0.95)', borderTop: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
       {ITEMS.map(item => {
         const isActive = active === item.id
         return (
-          <Link key={item.id} to={item.id === 'dashboard' ? '/' : `/${item.id}`}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3px', padding: '10px 2px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', minHeight: '56px', position: 'relative', WebkitTapHighlightColor: 'transparent', textDecoration: 'none', color: 'inherit' }}
+          <Link key={item.id} to={item.id === 'quest' ? '/' : `/${item.id}`}
+            style={{ flex: '0 0 auto', minWidth: '52px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3px', padding: '10px 6px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', minHeight: '56px', position: 'relative', WebkitTapHighlightColor: 'transparent', textDecoration: 'none', color: 'inherit' }}
           >
             {isActive && <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: '28px', height: '2.5px', borderRadius: '999px', backgroundColor: '#6366f1', boxShadow: '0 0 8px rgba(99,102,241,0.7)' }} />}
             <span style={{ fontSize: '18px', lineHeight: 1 }}>{item.emoji}</span>
@@ -2436,263 +2463,11 @@ function PomodoroModal({
   )
 }
 
-// ═══════════════════════════════════════ WORLDS PAGE ══════════════════════════
+/** 구 Worlds 로컬 데이터 키 — KV 동기화 pass-through용으로만 유지 */
 const WORLDS_KEY = 'creative_os_worlds_v1'
 
-type WorldSection = { id: string; title: string; placeholder: string }
-type WorldDef = {
-  id: string; name: string; tagline: string; emoji: string
-  accent: string; border: string
-  sections: WorldSection[]
-}
-
-const WORLDS: WorldDef[] = [
-  {
-    id: 'webtoon', name: '성인 웹툰 프로젝트', tagline: '주력 연재 · 스토리 바이블',
-    emoji: '🎨', accent: '#818cf8', border: 'rgba(99,102,241,0.3)',
-    sections: [
-      { id: 'bible', title: '스토리 바이블', placeholder: '작품의 핵심 기획 의도, 테마, 세계관 요약을 자유롭게 작성하세요...' },
-      { id: 'chars', title: '캐릭터 시트', placeholder: '주인공·조연·빌런의 외모, 성격, 관계도, 말투 특성...' },
-      { id: 'world', title: '세계관 설정', placeholder: '마법 체계, 사회 구조, 역사 배경, 지리적 특성...' },
-      { id: 'plot', title: '플롯 구조', placeholder: '막 구조, 주요 전환점, 클라이맥스, 엔딩 방향...' },
-    ],
-  },
-  {
-    id: 'funding', name: '사주 사이드 펀딩', tagline: '크라우드펀딩 · 비즈니스 전략',
-    emoji: '🔯', accent: '#fbbf24', border: 'rgba(251,191,36,0.3)',
-    sections: [
-      { id: 'strategy', title: '비즈니스 전략', placeholder: '펀딩 목표 금액, 차별화 포인트, 단계별 실행 계획...' },
-      { id: 'content', title: '콘텐츠 기획', placeholder: '리워드 구성, 커리큘럼, 무료/유료 경계선 설계...' },
-      { id: 'market', title: '타겟 분석', placeholder: '주 고객층 페르소나, 경쟁사 분석, 포지셔닝 전략...' },
-      { id: 'revenue', title: '수익 모델', placeholder: '가격 정책, 수익 구조, 장기 확장 비전...' },
-    ],
-  },
-  {
-    id: 'health', name: '개인 건강 관리', tagline: '건강 일지 · 루틴 설계',
-    emoji: '💪', accent: '#34d399', border: 'rgba(52,211,153,0.28)',
-    sections: [
-      { id: 'journal', title: '건강 일지', placeholder: '오늘의 컨디션, 수면 질, 에너지 레벨 메모...' },
-      { id: 'diet', title: '식단 기록', placeholder: '식사 내용, 칼로리 추정, 영양 밸런스 체크...' },
-      { id: 'workout', title: '운동 루틴', placeholder: '운동 종류, 시간, 강도, 세트·반복 수...' },
-      { id: 'goals', title: '목표 설정', placeholder: '단기·장기 건강 목표, 마일스톤, 측정 기준...' },
-    ],
-  },
-]
-
-function loadWorldData(): Record<string, Record<string, string>> {
-  try { const r = localStorage.getItem(WORLDS_KEY); return r ? JSON.parse(r) : {} }
-  catch { return {} }
-}
-function saveWorldSection(worldId: string, sectionId: string, content: string) {
-  const data = loadWorldData()
-  if (!data[worldId]) data[worldId] = {}
-  data[worldId][sectionId] = content
-  localStorage.setItem(WORLDS_KEY, JSON.stringify(data))
-  kvSet(WORLDS_KEY, data)
-}
-
-function WorldsPage() {
-  const [data, setData] = useState<Record<string, Record<string, string>>>({})
-  const [worldId, setWorldId] = useState(WORLDS[0].id)
-  const [secId, setSecId] = useState(WORLDS[0].sections[0].id)
-  const [draft, setDraft] = useState('')
-  const [saved, setSaved] = useState(true)
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => { setData(loadWorldData()) }, [])
-
-  useEffect(() => {
-    setDraft(data[worldId]?.[secId] ?? '')
-    setSaved(true)
-  }, [worldId, secId, data])
-
-  function handleChange(val: string) {
-    setDraft(val); setSaved(false)
-    if (debounce.current) clearTimeout(debounce.current)
-    debounce.current = setTimeout(() => {
-      saveWorldSection(worldId, secId, val)
-      setData(loadWorldData()); setSaved(true)
-    }, 600)
-  }
-
-  function switchWorld(id: string) {
-    setWorldId(id)
-    setSecId(WORLDS.find(w => w.id === id)!.sections[0].id)
-  }
-
-  const world = WORLDS.find(w => w.id === worldId)!
-  const section = world.sections.find(s => s.id === secId)!
-
-  return (
-    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '28px 48px', display: 'flex', gap: '20px', height: 'calc(100vh - 57px)', boxSizing: 'border-box' }}>
-
-      {/* ── 왼쪽 패널: 월드 목록 ── */}
-      <div style={{ width: '270px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <p style={{ margin: '0 0 6px', fontSize: '10px', color: '#787774', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>
-          나의 작업 세계
-        </p>
-
-        {WORLDS.map(w => {
-          const isActive = worldId === w.id
-          const totalChars = Object.values(data[w.id] ?? {}).join('').length
-          return (
-            <button key={w.id} onClick={() => switchWorld(w.id)} style={{
-              textAlign: 'left', padding: '16px 18px', borderRadius: '16px', cursor: 'pointer',
-              border: `1.5px solid ${isActive ? w.border : 'transparent'}`,
-              backgroundColor: isActive ? '#F1F1EF' : '#FFFFFF',
-              boxShadow: isActive ? `0 0 0 1px ${w.border}, 0 4px 20px ${w.accent}18` : 'none',
-              transition: 'all 0.18s',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' }}>
-                <span style={{ fontSize: '18px' }}>{w.emoji}</span>
-                <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: isActive ? '#fff' : '#37352F' }}>
-                  {w.name}
-                </p>
-              </div>
-              <p style={{ margin: 0, fontSize: '11px', color: isActive ? w.accent : '#787774' }}>
-                {w.tagline}
-              </p>
-              {isActive && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '10px' }}>
-                  {w.sections.map(s => (
-                    <span key={s.id} style={{
-                      fontSize: '10px', fontWeight: 600, color: w.accent,
-                      backgroundColor: `${w.accent}14`, border: `1px solid ${w.accent}28`,
-                      padding: '2px 8px', borderRadius: '999px',
-                    }}>
-                      {s.title}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <p style={{ margin: '8px 0 0', fontSize: '10px', color: '#787774' }}>
-                {totalChars > 0 ? `${totalChars.toLocaleString()}자 작성됨` : '아직 작성 내용 없음'}
-              </p>
-            </button>
-          )
-        })}
-
-        {/* 전체 작성 현황 */}
-        <div style={{ marginTop: 'auto', padding: '14px 16px', backgroundColor: '#F1F1EF', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.06)' }}>
-          <p style={{ margin: '0 0 10px', fontSize: '10px', color: '#787774', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-            작성 현황
-          </p>
-          {WORLDS.map(w => {
-            const count = Object.values(data[w.id] ?? {}).join('').length
-            const maxCount = 10000
-            const pct = Math.min(count / maxCount * 100, 100)
-            return (
-              <div key={w.id} style={{ marginBottom: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '11px', color: '#787774' }}>{w.emoji} {w.name.slice(0, 7)}…</span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: w.accent }}>
-                    {count > 999 ? `${(count / 1000).toFixed(1)}k` : count}자
-                  </span>
-                </div>
-                <div style={{ height: '3px', backgroundColor: '#EBEBEA', borderRadius: '999px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pct}%`, backgroundColor: w.accent, borderRadius: '999px', transition: 'width 0.4s' }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* ── 오른쪽 패널: 에디터 ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#111', borderRadius: '12px', border: `1px solid ${world.border}`, overflow: 'hidden' }}>
-
-        {/* 에디터 헤더 */}
-        <div style={{ padding: '18px 28px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '22px' }}>{world.emoji}</span>
-            <div>
-              <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#37352F' }}>{world.name}</p>
-              <p style={{ margin: 0, fontSize: '11px', color: world.accent, marginTop: '2px' }}>{world.tagline}</p>
-            </div>
-          </div>
-          <span style={{
-            fontSize: '10px', fontWeight: 700, letterSpacing: '0.06em',
-            color: saved ? '#34d399' : '#f59e0b',
-            transition: 'color 0.3s',
-          }}>
-            {saved ? '● 저장됨' : '● 저장 중...'}
-          </span>
-        </div>
-
-        {/* 섹션 탭 */}
-        <div style={{ display: 'flex', gap: '2px', padding: '10px 20px 0', borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0, overflowX: 'auto' }}>
-          {world.sections.map(s => {
-            const isActive = secId === s.id
-            const count = (data[worldId]?.[s.id] ?? '').length
-            return (
-              <button key={s.id} onClick={() => setSecId(s.id)} style={{
-                padding: '8px 16px', borderRadius: '8px 8px 0 0', cursor: 'pointer',
-                border: 'none', fontSize: '12px', fontWeight: isActive ? 700 : 500,
-                color: isActive ? '#fff' : '#787774',
-                backgroundColor: isActive ? '#FFFFFF' : 'transparent',
-                borderBottom: `2px solid ${isActive ? world.accent : 'transparent'}`,
-                transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: '6px',
-                flexShrink: 0, whiteSpace: 'nowrap',
-              }}>
-                {s.title}
-                {count > 0 && (
-                  <span style={{ fontSize: '9px', fontWeight: 700, color: world.accent, backgroundColor: `${world.accent}20`, padding: '1px 5px', borderRadius: '999px' }}>
-                    {count > 999 ? `${(count / 1000).toFixed(1)}k` : count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* 본문 에디터 */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '32px 44px 24px' }}>
-          {/* 섹션 제목 */}
-          <h2 style={{ margin: '0 0 20px', fontSize: '22px', fontWeight: 800, color: world.accent, letterSpacing: '-0.5px' }}>
-            {section.title}
-          </h2>
-          {/* 자 수 */}
-          <p style={{ margin: '0 0 16px', fontSize: '11px', color: '#AEAAA4' }}>
-            {draft.length > 0 ? `${draft.length.toLocaleString()}자 · ${draft.split('\n').length}줄` : '아직 작성된 내용이 없습니다.'}
-          </p>
-          {/* Rich Editor */}
-          <RichEditor
-            key={`${worldId}-${secId}`}
-            value={draft}
-            onChange={handleChange}
-            placeholder={section.placeholder}
-            minHeight={420}
-          />
-        </div>
-
-        {/* 하단 툴바 */}
-        <div style={{ padding: '12px 28px', borderTop: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <div style={{ display: 'flex', gap: '16px' }}>
-            {world.sections.map(s => {
-              const count = (data[worldId]?.[s.id] ?? '').length
-              return count > 0 ? (
-                <span key={s.id} style={{ fontSize: '11px', color: '#787774' }}>
-                  {s.title}: <span style={{ color: world.accent, fontWeight: 700 }}>{count.toLocaleString()}자</span>
-                </span>
-              ) : null
-            })}
-          </div>
-          <button
-            onClick={() => { if (draft && confirm('이 섹션의 내용을 초기화할까요?')) { handleChange('') } }}
-            style={{ fontSize: '11px', color: '#374151', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px' }}
-            onMouseEnter={e => (e.currentTarget.style.color = '#9B9A97')}
-            onMouseLeave={e => (e.currentTarget.style.color = '#374151')}
-          >
-            초기화
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════ JOURNAL PAGE ════════════════════════
-function JournalPage({ completedQuests, xpState, userQuests, onOpenNote, onJournalChange }: {
+// ═══════════════════════════════════════ REVIEW PAGE (구 Journal) ════════════
+function ReviewPage({ completedQuests, xpState, userQuests, onOpenNote, onJournalChange }: {
   completedQuests: string[]
   xpState: XpState
   userQuests: Card[]
@@ -2801,9 +2576,10 @@ function JournalPage({ completedQuests, xpState, userQuests, onOpenNote, onJourn
           <div style={{ paddingBottom: '16px', borderBottom: '1px solid rgba(0,0,0,0.06)', marginBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
               <PenLine size={14} color="#6366f1" />
-              <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Journal</p>
+              <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Review</p>
             </div>
-            <p style={{ margin: '0 0 3px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>창작 일지</p>
+            <p style={{ margin: '0 0 3px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>Review — 하루 결산</p>
+            <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#787774' }}>매일의 결산을 적고 마무리하는 공간입니다.</p>
             <p style={{ margin: 0, fontSize: '11px', color: '#787774' }}>{entryKeys.length}개의 기록</p>
           </div>
 
@@ -3388,266 +3164,6 @@ function SajuBigeupSection() {
   )
 }
 
-// ═══════════════════════════════════════ LIBRARY PAGE ════════════════════════
-function LibraryPage({ xpState, completedQuestsCount, onNavigate }: {
-  xpState: XpState
-  completedQuestsCount: number
-  onNavigate: (page: 'worlds' | 'journal') => void
-}) {
-  const isMobile = useIsMobile()
-  const journalStore = loadJournal()
-  const journalEntries = Object.values(journalStore).sort((a, b) => b.date.localeCompare(a.date))
-  const [worldsData] = useState<Record<string, Record<string, string>>>(() => loadWorldData())
-
-  const heroStats = [
-    {
-      label: '현재 레벨', value: `Lv.${calculateLevel(xpState.totalXp).currentLevel}`,
-      sub: getLevelTitle(calculateLevel(xpState.totalXp).currentLevel), col: '#818cf8',
-      icon: <Trophy size={20} color="#818cf8" />,
-    },
-    {
-      label: '누적 경험치', value: `${xpState.totalXp.toLocaleString()} XP`,
-      sub: `다음 레벨까지 ${calculateLevel(xpState.totalXp).maxCurrentLevelXp - calculateLevel(xpState.totalXp).currentLevelXp} XP`,
-      col: '#fbbf24', icon: <BarChart3 size={20} color="#fbbf24" />,
-    },
-    {
-      label: '완료 퀘스트', value: `${completedQuestsCount}개`,
-      sub: '오늘 기준 완료', col: '#34d399',
-      icon: <CheckCircle2 size={20} color="#34d399" />,
-    },
-    {
-      label: '일지 기록', value: `${journalEntries.length}일`,
-      sub: '창작 여정의 발자국', col: '#f472b6',
-      icon: <CalendarDays size={20} color="#f472b6" />,
-    },
-  ]
-
-  return (
-    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 44px' }}>
-      {/* 헤더 */}
-      <div style={{ marginBottom: '32px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-            <BookOpen size={14} color="#6366f1" />
-            <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Library</p>
-          </div>
-          <p style={{ margin: '0 0 6px', fontSize: '24px', fontWeight: 800, color: '#37352F', letterSpacing: '-0.5px' }}>마스터 보드</p>
-          <p style={{ margin: 0, fontSize: '13px', color: '#787774' }}>나의 모든 창작 데이터를 한눈에 관리하는 공간</p>
-        </div>
-      </div>
-
-      {/* ── 성장 통계 히어로 카드 4개 ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)', gap: '16px', marginBottom: '24px' }}>
-        {heroStats.map(s => (
-          <div key={s.label}
-            style={{
-              backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px 22px',
-              border: '1px solid rgba(0,0,0,0.06)', transition: 'transform 0.2s, box-shadow 0.2s, border-color 0.2s',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.transform = 'translateY(-4px)'
-              e.currentTarget.style.boxShadow = `0 16px 48px ${s.col}20`
-              e.currentTarget.style.borderColor = `${s.col}40`
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.transform = 'translateY(0)'
-              e.currentTarget.style.boxShadow = 'none'
-              e.currentTarget.style.borderColor = '#EBEBEA'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#787774', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{s.label}</span>
-              {s.icon}
-            </div>
-            <p style={{
-              margin: '0 0 5px', fontSize: '30px', fontWeight: 900, color: s.col, lineHeight: 1,
-              textShadow: `0 0 24px ${s.col}44`,
-            }}>{s.value}</p>
-            <p style={{ margin: 0, fontSize: '11px', color: '#787774' }}>{s.sub}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* ── 2열: 집필 실록 + 프로젝트 아카이브 ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-
-        {/* 집필 실록 */}
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '28px', border: '1px solid rgba(0,0,0,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <PenLine size={16} color="#818cf8" />
-              <div>
-                <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em', textTransform: 'uppercase' }}>집필 실록</p>
-                <p style={{ margin: '3px 0 0', fontSize: '15px', fontWeight: 800, color: '#37352F' }}>날짜별 일지 아카이브</p>
-              </div>
-            </div>
-            <button onClick={() => onNavigate('journal')} style={{
-              fontSize: '11px', color: '#6366f1', background: 'rgba(99,102,241,0.08)',
-              border: '1px solid rgba(99,102,241,0.25)', padding: '5px 14px',
-              borderRadius: '999px', cursor: 'pointer', fontWeight: 700, transition: 'all 0.15s',
-            }}
-              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.18)' }}
-              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.08)' }}
-            >
-              Journal 열기 →
-            </button>
-          </div>
-
-          {journalEntries.length === 0 ? (
-            <div style={{ padding: '40px 0', textAlign: 'center' }}>
-              <PenLine size={32} color="#F1F1EF" style={{ marginBottom: '12px' }} />
-              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4' }}>아직 일지가 없습니다</p>
-              <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#37352F' }}>Journal 탭에서 첫 기록을 남겨보세요</p>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '360px', overflowY: 'auto' }}>
-              {journalEntries.map(entry => {
-                const blockCount = entry.blocks?.length ?? 0
-                return (
-                  <div key={entry.date}
-                    onClick={() => onNavigate('journal')}
-                    style={{
-                      display: 'flex', alignItems: 'flex-start', gap: '14px',
-                      padding: '13px 16px', borderRadius: '12px', cursor: 'pointer',
-                      backgroundColor: '#F4F4F2', border: '1px solid #202020',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.borderColor = 'rgba(99,102,241,0.32)'
-                      e.currentTarget.style.backgroundColor = 'rgba(99,102,241,0.05)'
-                      e.currentTarget.style.transform = 'translateX(3px)'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.borderColor = '#EBEBEA'
-                      e.currentTarget.style.backgroundColor = '#F7F7F5'
-                      e.currentTarget.style.transform = 'translateX(0)'
-                    }}
-                  >
-                    {/* 날짜 캘린더 아이콘 */}
-                    <div style={{
-                      flexShrink: 0, width: '44px', height: '44px', borderRadius: '12px',
-                      backgroundColor: '#FFFFFF', display: 'flex', flexDirection: 'column',
-                      alignItems: 'center', justifyContent: 'center', border: '1px solid #2a2a2a',
-                    }}>
-                      <span style={{ fontSize: '9px', color: '#787774', lineHeight: 1 }}>
-                        {new Date(entry.date + 'T00:00:00').toLocaleDateString('ko-KR', { month: 'short' })}
-                      </span>
-                      <span style={{ fontSize: '17px', fontWeight: 900, color: '#37352F', lineHeight: 1.1 }}>
-                        {new Date(entry.date + 'T00:00:00').getDate()}
-                      </span>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: '#37352F' }}>{formatDateKo(entry.date)}</span>
-                        {blockCount > 0 && (
-                          <span style={{
-                            fontSize: '10px', color: '#818cf8', fontWeight: 700,
-                            backgroundColor: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.22)',
-                            padding: '1px 8px', borderRadius: '999px',
-                          }}>
-                            ⚡+{blockCount * XP_PER_QUEST} XP
-                          </span>
-                        )}
-                      </div>
-                      <p style={{ margin: 0, fontSize: '11px', color: '#787774', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {entry.content?.replace(/\n/g, ' ')?.slice(0, 64) || '내용 없음'}
-                      </p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* 프로젝트 아카이브 */}
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '28px', border: '1px solid rgba(0,0,0,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Archive size={16} color="#fbbf24" />
-              <div>
-                <p style={{ margin: 0, fontSize: '10px', fontWeight: 800, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase' }}>프로젝트 아카이브</p>
-                <p style={{ margin: '3px 0 0', fontSize: '15px', fontWeight: 800, color: '#37352F' }}>Worlds 기획안 현황</p>
-              </div>
-            </div>
-            <button onClick={() => onNavigate('worlds')} style={{
-              fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)',
-              border: '1px solid rgba(251,191,36,0.25)', padding: '5px 14px',
-              borderRadius: '999px', cursor: 'pointer', fontWeight: 700, transition: 'all 0.15s',
-            }}
-              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(251,191,36,0.16)' }}
-              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(251,191,36,0.08)' }}
-            >
-              Worlds 열기 →
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {WORLDS.map(world => {
-              const secs = worldsData[world.id] ?? {}
-              const totalChars = Object.values(secs).reduce((acc, v) => acc + (v?.length ?? 0), 0)
-              return (
-                <div key={world.id}
-                  onClick={() => onNavigate('worlds')}
-                  style={{
-                    padding: '18px 20px', borderRadius: '16px', cursor: 'pointer',
-                    backgroundColor: '#F4F4F2', border: '1px solid #202020',
-                    transition: 'all 0.18s',
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.borderColor = world.border
-                    e.currentTarget.style.backgroundColor = `${world.accent}06`
-                    e.currentTarget.style.transform = 'translateX(4px)'
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = '#EBEBEA'
-                    e.currentTarget.style.backgroundColor = '#F7F7F5'
-                    e.currentTarget.style.transform = 'translateX(0)'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
-                    <span style={{ fontSize: '26px' }}>{world.emoji}</span>
-                    <div style={{ flex: 1 }}>
-                      <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#37352F' }}>{world.name}</p>
-                      <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#787774' }}>{world.tagline}</p>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <p style={{ margin: 0, fontSize: '16px', fontWeight: 900, color: totalChars > 0 ? world.accent : '#F1F1EF', lineHeight: 1 }}>
-                        {totalChars.toLocaleString()}
-                      </p>
-                      <p style={{ margin: 0, fontSize: '9px', color: '#787774' }}>자 작성</p>
-                    </div>
-                  </div>
-                  {/* 섹션 진행 바 */}
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    {world.sections.map(sec => {
-                      const has = (secs[sec.id]?.length ?? 0) > 0
-                      return (
-                        <div key={sec.id} title={sec.title} style={{
-                          flex: 1, height: '4px', borderRadius: '999px',
-                          backgroundColor: has ? world.accent : '#EBEBEA',
-                          boxShadow: has ? `0 0 6px ${world.accent}55` : 'none',
-                          transition: 'background 0.3s',
-                        }} />
-                      )
-                    })}
-                  </div>
-                  <p style={{ margin: '7px 0 0', fontSize: '10px', color: '#787774' }}>
-                    {world.sections.filter(s => (secs[s.id]?.length ?? 0) > 0).length} / {world.sections.length} 섹션 작성됨
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* ── 사주 명리 비급서 섹션 ── */}
-      <SajuBigeupSection />
-    </div>
-  )
-}
-
 // ═══════════════════════════════════════ CALENDAR ════════════════════════════
 const CALENDAR_KEY = 'creative_os_calendar_v1'
 const EVENT_PALETTE = ['#6366f1', '#f97316', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#7C3AED']
@@ -3917,7 +3433,7 @@ function UnifiedCalendar({ onOpenNote, userQuests, refreshTrigger = 0 }: { onOpe
                   <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
                     {dayJournals.map(n => (
                       <li key={n.id} style={{ marginBottom: '6px' }}>
-                        <Link to={`/journal?note=${n.id}${(n as { fromCalendar?: boolean }).fromCalendar ? '&source=calendar' : ''}`} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left', textDecoration: 'none' }}>{n.title}</Link>
+                        <Link to={`/review?note=${n.id}${(n as { fromCalendar?: boolean }).fromCalendar ? '&source=calendar' : ''}`} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', color: '#6366f1', fontWeight: 600, textAlign: 'left', textDecoration: 'none' }}>{n.title}</Link>
                       </li>
                     ))}
                   </ul>
@@ -4351,7 +3867,7 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '8px' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <Link
-                          to={`/journal?note=${note.id}&source=calendar`}
+                          to={`/review?note=${note.id}&source=calendar`}
                           style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#37352F', cursor: 'pointer', display: 'inline-block', textDecoration: 'none' }}
                           title="클릭하여 노트 열기 (Ctrl+클릭: 새 탭)"
                           onMouseEnter={e => (e.currentTarget.style.color = '#6366f1')}
@@ -4748,7 +4264,7 @@ function CalendarPage() {
 }
 
 // ═══════════════════════════════════════ IDENTITY PAGE ══════════════════════════
-function IdentityPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast }: {
+function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast }: {
   identities: IdentityRow[]
   activeIdentityId: string | null
   onRefresh: () => void
@@ -8867,6 +8383,80 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
   )
 }
 
+// ═════════════════ 신규 GNB 페이지 (1차 뼈대) ═══════════════════════════════════
+function ManifestationPage() {
+  const [sel, setSel] = useState<string | null>(null)
+  const causes = ['원인 카드 A', '원인 카드 B', '원인 카드 C']
+  const outcomes = [
+    '결과: 오늘의 메모와 연결된 흐름 (샘플)',
+    '결과: 다른 관점에서의 해석 (샘플)',
+    '결과: 기록용 한 줄 (샘플)',
+  ]
+  const idx = sel ? causes.indexOf(sel) : -1
+  const resultText = idx >= 0 ? outcomes[idx % outcomes.length] : '좌측에서 원인을 선택하면 우측에 매핑된 결과가 표시됩니다.'
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '28px 44px' }}>
+      <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 800, color: '#37352F' }}>Manifestation</h1>
+      <p style={{ margin: '0 0 20px', fontSize: '13px', color: '#787774' }}>인과(Cause & Effect) — 좌측 원인 · 우측 결과 (보일러플레이트)</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px,1fr) minmax(280px,1.2fr)', gap: '20px', minHeight: '380px' }}>
+        <div style={{ border: '1px solid rgba(0,0,0,0.08)', borderRadius: '12px', padding: '16px', background: '#fff' }}>
+          {causes.map(c => (
+            <button key={c} type="button" onClick={() => setSel(c)} style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: '8px', padding: '12px 14px', borderRadius: '8px', border: sel === c ? '2px solid #6366f1' : '1px solid rgba(0,0,0,0.08)', background: sel === c ? 'rgba(99,102,241,0.08)' : '#fafafa', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#37352F' }}>{c}</button>
+          ))}
+        </div>
+        <div style={{ border: '1px solid rgba(0,0,0,0.08)', borderRadius: '12px', padding: '22px', background: '#f7f7f5', fontSize: '14px', color: '#37352F', lineHeight: 1.7 }}>{resultText}</div>
+      </div>
+    </div>
+  )
+}
+
+function MasterBoardPage() {
+  return (
+    <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '28px 44px', minHeight: '70vh' }}>
+      <h1 style={{ margin: '0 0 12px', fontSize: '22px', fontWeight: 800 }}>MasterBoard</h1>
+      <p style={{ color: '#787774', fontSize: '13px', marginBottom: '20px' }}>추후 대시보드용 빈 캔버스</p>
+      <div style={{ border: '2px dashed rgba(0,0,0,0.12)', borderRadius: '16px', minHeight: '480px', background: 'repeating-linear-gradient(0deg, transparent, transparent 19px, rgba(0,0,0,0.03) 20px)' }} />
+    </div>
+  )
+}
+
+function LevelupPage() {
+  return (
+    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '28px 44px' }}>
+      <h1 style={{ margin: '0 0 12px', fontSize: '22px', fontWeight: 800 }}>Level up</h1>
+      <p style={{ color: '#787774', fontSize: '13px' }}>스탯·레벨 UI를 붙일 빈 페이지</p>
+      <div style={{ marginTop: '24px', padding: '32px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.08)', background: '#fff', textAlign: 'center', color: '#AEAAA4' }}>— 게이지·레벨 영역 예정 —</div>
+    </div>
+  )
+}
+
+/** 통합 가계부 — 스키마 안 (주석)
+ *  제안: ledger_accounts(id, user_id, name, type)
+ *        ledger_entries(id, user_id, amount, currency, category_id, note, occurred_at, source_type)
+ *        travel_expenses 기존 테이블은 source_type='travel' | category_id=여행 하위로 편입하거나
+ *        뷰(v_travel_expenses)로 기존 API 유지 후 점진 이전.
+ */
+function AccountPage() {
+  return (
+    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '28px 44px' }}>
+      <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 800 }}>Account — 통합 가계부</h1>
+      <p style={{ color: '#787774', fontSize: '13px', marginBottom: '8px' }}>여행 가계부(travel_expenses)는 하위 카테고리로 편입 예정 — 코드 상단 주석에 스키마 초안 참고</p>
+      <pre style={{ fontSize: '11px', color: '#9B9A97', whiteSpace: 'pre-wrap', marginBottom: '20px', padding: '12px', background: '#f4f4f2', borderRadius: '8px' }}>
+        {`/* 스키마 구상안 */\nledger_entries + categories\n  └ travel 파트: 기존 travel_expenses 연동 또는 마이그레이션`}
+      </pre>
+      <div style={{ padding: '48px', border: '2px dashed rgba(0,0,0,0.1)', borderRadius: '12px', textAlign: 'center', color: '#AEAAA4' }}>거래 입력·목록 UI 예정</div>
+    </div>
+  )
+}
+
+function FragmentPage() {
+  return (
+    <div style={{ maxWidth: '800px', margin: '0 auto', padding: '28px 44px', minHeight: '50vh' }}>
+      <p style={{ margin: 0, fontSize: '14px', color: '#AEAAA4' }}>Fragment</p>
+    </div>
+  )
+}
+
 // ═══════════════════════════════════════ APP ═════════════════════════════════
 export default function App() {
   // ── Auth ──
@@ -8881,9 +8471,23 @@ export default function App() {
   // ── 페이지 라우팅 (React Router + HashRouter) ──
   const location = useLocation()
   const navigate = useNavigate()
-  const pathPage = location.pathname === '/' || location.pathname === '' ? 'dashboard' : location.pathname.slice(1)
-  const activePage = (['identity', 'dashboard', 'worlds', 'journal', 'library', 'calendar', 'travel', 'fortune'].includes(pathPage) ? pathPage : 'dashboard') as PageId
-  const setActivePage = (p: PageId) => navigate(p === 'dashboard' ? '/' : `/${p}`)
+  const pathSeg = location.pathname.replace(/^\//, '').split('/')[0] || ''
+  const pathPage = pathSeg === '' ? 'quest' : pathSeg
+  const activePage = (PAGE_IDS.includes(pathPage as PageId) ? pathPage : 'quest') as PageId
+  const setActivePage = (p: PageId) => navigate(p === 'quest' ? '/' : `/${p}`)
+
+  useEffect(() => {
+    const seg = location.pathname.replace(/^\//, '').split('/')[0]
+    const legacy: Record<string, string> = {
+      identity: '/possession',
+      journal: '/review',
+      calendar: '/beautiful-life',
+      dashboard: '/',
+      library: '/quest',
+      worlds: '/quest',
+    }
+    if (legacy[seg]) navigate(legacy[seg], { replace: true })
+  }, [location.pathname, navigate])
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0)
   const isMobile = useIsMobile()
 
@@ -9727,8 +9331,8 @@ export default function App() {
             onClose={() => {
               const wasJournal = noteTarget?.table === 'journals' || noteTarget?.table === 'calendar_journal'
               setNoteTarget(null)
-              if (wasJournal && location.pathname === '/journal') {
-                navigate('/journal', { replace: true })
+              if (wasJournal && location.pathname === '/review') {
+                navigate('/review', { replace: true })
               }
             }}
             onUpdateQuestPomodoroCount={async (questId, newCount) => {
@@ -9801,18 +9405,59 @@ export default function App() {
 
         {/* ════════════════ NAV ════════════════ */}
         <nav style={{ backgroundColor: '#FFFFFF', borderBottom: '1px solid rgba(0,0,0,0.06)', position: 'sticky', top: 0, zIndex: 100, display: isMobile ? 'none' : undefined }}>
-          <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '0 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '48px' }}>
+          <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '0 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '48px', gap: '12px' }}>
 
-            {/* 로고 */}
+            {/* 좌측: 날짜 + 만세력 일간·월간 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap' }}>{today}</p>
+              <span style={{ fontSize: '10px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title="만세력(월·일 기둥)">
+                {formatTodayGanzhiLine()}
+              </span>
+            </div>
+
+            {/* 중앙: GNB */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flex: 1, justifyContent: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+              {([
+                { id: 'beautiful-life' as const, label: 'BeautifulLife', emoji: '📅' },
+                { id: 'fortune' as const, label: 'Fortune', emoji: '🔮' },
+                { id: 'manifestation' as const, label: 'Manifestation', emoji: '✨' },
+                { id: 'possession' as const, label: 'Possession', emoji: '🎭' },
+                { id: 'master-board' as const, label: 'MasterBoard', emoji: '📋' },
+                { id: 'levelup' as const, label: 'Levelup', emoji: '⬆️' },
+                { id: 'project' as const, label: 'Project', emoji: '📁' },
+                { id: 'quest' as const, label: 'Quest', emoji: '⚡' },
+                { id: 'review' as const, label: 'Review', emoji: '📓' },
+                { id: 'account' as const, label: 'Account', emoji: '💰' },
+                { id: 'travel' as const, label: 'Travel', emoji: '✈️' },
+                { id: 'fragment' as const, label: 'Fragment', emoji: '◇' },
+              ]).map(p => (
+                <Link key={p.id} to={p.id === 'quest' ? '/' : `/${p.id}`} style={{
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  padding: '5px 8px', borderRadius: '8px', cursor: 'pointer', border: 'none',
+                  fontSize: '11px', fontWeight: activePage === p.id ? 700 : 500,
+                  color: activePage === p.id ? '#4F46E5' : '#787774',
+                  backgroundColor: activePage === p.id ? 'rgba(99,102,241,0.1)' : 'transparent',
+                  transition: 'all 0.15s', textDecoration: 'none',
+                }}>
+                  <span style={{ fontSize: '12px' }}>{p.emoji}</span>
+                  {p.label}
+                </Link>
+              ))}
+            </div>
+
+            {/* 우측: 로고 · 동기화 · 계정 · 로그아웃 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-              <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <IcoPen />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <IcoPen />
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontWeight: 800, fontSize: '12px', color: '#37352F', lineHeight: 1 }}>창작 OS</p>
+                  <p style={{ margin: 0, fontSize: '9px', color: '#9B9A97', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session?.user?.email ?? ''}>
+                    {session?.user?.email ?? ''}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p style={{ margin: 0, fontWeight: 800, fontSize: '13px', color: '#37352F', lineHeight: 1 }}>창작 OS</p>
-                <p style={{ margin: 0, fontSize: '9px', color: '#787774', marginTop: '1px' }}>웹툰 작가 성장형 작업실</p>
-              </div>
-              {/* Supabase 동기화 상태 표시 */}
               {isSupabaseReady && syncStatus !== 'idle' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}>
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
@@ -9824,49 +9469,8 @@ export default function App() {
               {isSupabaseReady && syncStatus === 'idle' && (
                 <div title="Supabase 연결됨" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399', boxShadow: '0 0 6px rgba(52,211,153,0.6)', flexShrink: 0 }} />
               )}
-              <button
-                onClick={async () => { await signOut(); setSession(null) }}
-                title="로그아웃"
-                style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '11px', cursor: 'pointer', marginLeft: '4px', transition: 'all 0.15s' }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = '#f87171'; e.currentTarget.style.color = '#f87171' }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = '#EBEBEA'; e.currentTarget.style.color = '#9B9A97' }}
-              >로그아웃</button>
-            </div>
-
-            {/* 페이지 탭 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-              {([
-                { id: 'identity', label: 'Identity', emoji: '🎭' },
-                { id: 'dashboard', label: 'Dashboard', emoji: '⚡' },
-                { id: 'library', label: 'Library', emoji: '📚' },
-                { id: 'worlds', label: 'Worlds', emoji: '🌐' },
-                { id: 'journal', label: 'Journal', emoji: '📓' },
-                { id: 'calendar', label: 'Calendar', emoji: '📅' },
-                { id: 'travel', label: 'Travel', emoji: '✈️' },
-                { id: 'fortune', label: 'Fortune', emoji: '🔮' },
-              ] as const).map(p => (
-                <Link key={p.id} to={p.id === 'dashboard' ? '/' : `/${p.id}`} style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '6px 16px', borderRadius: '8px', cursor: 'pointer', border: 'none',
-                  fontSize: '13px', fontWeight: activePage === p.id ? 700 : 500,
-                  color: activePage === p.id ? '#fff' : '#787774',
-                  backgroundColor: activePage === p.id ? 'rgba(99,102,241,0.08)' : 'transparent',
-                  transition: 'all 0.15s', textDecoration: 'none',
-                }}>
-                  <span style={{ fontSize: '13px' }}>{p.emoji}</span>
-                  {p.label}
-                  {activePage === p.id && (
-                    <span style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: '#818cf8', display: 'inline-block' }} />
-                  )}
-                </Link>
-              ))}
-            </div>
-
-            {/* 우측 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
-              <p style={{ margin: 0, fontSize: '11px', color: '#787774' }}>{today}</p>
               {timerRunning && (
-                <button onClick={() => setIsZenMode(true)} style={{
+                <button type="button" onClick={() => setIsZenMode(true)} style={{
                   display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700,
                   color: '#4F46E5', backgroundColor: 'rgba(99,102,241,0.1)',
                   border: '1px solid rgba(99,102,241,0.28)', padding: '5px 14px', borderRadius: '999px', cursor: 'pointer',
@@ -9875,6 +9479,14 @@ export default function App() {
                   집중 중 · 젠모드 복귀
                 </button>
               )}
+              <button
+                type="button"
+                onClick={async () => { await signOut(); setSession(null) }}
+                title="로그아웃"
+                style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '11px', cursor: 'pointer', transition: 'all 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = '#f87171'; e.currentTarget.style.color = '#f87171' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = '#EBEBEA'; e.currentTarget.style.color = '#9B9A97' }}
+              >로그아웃</button>
             </div>
           </div>
         </nav>
@@ -9884,34 +9496,31 @@ export default function App() {
 
         {/* ════════════════ BODY ════════════════ */}
         <div style={{ paddingBottom: isMobile ? '70px' : 0 }}>
-          {activePage === 'calendar' && (
+          {activePage === 'beautiful-life' && (
             <UnifiedCalendar
               userQuests={userQuests}
               onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
               refreshTrigger={calendarRefreshKey}
             />
           )}
-          {activePage === 'identity' && (
-        <IdentityPage
-          identities={identities}
-          activeIdentityId={activeIdentityId}
-          onRefresh={() => fetchIdentities().then(rows => setIdentities(rows))}
-          onRefreshActive={() => fetchActiveIdentity().then(id => setActiveIdentityId(id))}
-          onToast={fireToast}
-        />
-      )}
-          {activePage === 'travel' && <TravelPage syncStatus={syncStatus} onToast={fireToast} />}
           {activePage === 'fortune' && <FortunePage onReadingSaved={() => setCalendarRefreshKey(k => k + 1)} />}
-          {activePage === 'worlds' && <WorldsPage />}
-          {activePage === 'library' && (
-            <LibraryPage
-              xpState={xpState}
-              completedQuestsCount={completedQuests.length}
-              onNavigate={page => setActivePage(page)}
+          {activePage === 'manifestation' && <ManifestationPage />}
+          {activePage === 'possession' && (
+            <PossessionPage
+              identities={identities}
+              activeIdentityId={activeIdentityId}
+              onRefresh={() => fetchIdentities().then(rows => setIdentities(rows))}
+              onRefreshActive={() => fetchActiveIdentity().then(id => setActiveIdentityId(id))}
+              onToast={fireToast}
             />
           )}
-          {activePage === 'journal' && (
-            <JournalPage
+          {activePage === 'master-board' && <MasterBoardPage />}
+          {activePage === 'levelup' && <LevelupPage />}
+          {activePage === 'account' && <AccountPage />}
+          {activePage === 'fragment' && <FragmentPage />}
+          {activePage === 'travel' && <TravelPage syncStatus={syncStatus} onToast={fireToast} />}
+          {activePage === 'review' && (
+            <ReviewPage
               completedQuests={completedQuests}
               xpState={xpState}
               userQuests={userQuests}
@@ -9919,8 +9528,10 @@ export default function App() {
               onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
             />
           )}
-          {activePage === 'dashboard' && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
+          {(activePage === 'quest' || activePage === 'project') && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
 
+            {activePage === 'quest' && (
+            <>
             {/* ── 현재 태세 (우디르) ── */}
             <div style={{
               backgroundColor: '#FFFFFF',
@@ -9948,13 +9559,13 @@ export default function App() {
                     )
                   })()
                 ) : (
-                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Identity 메뉴에서 정체성을 선택하세요</p>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Possession 메뉴에서 정체성을 선택하세요</p>
                 )}
               </div>
               {activeIdentityId && identities.find(i => i.id === activeIdentityId) ? (
                 <button onClick={async () => { const ok = await updateActiveIdentity(null); if (ok) setActiveIdentityId(null) }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 종료</button>
               ) : (
-                <button onClick={() => setActivePage('identity')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
+                <button onClick={() => setActivePage('possession')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
               )}
             </div>
 
@@ -10188,9 +9799,15 @@ export default function App() {
                 </p>
               </div>
             </div>
+            </>
+            )}
 
-            {/* 3열 그리드: Area + 프로젝트 + 퀘스트 */}
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 2fr', gap: '16px', marginBottom: '20px' }}>
+            {activePage === 'project' && (
+              <h1 style={{ margin: '0 0 20px', fontSize: '22px', fontWeight: 800, color: '#37352F' }}>프로젝트 · Area & Real Projects</h1>
+            )}
+
+            {/* 2~3열 그리드: Area + 프로젝트 (+ 퀘스트는 Quest 탭에서만) */}
+            <div style={{ display: 'grid', gridTemplateColumns: activePage === 'project' ? (isMobile ? '1fr' : '1fr 1fr') : (isMobile ? '1fr' : '1fr 1fr 2fr'), gap: '16px', marginBottom: '20px' }}>
 
               {/* ── Area 관리 섹션 ── */}
               <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px' }}>
@@ -10342,6 +9959,7 @@ export default function App() {
                 </div>
               </div>
 
+              {activePage === 'quest' && (
               <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '30px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#37352F' }}>
@@ -10411,9 +10029,12 @@ export default function App() {
                   onPushQuestDeadlineUndo={pushQuestDeadlineUndo}
                 />
               </div>
+              )}
+
             </div>
 
-            {/* Focus CTA */}
+            {/* Focus CTA — Quest 전용 */}
+            {activePage === 'quest' && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', paddingBottom: '48px' }}>
               {selectedProjects.length === 0 && selectedQuests.length === 0 && (
                 <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4' }}>
@@ -10440,6 +10061,7 @@ export default function App() {
                 ▶ 재생 버튼 누르면 자동으로 젠 모드 진입 · ESC로 복귀
               </p>
             </div>
+            )}
 
           </div>}
         </div>{/* end body wrapper */}
