@@ -17,6 +17,8 @@ export const EVOLUTION_CATEGORY_LABEL: Record<EvolutionCategory, { label: string
 
 export type EvolutionItem = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   category: EvolutionCategory
   title: string
   body: string
@@ -85,6 +87,10 @@ export function saveEvolutionStore(s: EvolutionStore) {
   } catch { /* ignore */ }
 }
 
+export function activeEvolutionItems(items: EvolutionItem[]): EvolutionItem[] {
+  return items.filter(i => i.is_deleted !== true)
+}
+
 export function upsertEvolutionItem(
   store: EvolutionStore,
   patch: Omit<EvolutionItem, 'createdAt' | 'updatedAt'> & { id?: string },
@@ -123,13 +129,45 @@ export function upsertEvolutionItem(
   return { ...store, totalEvolutionXp, items }
 }
 
+/** 휴지통으로 — 완료 항목은 XP에서 차감(기존 삭제와 동일) */
 export function deleteEvolutionItem(store: EvolutionStore, id: string): EvolutionStore {
   const item = store.items.find(i => i.id === id)
+  if (!item || item.is_deleted === true) return store
   let totalEvolutionXp = store.totalEvolutionXp
-  if (item?.completed) totalEvolutionXp = Math.max(0, totalEvolutionXp - item.evolutionPoints)
+  if (item.completed) totalEvolutionXp = Math.max(0, totalEvolutionXp - item.evolutionPoints)
+  const now = new Date().toISOString()
   return {
     ...store,
     totalEvolutionXp,
-    items: store.items.filter(i => i.id !== id),
+    items: store.items.map(i => (i.id === id ? { ...i, is_deleted: true, updatedAt: now } : i)),
   }
+}
+
+export function restoreEvolutionItem(store: EvolutionStore, id: string): EvolutionStore {
+  const item = store.items.find(i => i.id === id)
+  if (!item || item.is_deleted !== true) return store
+  let totalEvolutionXp = store.totalEvolutionXp
+  if (item.completed) totalEvolutionXp += item.evolutionPoints
+  const now = new Date().toISOString()
+  return {
+    ...store,
+    totalEvolutionXp,
+    items: store.items.map(i => {
+      if (i.id !== id) return i
+      const { is_deleted: _d, ...rest } = i
+      return { ...rest, updatedAt: now } as EvolutionItem
+    }),
+  }
+}
+
+/** 휴지통에서 영구 삭제 — 이미 XP 차감된 휴지통 항목은 배열만 제거 */
+export function purgeEvolutionItem(store: EvolutionStore, id: string): EvolutionStore {
+  const item = store.items.find(i => i.id === id)
+  if (!item) return store
+  if (item.is_deleted !== true) {
+    let totalEvolutionXp = store.totalEvolutionXp
+    if (item.completed) totalEvolutionXp = Math.max(0, totalEvolutionXp - item.evolutionPoints)
+    return { ...store, totalEvolutionXp, items: store.items.filter(i => i.id !== id) }
+  }
+  return { ...store, items: store.items.filter(i => i.id !== id) }
 }

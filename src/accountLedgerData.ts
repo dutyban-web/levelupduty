@@ -28,6 +28,8 @@ export type LedgerCategory = {
 
 export type LedgerEntry = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   date: string
   /** 항상 양수 */
   amount: number
@@ -116,7 +118,33 @@ export function upsertLedgerEntry(
   return { ...store, entries }
 }
 
+export function activeLedgerEntries(entries: LedgerEntry[]): LedgerEntry[] {
+  return entries.filter(e => e.is_deleted !== true)
+}
+
 export function deleteLedgerEntry(store: LedgerStore, id: string): LedgerStore {
+  const now = new Date().toISOString()
+  return {
+    ...store,
+    entries: store.entries.map(e =>
+      e.id === id ? { ...e, is_deleted: true, updatedAt: now } : e,
+    ),
+  }
+}
+
+export function restoreLedgerEntry(store: LedgerStore, id: string): LedgerStore {
+  const now = new Date().toISOString()
+  return {
+    ...store,
+    entries: store.entries.map(e => {
+      if (e.id !== id) return e
+      const { is_deleted: _d, ...rest } = e
+      return { ...rest, updatedAt: now } as LedgerEntry
+    }),
+  }
+}
+
+export function purgeLedgerEntry(store: LedgerStore, id: string): LedgerStore {
   return { ...store, entries: store.entries.filter(e => e.id !== id) }
 }
 

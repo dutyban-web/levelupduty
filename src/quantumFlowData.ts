@@ -11,6 +11,8 @@ export type SpacetimeDirection = 'to_future' | 'to_past'
 
 export type QuantumLetter = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   title: string
   body: string
   /** 도착일 — 이 날짜에 통합 캘린더에 표시 */
@@ -74,6 +76,30 @@ export function upsertLetter(store: QuantumFlowStore, letter: Omit<QuantumLetter
   return { letters }
 }
 
+export function activeLetters(letters: QuantumLetter[]): QuantumLetter[] {
+  return letters.filter(l => l.is_deleted !== true)
+}
+
 export function deleteLetter(store: QuantumFlowStore, id: string): QuantumFlowStore {
+  const now = new Date().toISOString()
+  return {
+    letters: store.letters.map(l =>
+      l.id === id ? { ...l, is_deleted: true, updatedAt: now } : l,
+    ),
+  }
+}
+
+export function restoreLetter(store: QuantumFlowStore, id: string): QuantumFlowStore {
+  const now = new Date().toISOString()
+  return {
+    letters: store.letters.map(l => {
+      if (l.id !== id) return l
+      const { is_deleted: _d, ...rest } = l
+      return { ...rest, updatedAt: now } as QuantumLetter
+    }),
+  }
+}
+
+export function purgeLetter(store: QuantumFlowStore, id: string): QuantumFlowStore {
   return { letters: store.letters.filter(l => l.id !== id) }
 }

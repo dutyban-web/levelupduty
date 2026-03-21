@@ -6,9 +6,9 @@ import { kvSet } from './lib/supabase'
 export const LEVELUP_RPG_KEY = 'levelup_rpg_profile_v2'
 
 export type RpgEquipmentSlot = { slot: string; name: string }
-export type RpgBossRow = { id: string; name: string; cleared: boolean; memo: string }
-export type RpgMapRow = { id: string; name: string; stars: number; memo: string }
-export type RpgQuestRow = { id: string; title: string; done: boolean; memo: string }
+export type RpgBossRow = { id: string; name: string; cleared: boolean; memo: string; is_deleted?: boolean }
+export type RpgMapRow = { id: string; name: string; stars: number; memo: string; is_deleted?: boolean }
+export type RpgQuestRow = { id: string; title: string; done: boolean; memo: string; is_deleted?: boolean }
 export type RpgSkillRow = {
   id: string
   name: string
@@ -17,8 +17,9 @@ export type RpgSkillRow = {
   tag: string
   /** hex 색 */
   accent: string
+  is_deleted?: boolean
 }
-export type RpgStatLine = { id: string; label: string; value: string }
+export type RpgStatLine = { id: string; label: string; value: string; is_deleted?: boolean }
 
 export type LevelupRpgProfile = {
   heroName: string
@@ -123,4 +124,75 @@ export function saveRpgProfile(p: LevelupRpgProfile): void {
     localStorage.setItem(LEVELUP_RPG_KEY, JSON.stringify(p))
     void kvSet(LEVELUP_RPG_KEY, p)
   } catch { /* quota */ }
+}
+
+function markDeleted<T extends { id: string; is_deleted?: boolean }>(rows: T[], id: string): T[] {
+  return rows.map(r => (r.id === id ? { ...r, is_deleted: true } : r))
+}
+
+function restoreRow<T extends { id: string; is_deleted?: boolean }>(rows: T[], id: string): T[] {
+  return rows.map(r => {
+    if (r.id !== id) return r
+    const { is_deleted: _d, ...rest } = r
+    return rest as T
+  })
+}
+
+function purgeRow<T extends { id: string }>(rows: T[], id: string): T[] {
+  return rows.filter(r => r.id !== id)
+}
+
+export function softDeleteRpgStatLine(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, statLines: markDeleted(p.statLines, id) }
+}
+export function restoreRpgStatLine(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, statLines: restoreRow(p.statLines, id) }
+}
+export function purgeRpgStatLine(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, statLines: purgeRow(p.statLines, id) }
+}
+
+export function softDeleteRpgBoss(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, bosses: markDeleted(p.bosses, id) }
+}
+export function restoreRpgBoss(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, bosses: restoreRow(p.bosses, id) }
+}
+export function purgeRpgBoss(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, bosses: purgeRow(p.bosses, id) }
+}
+
+export function softDeleteRpgMap(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, maps: markDeleted(p.maps, id) }
+}
+export function restoreRpgMap(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, maps: restoreRow(p.maps, id) }
+}
+export function purgeRpgMap(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, maps: purgeRow(p.maps, id) }
+}
+
+export function softDeleteRpgQuest(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, quests: markDeleted(p.quests, id) }
+}
+export function restoreRpgQuest(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, quests: restoreRow(p.quests, id) }
+}
+export function purgeRpgQuest(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, quests: purgeRow(p.quests, id) }
+}
+
+export function softDeleteRpgSkill(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, skills: markDeleted(p.skills, id) }
+}
+export function restoreRpgSkill(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, skills: restoreRow(p.skills, id) }
+}
+export function purgeRpgSkill(p: LevelupRpgProfile, id: string): LevelupRpgProfile {
+  return { ...p, skills: purgeRow(p.skills, id) }
+}
+
+/** RPG 서브목록 UI — 휴지통 제외 */
+export function activeRpgRows<T extends { is_deleted?: boolean }>(rows: T[]): T[] {
+  return rows.filter(r => r.is_deleted !== true)
 }

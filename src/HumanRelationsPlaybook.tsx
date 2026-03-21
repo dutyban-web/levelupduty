@@ -50,6 +50,7 @@ import {
   savePlaybookStore,
   upsertPlaybookItem,
   deletePlaybookItem,
+  activePlaybookItems,
   reorderPlaybookItems,
   newPlaybookId,
 } from './humanRelationsPlaybookData'
@@ -307,11 +308,17 @@ export function HumanRelationsPlaybook({ variant = 'full' }: { variant?: Playboo
     const { active, over } = e
     if (!over || active.id === over.id) return
     persist(prev => {
-      const oldIdx = prev.items.findIndex(i => i.id === active.id)
-      const newIdx = prev.items.findIndex(i => i.id === over.id)
+      const activeList = activePlaybookItems(prev.items)
+      const oldIdx = activeList.findIndex(i => i.id === active.id)
+      const newIdx = activeList.findIndex(i => i.id === over.id)
       if (oldIdx < 0 || newIdx < 0) return prev
-      const ordered = arrayMove(prev.items.map(i => i.id), oldIdx, newIdx)
-      return reorderPlaybookItems(prev, ordered)
+      const reorderedActiveIds = arrayMove(
+        activeList.map(i => i.id),
+        oldIdx,
+        newIdx,
+      )
+      const trashedIds = prev.items.filter(i => i.is_deleted === true).map(i => i.id)
+      return reorderPlaybookItems(prev, [...reorderedActiveIds, ...trashedIds])
     })
   }
 
@@ -368,15 +375,15 @@ export function HumanRelationsPlaybook({ variant = 'full' }: { variant?: Playboo
         </button>
       </div>
 
-      {store.items.length === 0 ? (
+      {activePlaybookItems(store.items).length === 0 ? (
         <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 py-14 text-center text-sm text-slate-500">
           아직 매뉴얼이 없습니다. 상단 버튼으로 첫 원칙을 추가해 보세요.
         </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={store.items.map(i => i.id)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={activePlaybookItems(store.items).map(i => i.id)} strategy={verticalListSortingStrategy}>
             <ul className="space-y-3 list-none p-0 m-0">
-              {store.items.map(item => (
+              {activePlaybookItems(store.items).map(item => (
                 <li key={item.id}>
                   <SortablePlaybookRow
                     item={item}

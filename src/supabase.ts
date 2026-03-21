@@ -459,6 +459,8 @@ export async function upsertQuest(_id: string, _done: boolean): Promise<void> { 
 
 export interface UserQuestRow {
   id: string
+  /** 휴지통(소프트 삭제) — DB에 컬럼 추가 후 사용 */
+  is_deleted?: boolean
   title: string
   category: string
   is_completed: boolean
@@ -481,28 +483,30 @@ export async function fetchUserCreatedQuests(): Promise<UserQuestRow[]> {
   try {
     const { data, error } = await supabase
       .from('quests')
-      .select('id, title, category, is_completed, project_id, identity_id, status, tags, sort_order, priority, deadline, started_at, ended_at, time_spent_sec, remaining_time_sec, pomodoro_count')
+      .select('id, title, category, is_completed, project_id, identity_id, status, tags, sort_order, priority, deadline, started_at, ended_at, time_spent_sec, remaining_time_sec, pomodoro_count, is_deleted')
       .order('sort_order', { ascending: true })
       .order('id', { ascending: true })
     if (error || !data) {
       if (error) console.error('[Supabase] fetchUserCreatedQuests 실패:', error.message)
       return []
     }
-    return data.map(r => {
-      let tags: string[] = []
-      try {
-        const t = (r as Record<string, unknown>).tags
-        if (Array.isArray(t)) tags = t as string[]
-        else if (typeof t === 'string') tags = JSON.parse(t || '[]') as string[]
-      } catch { /* ignore */ }
-      return {
-        ...r,
-        id: String(r.id),
-        project_id: r.project_id != null ? String(r.project_id) : null,
-        identity_id: r.identity_id != null ? String(r.identity_id) : null,
-        tags,
-      }
-    }) as UserQuestRow[]
+    return (data
+      .map(r => {
+        let tags: string[] = []
+        try {
+          const t = (r as Record<string, unknown>).tags
+          if (Array.isArray(t)) tags = t as string[]
+          else if (typeof t === 'string') tags = JSON.parse(t || '[]') as string[]
+        } catch { /* ignore */ }
+        return {
+          ...r,
+          id: String(r.id),
+          project_id: r.project_id != null ? String(r.project_id) : null,
+          identity_id: r.identity_id != null ? String(r.identity_id) : null,
+          tags,
+        }
+      }) as UserQuestRow[])
+      .filter(r => r.is_deleted !== true)
   } catch (e) {
     console.error('[Supabase] fetchUserCreatedQuests 예외:', e)
     return []
@@ -521,7 +525,7 @@ export async function insertUserQuest(
     console.error('[Supabase] insertUserQuest:', msg)
     return { id: null, error: msg }
   }
-  const payload: Record<string, unknown> = { title, category, is_completed: false }
+  const payload: Record<string, unknown> = { title, category, is_completed: false, is_deleted: false }
   if (project_id) payload.project_id = project_id
   if (identity_id) payload.identity_id = identity_id
   const { data, error } = await supabase
@@ -625,11 +629,73 @@ export async function updateUserQuestCompletion(id: string, isCompleted: boolean
   if (error) console.error('[Supabase] updateUserQuestCompletion 실패:', error.message)
 }
 
-/** 퀘스트 삭제 */
-export async function deleteUserQuestRow(id: string): Promise<void> {
+/** 퀘스트 소프트 삭제(휴지통) */
+export async function softDeleteUserQuestRow(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase.from('quests').update({ is_deleted: true }).eq('id', id)
+  if (error) {
+    console.error('[Supabase] softDeleteUserQuestRow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function restoreUserQuestRow(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase.from('quests').update({ is_deleted: false }).eq('id', id)
+  if (error) {
+    console.error('[Supabase] restoreUserQuestRow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+/** 휴지통에서 영구 삭제 */
+export async function permanentDeleteUserQuestRow(id: string): Promise<void> {
   if (!supabase) return
   const { error } = await supabase.from('quests').delete().eq('id', id)
-  if (error) console.error('[Supabase] deleteUserQuestRow 실패:', error.message)
+  if (error) console.error('[Supabase] permanentDeleteUserQuestRow 실패:', error.message)
+}
+
+/** @deprecated permanentDeleteUserQuestRow 사용 */
+export async function deleteUserQuestRow(id: string): Promise<void> {
+  await permanentDeleteUserQuestRow(id)
+}
+
+/** 휴지통용 — 삭제된 사용자 퀘스트만 */
+export async function fetchTrashedUserQuests(): Promise<UserQuestRow[]> {
+  if (!supabase) return []
+  try {
+    const { data, error } = await supabase
+      .from('quests')
+      .select('id, title, category, is_completed, project_id, identity_id, status, tags, sort_order, priority, deadline, started_at, ended_at, time_spent_sec, remaining_time_sec, pomodoro_count, is_deleted')
+      .eq('is_deleted', true)
+      .order('sort_order', { ascending: true })
+      .order('id', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchTrashedUserQuests 실패:', error.message)
+      return []
+    }
+    return data.map(r => {
+      let tags: string[] = []
+      try {
+        const t = (r as Record<string, unknown>).tags
+        if (Array.isArray(t)) tags = t as string[]
+        else if (typeof t === 'string') tags = JSON.parse(t || '[]') as string[]
+      } catch { /* ignore */ }
+      return {
+        ...r,
+        id: String(r.id),
+        project_id: r.project_id != null ? String(r.project_id) : null,
+        identity_id: r.identity_id != null ? String(r.identity_id) : null,
+        tags,
+        is_deleted: true,
+      }
+    }) as UserQuestRow[]
+  } catch (e) {
+    console.error('[Supabase] fetchTrashedUserQuests 예외:', e)
+    return []
+  }
 }
 
 /**
@@ -1987,6 +2053,8 @@ export interface WorkflowRow {
   edges: unknown
   created_at: string
   updated_at: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
 }
 
 async function _workflowUserId(): Promise<string | null> {
@@ -2004,23 +2072,26 @@ export async function fetchWorkflows(): Promise<WorkflowRow[]> {
   try {
     const { data, error } = await supabase
       .from('workflows')
-      .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
+      .select('id, user_id, title, description, nodes, edges, created_at, updated_at, is_deleted')
       .eq('user_id', uid)
       .order('updated_at', { ascending: false })
     if (error || !data) {
       if (error) console.error('[Supabase] fetchWorkflows 실패:', error.message)
       return []
     }
-    return data.map(r => ({
-      id: String(r.id),
-      user_id: String(r.user_id),
-      title: String(r.title ?? ''),
-      description: r.description != null ? String(r.description) : null,
-      nodes: r.nodes,
-      edges: r.edges,
-      created_at: String(r.created_at ?? ''),
-      updated_at: String(r.updated_at ?? ''),
-    }))
+    return data
+      .filter(r => (r as Record<string, unknown>).is_deleted !== true)
+      .map(r => ({
+        id: String(r.id),
+        user_id: String(r.user_id),
+        title: String(r.title ?? ''),
+        description: r.description != null ? String(r.description) : null,
+        nodes: r.nodes,
+        edges: r.edges,
+        created_at: String(r.created_at ?? ''),
+        updated_at: String(r.updated_at ?? ''),
+        is_deleted: (r as Record<string, unknown>).is_deleted === true,
+      }))
   } catch (e) {
     console.error('[Supabase] fetchWorkflows 예외:', e)
     return []
@@ -2034,7 +2105,7 @@ export async function fetchWorkflowById(id: string): Promise<WorkflowRow | null>
   try {
     const { data, error } = await supabase
       .from('workflows')
-      .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
+      .select('id, user_id, title, description, nodes, edges, created_at, updated_at, is_deleted')
       .eq('id', id)
       .eq('user_id', uid)
       .maybeSingle()
@@ -2043,6 +2114,7 @@ export async function fetchWorkflowById(id: string): Promise<WorkflowRow | null>
       return null
     }
     const r = data as Record<string, unknown>
+    if (r.is_deleted === true) return null
     return {
       id: String(r.id),
       user_id: String(r.user_id),
@@ -2079,6 +2151,7 @@ export async function insertWorkflow(
       description: description.trim(),
       nodes,
       edges,
+      is_deleted: false,
     })
     .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
     .single()
@@ -2126,16 +2199,85 @@ export async function updateWorkflow(
   return true
 }
 
-export async function deleteWorkflow(id: string): Promise<boolean> {
+export async function softDeleteWorkflow(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _workflowUserId()
+  if (!uid) return false
+  const { error } = await supabase
+    .from('workflows')
+    .update({ is_deleted: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] softDeleteWorkflow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function restoreWorkflow(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _workflowUserId()
+  if (!uid) return false
+  const { error } = await supabase
+    .from('workflows')
+    .update({ is_deleted: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] restoreWorkflow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function permanentDeleteWorkflow(id: string): Promise<boolean> {
   if (!supabase) return false
   const uid = await _workflowUserId()
   if (!uid) return false
   const { error } = await supabase.from('workflows').delete().eq('id', id).eq('user_id', uid)
   if (error) {
-    console.error('[Supabase] deleteWorkflow 실패:', error.message)
+    console.error('[Supabase] permanentDeleteWorkflow 실패:', error.message)
     return false
   }
   return true
+}
+
+/** @deprecated softDeleteWorkflow 사용 */
+export async function deleteWorkflow(id: string): Promise<boolean> {
+  return softDeleteWorkflow(id)
+}
+
+export async function fetchTrashedWorkflows(): Promise<WorkflowRow[]> {
+  if (!supabase) return []
+  const uid = await _workflowUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('workflows')
+      .select('id, user_id, title, description, nodes, edges, created_at, updated_at, is_deleted')
+      .eq('user_id', uid)
+      .eq('is_deleted', true)
+      .order('updated_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchTrashedWorkflows 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({
+      id: String(r.id),
+      user_id: String(r.user_id),
+      title: String(r.title ?? ''),
+      description: r.description != null ? String(r.description) : null,
+      nodes: r.nodes,
+      edges: r.edges,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+      is_deleted: true,
+    }))
+  } catch (e) {
+    console.error('[Supabase] fetchTrashedWorkflows 예외:', e)
+    return []
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

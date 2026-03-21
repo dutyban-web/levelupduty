@@ -25,7 +25,7 @@ import { ArrowLeft, Plus, Save, Trash2 } from 'lucide-react'
 import {
   fetchWorkflowById,
   updateWorkflow,
-  deleteWorkflow,
+  softDeleteWorkflow,
   type WorkflowRow,
 } from './supabase'
 
@@ -201,7 +201,7 @@ function WorkflowEditorInner({
   const handleDeleteWorkflow = useCallback(async () => {
     if (!row) return
     if (!confirm('이 순서도를 삭제할까요?')) return
-    const ok = await deleteWorkflow(row.id)
+    const ok = await softDeleteWorkflow(row.id)
     if (ok) onBack()
     else window.alert('삭제에 실패했습니다.')
   }, [row, onBack])

@@ -9,6 +9,8 @@ export const PLAYBOOK_STORE_KEY = 'creative-os-human-relations-playbook-v1'
 
 export type PlaybookItem = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   title: string
   /** lucide 아이콘 키 (PLAYBOOK_ICON_OPTIONS) */
   iconKey: string
@@ -40,6 +42,7 @@ export function loadPlaybookStore(): PlaybookStore {
         .filter(x => x && typeof x.id === 'string' && typeof x.title === 'string')
         .map(x => ({
           id: x.id,
+          ...(x.is_deleted === true ? { is_deleted: true as const } : {}),
           title: x.title,
           iconKey: typeof x.iconKey === 'string' ? x.iconKey : 'book-open',
           descriptionBlocksJson: typeof x.descriptionBlocksJson === 'string' ? x.descriptionBlocksJson : '',
@@ -87,6 +90,30 @@ export function reorderPlaybookItems(store: PlaybookStore, orderedIds: string[])
   return { items: next }
 }
 
+export function activePlaybookItems(items: PlaybookItem[]): PlaybookItem[] {
+  return items.filter(i => i.is_deleted !== true)
+}
+
 export function deletePlaybookItem(store: PlaybookStore, id: string): PlaybookStore {
+  const t = nowIso()
+  return {
+    items: store.items.map(i =>
+      i.id === id ? { ...i, is_deleted: true, updatedAt: t } : i,
+    ),
+  }
+}
+
+export function restorePlaybookItem(store: PlaybookStore, id: string): PlaybookStore {
+  const t = nowIso()
+  return {
+    items: store.items.map(i => {
+      if (i.id !== id) return i
+      const { is_deleted: _d, ...rest } = i
+      return { ...rest, updatedAt: t } as PlaybookItem
+    }),
+  }
+}
+
+export function purgePlaybookItem(store: PlaybookStore, id: string): PlaybookStore {
   return { items: store.items.filter(i => i.id !== id) }
 }

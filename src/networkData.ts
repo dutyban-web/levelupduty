@@ -39,6 +39,8 @@ export const BENEFIT_OPTIONS: { id: NetworkBenefitId; label: string; short: stri
 
 export type NetworkContact = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   name: string
   /** 직함·역할 */
   roleTitle: string
@@ -133,6 +135,7 @@ function migrateContact(raw: Record<string, unknown>): NetworkContact | null {
   }
   return {
     id: raw.id as string,
+    ...(raw.is_deleted === true ? { is_deleted: true as const } : {}),
     name: (raw.name as string).trim() || '이름 없음',
     roleTitle: str('roleTitle'),
     org: str('org'),
@@ -234,7 +237,31 @@ export function upsertContact(
   return { contacts: [next, ...others] }
 }
 
+export function activeContacts(contacts: NetworkContact[]): NetworkContact[] {
+  return contacts.filter(c => c.is_deleted !== true)
+}
+
 export function deleteContact(store: NetworkStore, id: string): NetworkStore {
+  const t = nowIso()
+  return {
+    contacts: store.contacts.map(c =>
+      c.id === id ? { ...c, is_deleted: true, updatedAt: t } : c,
+    ),
+  }
+}
+
+export function restoreContact(store: NetworkStore, id: string): NetworkStore {
+  const t = nowIso()
+  return {
+    contacts: store.contacts.map(c => {
+      if (c.id !== id) return c
+      const { is_deleted: _d, ...rest } = c
+      return { ...rest, updatedAt: t } as NetworkContact
+    }),
+  }
+}
+
+export function purgeContact(store: NetworkStore, id: string): NetworkStore {
   return { contacts: store.contacts.filter(c => c.id !== id) }
 }
 
@@ -242,7 +269,7 @@ export function deleteContact(store: NetworkStore, id: string): NetworkStore {
 export function countByBenefit(contacts: NetworkContact[]): Record<NetworkBenefitId, number> {
   const init = {} as Record<NetworkBenefitId, number>
   for (const o of BENEFIT_OPTIONS) init[o.id] = 0
-  for (const c of contacts) {
+  for (const c of activeContacts(contacts)) {
     for (const b of c.benefits) {
       if (b in init) init[b]++
     }

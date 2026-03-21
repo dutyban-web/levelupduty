@@ -10,6 +10,7 @@ import {
   saveQuantumFlowStore,
   upsertLetter,
   deleteLetter,
+  activeLetters,
   canReadLetter,
   toYMD,
   type QuantumLetter,
@@ -45,13 +46,16 @@ export function QuantumFlowPage({ onSaved }: { onSaved?: () => void }) {
   const [calDate, setCalDate] = useState(() => new Date())
 
   const lettersSorted = useMemo(
-    () => [...store.letters].sort((a, b) => b.openDate.localeCompare(a.openDate) || b.updatedAt.localeCompare(a.updatedAt)),
+    () =>
+      [...activeLetters(store.letters)].sort(
+        (a, b) => b.openDate.localeCompare(a.openDate) || b.updatedAt.localeCompare(a.updatedAt),
+      ),
     [store.letters],
   )
 
   const openDates = useMemo(() => {
     const s = new Set<string>()
-    for (const l of store.letters) s.add(l.openDate)
+    for (const l of activeLetters(store.letters)) s.add(l.openDate)
     return s
   }, [store.letters])
 

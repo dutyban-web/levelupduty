@@ -16,6 +16,8 @@ export type DensityLevel = 1 | 2 | 3 | 4 | 5
 
 export type ValueAction = {
   id: string
+  /** 휴지통(소프트 삭제) */
+  is_deleted?: boolean
   /** 행동명 */
   actionName: string
   /** 정체성 (주체) */
@@ -80,6 +82,7 @@ function migrateRow(x: Partial<ValueAction> & { id: string; actionName: string }
   const sv = normalizeStrategic(x.strategicValue)
   return {
     id: x.id,
+    ...(x.is_deleted === true ? { is_deleted: true as const } : {}),
     actionName: x.actionName.trim() || '제목 없음',
     identity: typeof x.identity === 'string' ? x.identity.trim() : '',
     standardTimeMinutes: std,
@@ -107,6 +110,7 @@ function normalizeStrategic(s: unknown): StrategicValueLevel {
 export function saveValueActionStore(s: ValueActionStore): void {
   try {
     localStorage.setItem(VALUE_ACTION_STORE_KEY, JSON.stringify(s))
+    void kvSet(VALUE_ACTION_STORE_KEY, s)
   } catch {
     /* quota */
   }
@@ -117,13 +121,40 @@ export function upsertValueAction(store: ValueActionStore, row: ValueAction): Va
   return { items: [row, ...others] }
 }
 
+/** 목록 UI용 — 휴지통 제외 */
+export function activeValueActions(items: ValueAction[]): ValueAction[] {
+  return items.filter(i => i.is_deleted !== true)
+}
+
+/** 소프트 삭제(휴지통) */
 export function deleteValueAction(store: ValueActionStore, id: string): ValueActionStore {
+  const u = nowIso()
+  return {
+    items: store.items.map(i =>
+      i.id === id ? { ...i, is_deleted: true, updatedAt: u } : i,
+    ),
+  }
+}
+
+export function restoreValueAction(store: ValueActionStore, id: string): ValueActionStore {
+  const u = nowIso()
+  return {
+    items: store.items.map(i => {
+      if (i.id !== id) return i
+      const { is_deleted: _d, ...rest } = i
+      return { ...rest, updatedAt: u } as ValueAction
+    }),
+  }
+}
+
+/** 휴지통에서 영구 삭제 — 배열에서 제거 */
+export function purgeValueAction(store: ValueActionStore, id: string): ValueActionStore {
   return { items: store.items.filter(i => i.id !== id) }
 }
 
 export function uniqueIdentities(items: ValueAction[]): string[] {
   const set = new Set<string>()
-  for (const it of items) {
+  for (const it of activeValueActions(items)) {
     const k = it.identity.trim()
     if (k) set.add(k)
   }

@@ -3,6 +3,12 @@ import {
   loadRpgProfile,
   saveRpgProfile,
   defaultRpgProfile,
+  activeRpgRows,
+  softDeleteRpgStatLine,
+  softDeleteRpgBoss,
+  softDeleteRpgMap,
+  softDeleteRpgQuest,
+  softDeleteRpgSkill,
   type LevelupRpgProfile,
   type RpgBossRow,
   type RpgMapRow,
@@ -201,7 +207,7 @@ export function LevelupRpgPage({
   }
 
   const removeStatLine = (id: string) => {
-    setProfile(p => ({ ...p, statLines: p.statLines.filter(s => s.id !== id) }))
+    setProfile(p => softDeleteRpgStatLine(p, id))
   }
 
   const patchEquipment = (i: number, patch: Partial<{ slot: string; name: string }>) => {
@@ -224,7 +230,7 @@ export function LevelupRpgPage({
     setProfile(p => ({ ...p, bosses: p.bosses.map(b => (b.id === id ? { ...b, ...patch } : b)) }))
   }
 
-  const removeBoss = (id: string) => setProfile(p => ({ ...p, bosses: p.bosses.filter(b => b.id !== id) }))
+  const removeBoss = (id: string) => setProfile(p => softDeleteRpgBoss(p, id))
 
   const addMap = () => {
     const id = `map_${Date.now()}`
@@ -238,7 +244,7 @@ export function LevelupRpgPage({
     setProfile(p => ({ ...p, maps: p.maps.map(m => (m.id === id ? { ...m, ...patch } : m)) }))
   }
 
-  const removeMap = (id: string) => setProfile(p => ({ ...p, maps: p.maps.filter(m => m.id !== id) }))
+  const removeMap = (id: string) => setProfile(p => softDeleteRpgMap(p, id))
 
   const addQuest = () => {
     const id = `q_${Date.now()}`
@@ -252,7 +258,7 @@ export function LevelupRpgPage({
     setProfile(p => ({ ...p, quests: p.quests.map(q => (q.id === id ? { ...q, ...patch } : q)) }))
   }
 
-  const removeQuest = (id: string) => setProfile(p => ({ ...p, quests: p.quests.filter(q => q.id !== id) }))
+  const removeQuest = (id: string) => setProfile(p => softDeleteRpgQuest(p, id))
 
   const addSkill = () => {
     const id = `sk_${Date.now()}`
@@ -266,7 +272,7 @@ export function LevelupRpgPage({
     setProfile(p => ({ ...p, skills: p.skills.map(s => (s.id === id ? { ...s, ...patch } : s)) }))
   }
 
-  const removeSkill = (id: string) => setProfile(p => ({ ...p, skills: p.skills.filter(s => s.id !== id) }))
+  const removeSkill = (id: string) => setProfile(p => softDeleteRpgSkill(p, id))
 
   const gameDate = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 
@@ -419,7 +425,7 @@ export function LevelupRpgPage({
                 <button type="button" onClick={addStatLine} style={btnMini}>+ 행</button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 0 }}>
-                {profile.statLines.map(row => (
+                {activeRpgRows(profile.statLines).map(row => (
                   <div
                     key={row.id}
                     style={{
@@ -497,7 +503,7 @@ export function LevelupRpgPage({
                 <button type="button" onClick={addSkill} style={btnMini}>+ 추가</button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                {profile.skills.map((sk, i) => (
+                {activeRpgRows(profile.skills).map((sk, i) => (
                   <div
                     key={sk.id}
                     style={{
@@ -578,7 +584,7 @@ export function LevelupRpgPage({
                 <SectionLabel>탐험 · 맵</SectionLabel>
                 <button type="button" onClick={addMap} style={btnMini}>+</button>
               </div>
-              {profile.maps.map(m => (
+              {activeRpgRows(profile.maps).map(m => (
                 <div key={m.id} style={{ padding: '8px 0', borderBottom: `1px solid ${C.line}` }}>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <input className="lvl-ghost" value={m.name} onChange={e => patchMap(m.id, { name: e.target.value })} style={{ ...ghostBase, flex: 1, fontSize: 12, fontWeight: 700 }} />
@@ -622,7 +628,7 @@ export function LevelupRpgPage({
                 <SectionLabel>퀘스트</SectionLabel>
                 <button type="button" onClick={addQuest} style={btnMini}>+</button>
               </div>
-              {profile.quests.map(q => (
+              {activeRpgRows(profile.quests).map(q => (
                 <div key={q.id} style={{ padding: '8px 0', borderBottom: `1px solid ${C.line}` }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input type="checkbox" checked={q.done} onChange={e => patchQuest(q.id, { done: e.target.checked })} style={{ cursor: 'pointer' }} />
@@ -657,7 +663,7 @@ export function LevelupRpgPage({
                 <SectionLabel>보스</SectionLabel>
                 <button type="button" onClick={addBoss} style={btnMini}>+</button>
               </div>
-              {profile.bosses.map(b => (
+              {activeRpgRows(profile.bosses).map(b => (
                 <div key={b.id} style={{ padding: '8px 0', borderBottom: `1px solid ${C.line}` }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <input type="checkbox" checked={b.cleared} onChange={e => patchBoss(b.id, { cleared: e.target.checked })} style={{ cursor: 'pointer' }} />

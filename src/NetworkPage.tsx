@@ -10,6 +10,7 @@ import {
   deleteContact,
   newContactId,
   countByBenefit,
+  activeContacts,
 } from './networkData'
 import { blockNoteToPlainPreview } from './manifestNoteUtils'
 import { NetworkContactDetail } from './NetworkContactDetail'
@@ -34,12 +35,13 @@ export function NetworkPage() {
   const counts = useMemo(() => countByBenefit(store.contacts), [store.contacts])
 
   const filtered = useMemo(() => {
-    if (filterBenefit === 'all') return store.contacts
-    return store.contacts.filter(c => c.benefits.includes(filterBenefit))
+    const list = activeContacts(store.contacts)
+    if (filterBenefit === 'all') return list
+    return list.filter(c => c.benefits.includes(filterBenefit))
   }, [store.contacts, filterBenefit])
 
   const selected = useMemo(
-    () => (contactId ? store.contacts.find(c => c.id === contactId) ?? null : null),
+    () => (contactId ? activeContacts(store.contacts).find(c => c.id === contactId) ?? null : null),
     [store.contacts, contactId],
   )
 

@@ -7,6 +7,7 @@ import {
   saveEvolutionStore,
   upsertEvolutionItem,
   deleteEvolutionItem,
+  activeEvolutionItems,
   evolutionProgress,
   xpForNextLevel,
   EVOLUTION_CATEGORY_LABEL,
@@ -59,7 +60,7 @@ export function EvolutionPage() {
       routine: [],
       habit: [],
     }
-    for (const i of store.items) {
+    for (const i of activeEvolutionItems(store.items)) {
       m[i.category].push(i)
     }
     for (const c of CATEGORIES) {

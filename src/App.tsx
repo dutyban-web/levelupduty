@@ -11,7 +11,7 @@ import {
   fetchAllJournals, syncJournals,
   fetchUserCreatedQuests,
   updateQuestTitle, updateQuestDeadline, updateQuestIdentity, updateQuestStatus, updateQuestTags, updateQuestSortOrder,
-  deleteUserQuestRow, addQuestTimeSpent, updateQuestRemainingTime, incrementQuestPomodoroCount,
+  softDeleteUserQuestRow, addQuestTimeSpent, updateQuestRemainingTime, incrementQuestPomodoroCount,
   fetchDailyLog, upsertDailyLog, upsertDailyLogFortune, updateDailyLogPomodoros, updateQuestPomodoroCount, setDailyLogTime, updateDailyLogTimeScore,
   fetchLevelRewards, insertLevelReward, claimLevelReward,
   setAreaTimeSpent, setProjectTimeSpent, setQuestTimeSpent,
@@ -10864,7 +10864,7 @@ export default function App() {
       return next
     })
     try {
-      await deleteUserQuestRow(questId)
+      await softDeleteUserQuestRow(questId)
     } catch {
       fireToast('삭제 실패 — 목록을 새로고침합니다')
       fetchUserCreatedQuests().then(rows => {

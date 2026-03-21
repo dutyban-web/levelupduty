@@ -12,6 +12,7 @@ import {
   saveValueActionStore,
   upsertValueAction,
   deleteValueAction,
+  activeValueActions,
   newValueActionId,
   computeHourlyRateKrw,
   uniqueIdentities,
@@ -32,7 +33,7 @@ import { WorkflowEditorPage } from './WorkflowEditorPage'
 import {
   fetchWorkflows,
   insertWorkflow,
-  deleteWorkflow,
+  softDeleteWorkflow,
   supabase,
   type WorkflowRow,
 } from './supabase'
@@ -124,7 +125,7 @@ export function ValuePage() {
   const removeWorkflow = useCallback(
     async (id: string) => {
       if (!confirm('이 순서도를 삭제할까요?')) return
-      const ok = await deleteWorkflow(id)
+      const ok = await softDeleteWorkflow(id)
       if (ok) setWorkflows(prev => prev.filter(w => w.id !== id))
       else window.alert('삭제에 실패했습니다.')
     },
@@ -149,7 +150,7 @@ export function ValuePage() {
   const identities = useMemo(() => uniqueIdentities(store.items), [store.items])
 
   const filtered = useMemo(() => {
-    let list = store.items
+    let list = activeValueActions(store.items)
     if (identityFilter.trim()) {
       list = list.filter(i => i.identity.trim() === identityFilter.trim())
     }

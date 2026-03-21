@@ -10,6 +10,7 @@ import {
   saveLedgerStore,
   upsertLedgerEntry,
   deleteLedgerEntry,
+  activeLedgerEntries,
   importAllTravelExpensesFromLocal,
   summarizeMonth,
   categoryLabel,
@@ -68,19 +69,21 @@ export function AccountLedgerPage() {
     [store.categories, formFlow],
   )
 
+  const activeEntries = useMemo(() => activeLedgerEntries(store.entries), [store.entries])
+
   const filteredEntries = useMemo(() => {
-    let list = store.entries.filter(e => e.date.startsWith(month))
+    let list = activeEntries.filter(e => e.date.startsWith(month))
     if (tagFilter) list = list.filter(e => e.tags.includes(tagFilter))
     return [...list].sort((a, b) => (a.date === b.date ? b.updatedAt.localeCompare(a.updatedAt) : b.date.localeCompare(a.date)))
-  }, [store.entries, month, tagFilter])
+  }, [activeEntries, month, tagFilter])
 
-  const summary = useMemo(() => summarizeMonth(store.entries, month), [store.entries, month])
+  const summary = useMemo(() => summarizeMonth(activeEntries, month), [activeEntries, month])
 
   const allTags = useMemo(() => {
     const s = new Set<string>()
-    for (const e of store.entries) for (const t of e.tags) if (t) s.add(t)
+    for (const e of activeEntries) for (const t of e.tags) if (t) s.add(t)
     return [...s].sort()
-  }, [store.entries])
+  }, [activeEntries])
 
   const persist = useCallback((next: LedgerStore) => {
     setStore(next)
