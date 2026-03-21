@@ -10,14 +10,14 @@
  *       - anon public  → VITE_SUPABASE_ANON_KEY
  *  3. 프로젝트 루트의 .env.local 파일에 위 값 입력 (이미 파일 생성됨)
  *
- *  4. Supabase Dashboard > SQL Editor — app_kv (per-user, UNIQUE(user_id, key)):
+ *  4. Supabase Dashboard > SQL Editor — app_kv (PK: user_id, key):
  * ─────────────────────────────────────────────────────────────────────
  *  CREATE TABLE IF NOT EXISTS app_kv (
  *    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
  *    key        TEXT        NOT NULL,
  *    value      JSONB       NOT NULL,
  *    synced_at  TIMESTAMPTZ DEFAULT NOW(),
- *    UNIQUE (user_id, key)
+ *    PRIMARY KEY (user_id, key)
  *  );
  *
  *  ALTER TABLE app_kv DISABLE ROW LEVEL SECURITY;
@@ -55,7 +55,7 @@ export async function kvGet<T>(key: string): Promise<T | null> {
   } catch { return null }
 }
 
-/** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 (UNIQUE(user_id, key) 기준) */
+/** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 (PK: user_id, key) */
 export async function kvSet<T>(key: string, value: T): Promise<void> {
   if (!supabase) return
   try {
@@ -64,10 +64,7 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
     emitAppSyncStatus('syncing')
     const { error } = await supabase
       .from('app_kv')
-      .upsert(
-        { user_id: user.id, key, value, synced_at: new Date().toISOString() },
-        { onConflict: 'user_id, key' }
-      )
+      .upsert({ user_id: user.id, key, value, synced_at: new Date().toISOString() })
     if (error) throw error
     emitAppSyncStatus('synced')
     scheduleSyncIdle(2000)
