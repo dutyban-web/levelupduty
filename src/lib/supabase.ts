@@ -65,8 +65,18 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
     if (error) throw error
     emitAppSyncStatus('synced')
     scheduleSyncIdle(2000)
-  } catch (e) {
-    console.warn('[Supabase] kvSet error:', e)
+  } catch (error) {
+    console.warn('[Supabase] kvSet error:', error)
+    const forJson =
+      error && typeof error === 'object'
+        ? {
+            message: 'message' in error ? String((error as { message: unknown }).message) : undefined,
+            code: 'code' in error ? String((error as { code: unknown }).code) : undefined,
+            details: 'details' in error ? String((error as { details: unknown }).details) : undefined,
+            hint: 'hint' in error ? String((error as { hint: unknown }).hint) : undefined,
+          }
+        : { error: String(error) }
+    alert('동기화 에러: ' + JSON.stringify({ key, ...forJson }))
     emitAppSyncStatus('error')
     scheduleSyncIdle(5000)
   }
