@@ -4,6 +4,7 @@
  */
 
 import { kvSet } from './lib/supabase'
+import { filterActiveItems, itemIsTrashed } from './kvItemTrash'
 
 export const NETWORK_STORE_KEY = 'creative-os-network-contacts-v1'
 
@@ -135,7 +136,7 @@ function migrateContact(raw: Record<string, unknown>): NetworkContact | null {
   }
   return {
     id: raw.id as string,
-    ...(raw.is_deleted === true ? { is_deleted: true as const } : {}),
+    ...(itemIsTrashed({ is_deleted: raw.is_deleted } as { is_deleted?: boolean }) ? { is_deleted: true as const } : {}),
     name: (raw.name as string).trim() || '이름 없음',
     roleTitle: str('roleTitle'),
     org: str('org'),
@@ -238,9 +239,10 @@ export function upsertContact(
 }
 
 export function activeContacts(contacts: NetworkContact[]): NetworkContact[] {
-  return contacts.filter(c => c.is_deleted !== true)
+  return filterActiveItems(contacts)
 }
 
+/** 휴지통용 소프트 삭제 — 연락처 배열에서 제거하지 않음 */
 export function deleteContact(store: NetworkStore, id: string): NetworkStore {
   const t = nowIso()
   return {

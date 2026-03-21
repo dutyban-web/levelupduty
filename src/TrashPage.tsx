@@ -617,27 +617,31 @@ export function TrashPage() {
 
       {loading ? (
         <p style={{ color: '#787774', fontSize: '14px' }}>불러오는 중…</p>
-      ) : !hasAny ? (
-        <div
-          style={{
-            padding: '32px 20px',
-            borderRadius: '12px',
-            border: '1px dashed rgba(0,0,0,0.06)',
-            backgroundColor: '#fafafa',
-            textAlign: 'center',
-            color: '#9B9A97',
-            fontSize: '14px',
-          }}
-        >
-          휴지통이 비어 있습니다.
-        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-          {trashEntries.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>
-                노트 조각 (Fragment)
-              </h2>
+          {!hasAny && (
+            <div
+              style={{
+                padding: '20px 18px',
+                borderRadius: '12px',
+                border: '1px dashed rgba(0,0,0,0.08)',
+                backgroundColor: '#fafafa',
+                textAlign: 'center',
+                color: '#9B9A97',
+                fontSize: '14px',
+              }}
+            >
+              아래 카테고리 모두에 표시할 삭제 항목이 없습니다.
+            </div>
+          )}
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              노트 조각 (Fragment)
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({trashEntries.length})</span>
+            </h2>
+            {trashEntries.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 노트 조각이 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {trashEntries.map(entry => {
                   const b = busyKey === `frag:${entry.id}`
@@ -680,12 +684,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {valueTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Value · 행동 자산</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Value · 행동 자산
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({valueTrashed.length})</span>
+            </h2>
+            {valueTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 행동 자산이 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {valueTrashed.map(v => {
                   const b = busyKey === `va:${v.id}`
@@ -703,12 +712,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {networkTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Network · 인명부</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Network · 인명부
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({networkTrashed.length})</span>
+            </h2>
+            {networkTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 연락처가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {networkTrashed.map(c => {
                   const b = busyKey === `nw:${c.id}`
@@ -726,12 +740,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {quantumTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Quantum · 시공편지</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Quantum · 시공편지
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({quantumTrashed.length})</span>
+            </h2>
+            {quantumTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 편지가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {quantumTrashed.map(l => {
                   const b = busyKey === `qf:${l.id}`
@@ -750,12 +769,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {ledgerTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Account · 가계부</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Account · 가계부
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({ledgerTrashed.length})</span>
+            </h2>
+            {ledgerTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 거래가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {ledgerTrashed.map(e => {
                   const b = busyKey === `led:${e.id}`
@@ -773,12 +797,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {evolutionTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Evolution</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Evolution
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({evolutionTrashed.length})</span>
+            </h2>
+            {evolutionTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 진화 카드가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {evolutionTrashed.map(item => {
                   const b = busyKey === `evo:${item.id}`
@@ -798,12 +827,17 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {playbookTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Network · 인간관계론 매뉴얼</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              인간관계론 · 매뉴얼 (Playbook)
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({playbookTrashed.length})</span>
+            </h2>
+            {playbookTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 매뉴얼 항목이 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {playbookTrashed.map(item => {
                   const b = busyKey === `pb:${item.id}`
@@ -820,16 +854,24 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {(rpgTrashed.statLines.length +
-            rpgTrashed.bosses.length +
-            rpgTrashed.maps.length +
-            rpgTrashed.quests.length +
-            rpgTrashed.skills.length) > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Levelup RPG</h2>
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Levelup RPG
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>
+                (스탯 {rpgTrashed.statLines.length} · 보스 {rpgTrashed.bosses.length} · 맵 {rpgTrashed.maps.length} · 퀘 {rpgTrashed.quests.length} · 스킬 {rpgTrashed.skills.length})
+              </span>
+            </h2>
+            {rpgTrashed.statLines.length +
+              rpgTrashed.bosses.length +
+              rpgTrashed.maps.length +
+              rpgTrashed.quests.length +
+              rpgTrashed.skills.length ===
+            0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 RPG 항목이 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {rpgTrashed.statLines.map(s => (
                   <li key={`st-${s.id}`} style={cardStyle}>
@@ -892,13 +934,18 @@ export function TrashPage() {
                   </li>
                 ))}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {workflowTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Value · 작업 순서도 (Workflow)</h2>
-              {!isSupabaseReady && <p style={{ fontSize: '12px', color: '#b45309' }}>Supabase 미연결</p>}
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Value · 작업 순서도 (Workflow)
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({workflowTrashed.length})</span>
+            </h2>
+            {!isSupabaseReady && <p style={{ fontSize: '12px', color: '#b45309', marginBottom: 8 }}>Supabase 미연결 시 DB 휴지통을 불러올 수 없습니다.</p>}
+            {workflowTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 작업 순서도가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {workflowTrashed.map(w => {
                   const b = busyKey === `wf:${w.id}` || busyKey === `wfp:${w.id}`
@@ -916,13 +963,18 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {questTrashed.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>Quest · 사용자 퀘스트</h2>
-              {!isSupabaseReady && <p style={{ fontSize: '12px', color: '#b45309' }}>Supabase 미연결</p>}
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              Quest · 사용자 퀘스트
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({questTrashed.length})</span>
+            </h2>
+            {!isSupabaseReady && <p style={{ fontSize: '12px', color: '#b45309', marginBottom: 8 }}>Supabase 미연결 시 DB 휴지통을 불러올 수 없습니다.</p>}
+            {questTrashed.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>삭제된 사용자 퀘스트가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {questTrashed.map(q => {
                   const b = busyKey === `uq:${q.id}` || busyKey === `uqp:${q.id}`
@@ -940,17 +992,21 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
 
-          {rows.length > 0 && (
-            <section>
-              <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>기타 동기화 키 (app_kv 행 단위)</h2>
-              {!isSupabaseReady && (
-                <p style={{ fontSize: '12px', color: '#b45309', marginBottom: '12px' }}>
-                  Supabase에 연결되지 않아 이 목록을 불러올 수 없습니다.
-                </p>
-              )}
+          <section>
+            <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              기타 동기화 키 (app_kv 행 단위)
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#9ca3af' }}>({rows.length})</span>
+            </h2>
+            {!isSupabaseReady ? (
+              <p style={{ fontSize: '12px', color: '#b45309', marginBottom: '12px' }}>
+                Supabase에 연결되지 않아 이 목록을 불러올 수 없습니다.
+              </p>
+            ) : rows.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '13px', color: '#AEAAA4', fontStyle: 'italic' }}>행 단위로 휴지통에 있는 기타 키가 없습니다.</p>
+            ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {rows.map(row => {
                   const b = busyKey === row.key
@@ -992,8 +1048,8 @@ export function TrashPage() {
                   )
                 })}
               </ul>
-            </section>
-          )}
+            )}
+          </section>
         </div>
       )}
     </div>

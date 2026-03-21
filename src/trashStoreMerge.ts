@@ -1,7 +1,10 @@
 /**
  * 휴지통 목록용: 로컬 캐시 + app_kv 원격 JSON을 병합해 소프트삭제 항목이 누락되지 않게 함
  * (Fragment 페이지는 이미 mergeFragmentStores 사용 — 동일 패턴)
+ *
+ * 병합 시 한쪽만 is_deleted 인 경우 → 삭제 쪽을 유지(최신 updatedAt 본문 + 휴지통 플래그)
  */
+import { itemIsTrashed } from './kvItemTrash'
 import type { LedgerStore } from './accountLedgerData'
 import type { ValueActionStore } from './valueActionData'
 import type { NetworkStore } from './networkData'
@@ -10,7 +13,15 @@ import type { EvolutionStore } from './evolutionData'
 import type { PlaybookStore } from './humanRelationsPlaybookData'
 import type { LevelupRpgProfile } from './levelupRpgProfile'
 
-function mergeRecordsByUpdatedAt<T extends { id: string; updatedAt: string }>(a: T[], b: T[]): T[] {
+/** 동일 id: 더 최신 updatedAt 레코드를 베이스로 하되, 어느 한쪽이라도 휴지통이면 is_deleted 유지 */
+function mergeTwoRecords<T extends { id: string; updatedAt: string; is_deleted?: boolean }>(left: T, right: T): T {
+  const newer = (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '') >= 0 ? right : left
+  const trashed = itemIsTrashed(left) || itemIsTrashed(right)
+  if (!trashed) return newer
+  return { ...newer, is_deleted: true as const } as T
+}
+
+function mergeRecordsByUpdatedAt<T extends { id: string; updatedAt: string; is_deleted?: boolean }>(a: T[], b: T[]): T[] {
   const map = new Map<string, T>()
   for (const e of a) map.set(e.id, e)
   for (const e of b) {
@@ -19,9 +30,7 @@ function mergeRecordsByUpdatedAt<T extends { id: string; updatedAt: string }>(a:
       map.set(e.id, e)
       continue
     }
-    const pu = prev.updatedAt ?? ''
-    const eu = e.updatedAt ?? ''
-    if (eu.localeCompare(pu) > 0) map.set(e.id, e)
+    map.set(e.id, mergeTwoRecords(prev, e))
   }
   return [...map.values()]
 }

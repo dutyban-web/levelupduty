@@ -5,6 +5,7 @@
  * Travel 연동: TRAVEL_TRIP_DETAIL_KEY 의 expenses를 `source.kind === 'travel'` 로 편입 (중복 스킵)
  */
 import { kvSet } from './lib/supabase'
+import { filterActiveItems, itemIsTrashed } from './kvItemTrash'
 
 export const ACCOUNT_LEDGER_KEY = 'creative_os_account_ledger_v1'
 
@@ -75,6 +76,14 @@ const TRAVEL_CAT_MAP: Record<string, string> = {
   other: 'travel_general',
 }
 
+function normalizeLedgerEntry(e: LedgerEntry): LedgerEntry {
+  if (!itemIsTrashed(e)) {
+    const { is_deleted: _d, ...rest } = e as LedgerEntry & { is_deleted?: unknown }
+    return rest as LedgerEntry
+  }
+  return { ...e, is_deleted: true }
+}
+
 export function loadLedgerStore(): LedgerStore {
   try {
     const raw = localStorage.getItem(ACCOUNT_LEDGER_KEY)
@@ -86,7 +95,10 @@ export function loadLedgerStore(): LedgerStore {
       return { version: 1, categories: defaultLedgerCategories(), entries: [] }
     }
     if (p.categories.length === 0) p.categories = defaultLedgerCategories()
-    return p
+    return {
+      ...p,
+      entries: p.entries.map(e => normalizeLedgerEntry(e as LedgerEntry)),
+    }
   } catch {
     return { version: 1, categories: defaultLedgerCategories(), entries: [] }
   }
@@ -107,21 +119,30 @@ export function upsertLedgerEntry(
   const now = new Date().toISOString()
   const existing = store.entries.find(e => e.id === id)
   const createdAt = existing?.createdAt ?? now
-  const next: LedgerEntry = {
-    ...patch,
-    id,
-    createdAt,
-    updatedAt: now,
-  }
+  const next: LedgerEntry = existing
+    ? {
+        ...existing,
+        ...patch,
+        id,
+        createdAt,
+        updatedAt: now,
+      }
+    : ({
+        ...patch,
+        id,
+        createdAt,
+        updatedAt: now,
+      } as LedgerEntry)
   const idx = store.entries.findIndex(e => e.id === id)
   const entries = idx >= 0 ? store.entries.map((e, i) => (i === idx ? next : e)) : [next, ...store.entries]
   return { ...store, entries }
 }
 
 export function activeLedgerEntries(entries: LedgerEntry[]): LedgerEntry[] {
-  return entries.filter(e => e.is_deleted !== true)
+  return filterActiveItems(entries)
 }
 
+/** 휴지통용 소프트 삭제 — DB 행/배열에서 제거하지 않음 */
 export function deleteLedgerEntry(store: LedgerStore, id: string): LedgerStore {
   const now = new Date().toISOString()
   return {
@@ -264,7 +285,7 @@ export function monthKey(dateStr: string): string {
 /** 특정 일자 지출 합계 (가계부 대시보드용) */
 export function ledgerDayExpenseTotal(store: LedgerStore, ymd: string): number {
   let sum = 0
-  for (const e of store.entries) {
+  for (const e of activeLedgerEntries(store.entries)) {
     if (e.date !== ymd.slice(0, 10)) continue
     if (e.flow === 'expense') sum += e.amount
   }
