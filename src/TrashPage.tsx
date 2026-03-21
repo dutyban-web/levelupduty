@@ -28,6 +28,7 @@ import {
   purgeValueAction,
   VALUE_ACTION_STORE_KEY,
   type ValueAction,
+  type ValueActionStore,
 } from './valueActionData'
 import {
   loadNetworkStore,
@@ -36,6 +37,7 @@ import {
   purgeContact,
   NETWORK_STORE_KEY,
   type NetworkContact,
+  type NetworkStore,
 } from './networkData'
 import {
   loadQuantumFlowStore,
@@ -44,6 +46,7 @@ import {
   purgeLetter,
   QUANTUM_FLOW_KEY,
   type QuantumLetter,
+  type QuantumFlowStore,
 } from './quantumFlowData'
 import {
   loadLedgerStore,
@@ -52,6 +55,7 @@ import {
   purgeLedgerEntry,
   ACCOUNT_LEDGER_KEY,
   type LedgerEntry,
+  type LedgerStore,
 } from './accountLedgerData'
 import {
   loadEvolutionStore,
@@ -61,6 +65,7 @@ import {
   EVOLUTION_KEY,
   EVOLUTION_CATEGORY_LABEL,
   type EvolutionItem,
+  type EvolutionStore,
 } from './evolutionData'
 import {
   loadPlaybookStore,
@@ -69,6 +74,7 @@ import {
   purgePlaybookItem,
   PLAYBOOK_STORE_KEY,
   type PlaybookItem,
+  type PlaybookStore,
 } from './humanRelationsPlaybookData'
 import {
   loadRpgProfile,
@@ -97,6 +103,15 @@ import {
   type UserQuestRow,
 } from './supabase'
 import { itemIsTrashed } from './kvItemTrash'
+import {
+  mergeLedgerStores,
+  mergeValueActionStores,
+  mergeNetworkStores,
+  mergeQuantumFlowStores,
+  mergeEvolutionStores,
+  mergePlaybookStores,
+  mergeRpgProfilesForTrash,
+} from './trashStoreMerge'
 
 function useIsNarrow(): boolean {
   const [narrow, setNarrow] = useState(() =>
@@ -127,18 +142,12 @@ async function fetchFragmentVault(): Promise<FragmentStore> {
   return mergeFragmentStores(local, remote)
 }
 
-function entryIsTrashed(e: FragmentEntry): boolean {
-  if (e.is_deleted === true) return true
-  const v = (e as unknown as Record<string, unknown>).is_deleted
-  return v === 'true' || v === 1 || v === '1'
-}
-
 function collectTrashedFragmentEntries(
   local: FragmentStore,
   remote: FragmentStore | null,
 ): FragmentEntry[] {
-  const localT = local.entries.filter(entryIsTrashed)
-  const remoteT = (remote?.entries ?? []).filter(entryIsTrashed)
+  const localT = local.entries.filter(e => itemIsTrashed(e))
+  const remoteT = (remote?.entries ?? []).filter(e => itemIsTrashed(e))
   const byId = new Map<string, FragmentEntry>()
   for (const e of [...localT, ...remoteT]) {
     const prev = byId.get(e.id)
@@ -217,25 +226,52 @@ export function TrashPage() {
       const { local, remote } = await fetchLocalAndRemoteFragment()
       setTrashEntries(collectTrashedFragmentEntries(local, remote))
 
-      const va = loadValueActionStore().items.filter(i => itemIsTrashed(i))
-      setValueTrashed(va)
+      let remoteVa: ValueActionStore | null = null
+      let remoteNw: NetworkStore | null = null
+      let remoteQf: QuantumFlowStore | null = null
+      let remoteLe: LedgerStore | null = null
+      let remoteEv: EvolutionStore | null = null
+      let remotePb: PlaybookStore | null = null
+      let remoteRpg: LevelupRpgProfile | null = null
 
-      const nw = loadNetworkStore().contacts.filter(c => itemIsTrashed(c))
-      setNetworkTrashed(nw)
+      if (isSupabaseReady) {
+        const [rVa, rNw, rQf, rLe, rEv, rPb, rRpg] = await Promise.all([
+          kvGet<ValueActionStore>(VALUE_ACTION_STORE_KEY),
+          kvGet<NetworkStore>(NETWORK_STORE_KEY),
+          kvGet<QuantumFlowStore>(QUANTUM_FLOW_KEY),
+          kvGet<LedgerStore>(ACCOUNT_LEDGER_KEY),
+          kvGet<EvolutionStore>(EVOLUTION_KEY),
+          kvGet<PlaybookStore>(PLAYBOOK_STORE_KEY),
+          kvGet<LevelupRpgProfile>(LEVELUP_RPG_KEY),
+        ])
+        remoteVa = rVa
+        remoteNw = rNw
+        remoteQf = rQf
+        remoteLe = rLe
+        remoteEv = rEv
+        remotePb = rPb
+        remoteRpg = rRpg
+      }
 
-      const qf = loadQuantumFlowStore().letters.filter(l => itemIsTrashed(l))
-      setQuantumTrashed(qf)
+      const va = mergeValueActionStores(loadValueActionStore(), remoteVa)
+      setValueTrashed(va.items.filter(i => itemIsTrashed(i)))
 
-      const le = loadLedgerStore().entries.filter(e => itemIsTrashed(e))
-      setLedgerTrashed(le)
+      const nw = mergeNetworkStores(loadNetworkStore(), remoteNw)
+      setNetworkTrashed(nw.contacts.filter(c => itemIsTrashed(c)))
 
-      const ev = loadEvolutionStore().items.filter(i => itemIsTrashed(i))
-      setEvolutionTrashed(ev)
+      const qf = mergeQuantumFlowStores(loadQuantumFlowStore(), remoteQf)
+      setQuantumTrashed(qf.letters.filter(l => itemIsTrashed(l)))
 
-      const pb = loadPlaybookStore().items.filter(i => itemIsTrashed(i))
-      setPlaybookTrashed(pb)
+      const le = mergeLedgerStores(loadLedgerStore(), remoteLe)
+      setLedgerTrashed(le.entries.filter(e => itemIsTrashed(e)))
 
-      const rpg = loadRpgProfile()
+      const ev = mergeEvolutionStores(loadEvolutionStore(), remoteEv)
+      setEvolutionTrashed(ev.items.filter(i => itemIsTrashed(i)))
+
+      const pb = mergePlaybookStores(loadPlaybookStore(), remotePb)
+      setPlaybookTrashed(pb.items.filter(i => itemIsTrashed(i)))
+
+      const rpg = mergeRpgProfilesForTrash(loadRpgProfile(), remoteRpg)
       setRpgTrashed({
         statLines: rpg.statLines.filter(s => itemIsTrashed(s)),
         bosses: rpg.bosses.filter(b => itemIsTrashed(b)),
