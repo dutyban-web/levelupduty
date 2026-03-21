@@ -6,7 +6,8 @@ import {
   loadFragmentStore,
   saveFragmentStore,
   upsertFragment,
-  deleteFragment,
+  softDeleteFragment,
+  getActiveFragmentEntries,
   FRAGMENT_KIND_META,
   type FragmentStore,
   type FragmentKind,
@@ -85,13 +86,13 @@ export function FragmentPage() {
   }
 
   const remove = (id: string) => {
-    if (!window.confirm('이 조각을 삭제할까요?')) return
-    persist(deleteFragment(store, id))
+    if (!window.confirm('이 조각을 휴지통으로 보낼까요? (나중에 휴지통에서 복구할 수 있습니다)')) return
+    persist(softDeleteFragment(store, id))
     if (editingId === id) resetComposer()
   }
 
   const filtered = useMemo(() => {
-    let list = [...store.entries]
+    let list = getActiveFragmentEntries(store)
     if (filterKind !== 'all') list = list.filter(e => e.kind === filterKind)
     const q = query.trim().toLowerCase()
     if (q) {

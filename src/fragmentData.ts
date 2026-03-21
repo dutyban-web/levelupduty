@@ -22,6 +22,8 @@ export type FragmentEntry = {
   pinned: boolean
   createdAt: string
   updatedAt: string
+  /** true면 휴지통(메인 목록·하이드레이션 표시 제외) */
+  is_deleted?: boolean
 }
 
 export type FragmentStore = { version: 1; entries: FragmentEntry[] }
@@ -36,6 +38,27 @@ export function loadFragmentStore(): FragmentStore {
   } catch {
     return { version: 1, entries: [] }
   }
+}
+
+/** 메인 목록·검색용 — 휴지통 항목 제외 */
+export function getActiveFragmentEntries(store: FragmentStore): FragmentEntry[] {
+  return store.entries.filter(e => e.is_deleted !== true)
+}
+
+/** 휴지통 탭용 */
+export function getTrashedFragmentEntries(store: FragmentStore): FragmentEntry[] {
+  return store.entries.filter(e => e.is_deleted === true)
+}
+
+/** id 기준으로 병합 — updatedAt이 더 최근인 쪽 우선 (로컬·서버 불일치 방지) */
+export function mergeFragmentStores(a: FragmentStore, b: FragmentStore): FragmentStore {
+  const map = new Map<string, FragmentEntry>()
+  for (const e of a.entries) map.set(e.id, e)
+  for (const e of b.entries) {
+    const prev = map.get(e.id)
+    if (!prev || e.updatedAt.localeCompare(prev.updatedAt) > 0) map.set(e.id, e)
+  }
+  return { version: 1, entries: [...map.values()] }
 }
 
 export function saveFragmentStore(s: FragmentStore) {
@@ -67,6 +90,31 @@ export function upsertFragment(
   return { ...store, entries }
 }
 
-export function deleteFragment(store: FragmentStore, id: string): FragmentStore {
+/**
+ * 조각을 휴지통으로 (DB row 삭제 없음 — JSON 내 is_deleted + kvSet upsert)
+ */
+export function softDeleteFragment(store: FragmentStore, id: string): FragmentStore {
+  const now = new Date().toISOString()
+  return {
+    ...store,
+    entries: store.entries.map(e =>
+      e.id === id ? { ...e, is_deleted: true, updatedAt: now } : e,
+    ),
+  }
+}
+
+/** 휴지통에서 복구 */
+export function restoreFragmentEntry(store: FragmentStore, id: string): FragmentStore {
+  const now = new Date().toISOString()
+  return {
+    ...store,
+    entries: store.entries.map(e =>
+      e.id === id ? { ...e, is_deleted: false, updatedAt: now } : e,
+    ),
+  }
+}
+
+/** 휴지통에서 영구 삭제(배열에서 제거) */
+export function purgeFragmentEntry(store: FragmentStore, id: string): FragmentStore {
   return { ...store, entries: store.entries.filter(e => e.id !== id) }
 }
