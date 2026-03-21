@@ -22,6 +22,8 @@ import {
   type ManifestInsertResult,
   type ManifestLinkPair,
 } from './supabase'
+import { kvSet } from './lib/supabase'
+import { MANIFEST_LOCAL_KEY, MANIFEST_ACHIEVED_KEY } from './kvSyncedKeys'
 import { ManifestNotionNotePanel } from './ManifestNotionNotePanel'
 import { blockNoteToPlainPreview, collectTagsForEntities, entityHasNoteTag } from './manifestNoteUtils'
 import type { ManifestNoteKind } from './manifestNoteUtils'
@@ -80,9 +82,9 @@ function buildLinkAxisLabels(rows: ManifestLinkAxisRow[]): Map<string, string> {
   return out
 }
 
-const LOCAL_KEY = 'manifestation_local_v1'
-/** 이미 이뤄진 결과 — 원인/결과와 별도 로컬 키 (추후 Supabase 연동 가능) */
-const ACHIEVED_KEY = 'manifestation_achieved_v1'
+const LOCAL_KEY = MANIFEST_LOCAL_KEY
+/** 이미 이뤄진 결과 — 원인/결과와 별도 로컬 키 (app_kv 동기화) */
+const ACHIEVED_KEY = MANIFEST_ACHIEVED_KEY
 
 export type AchievedManifestRow = {
   id: string
@@ -106,6 +108,7 @@ function loadAchieved(): AchievedManifestRow[] {
 function persistAchieved(rows: AchievedManifestRow[]) {
   try {
     localStorage.setItem(ACHIEVED_KEY, JSON.stringify(rows))
+    void kvSet(ACHIEVED_KEY, rows)
   } catch { /* ignore */ }
 }
 
@@ -150,6 +153,7 @@ function loadLocal(): LocalBundle {
 function saveLocal(b: LocalBundle) {
   try {
     localStorage.setItem(LOCAL_KEY, JSON.stringify(b))
+    void kvSet(LOCAL_KEY, b)
   } catch { /* ignore */ }
 }
 

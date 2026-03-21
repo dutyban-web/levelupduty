@@ -1,8 +1,8 @@
 /**
- * Value — 행동 자산 명세서 (표준 원가·전략 가치)
+ * Value — 행동 자산 명세서 (표준 원가·전략 가치) · 작업 순서도(Workflows)
  */
-import { useCallback, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   type ValueAction,
   type ValueActionStore,
@@ -24,7 +24,18 @@ import {
   Trash2,
   Gem,
   Sparkles,
+  Workflow,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
+import { WorkflowEditorPage } from './WorkflowEditorPage'
+import {
+  fetchWorkflows,
+  insertWorkflow,
+  deleteWorkflow,
+  supabase,
+  type WorkflowRow,
+} from './supabase'
 
 const STRATEGIC_LABEL: Record<StrategicValueLevel, { ko: string; className: string }> = {
   high: { ko: '상', className: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
@@ -66,6 +77,60 @@ function emptyDraft(): Omit<ValueAction, 'id' | 'createdAt' | 'updatedAt'> {
 }
 
 export function ValuePage() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const workflowMatch = location.pathname.match(/^\/value\/workflow\/([^/]+)/)
+  const workflowIdFromRoute = workflowMatch?.[1]
+
+  const [workflows, setWorkflows] = useState<WorkflowRow[]>([])
+  const [workflowsLoading, setWorkflowsLoading] = useState(false)
+  /** Area·Projects 접기와 같이 기본 접힘 */
+  const [workflowSectionExpanded, setWorkflowSectionExpanded] = useState(false)
+
+  useEffect(() => {
+    if (workflowIdFromRoute) return
+    let cancelled = false
+    ;(async () => {
+      setWorkflowsLoading(true)
+      const list = await fetchWorkflows()
+      if (!cancelled) setWorkflows(list)
+      if (!cancelled) setWorkflowsLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workflowIdFromRoute])
+
+  const openWorkflow = useCallback(
+    (id: string) => {
+      navigate(`/value/workflow/${id}`)
+    },
+    [navigate],
+  )
+
+  const createWorkflow = useCallback(async () => {
+    if (!supabase) {
+      window.alert('Supabase가 연결되지 않았습니다. .env 설정을 확인하세요.')
+      return
+    }
+    const row = await insertWorkflow('새 작업 순서도', '', [], [])
+    if (!row) {
+      window.alert('순서도를 만들 수 없습니다. 로그인 상태를 확인하세요.')
+      return
+    }
+    openWorkflow(row.id)
+  }, [openWorkflow])
+
+  const removeWorkflow = useCallback(
+    async (id: string) => {
+      if (!confirm('이 순서도를 삭제할까요?')) return
+      const ok = await deleteWorkflow(id)
+      if (ok) setWorkflows(prev => prev.filter(w => w.id !== id))
+      else window.alert('삭제에 실패했습니다.')
+    },
+    [],
+  )
+
   const [store, setStore] = useState<ValueActionStore>(() => loadValueActionStore())
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table')
   const [identityFilter, setIdentityFilter] = useState<string>('')
@@ -139,12 +204,21 @@ export function ValuePage() {
     persist(prev => deleteValueAction(prev, id))
   }
 
+  if (workflowIdFromRoute) {
+    return (
+      <WorkflowEditorPage
+        workflowId={workflowIdFromRoute}
+        onBack={() => navigate('/value')}
+      />
+    )
+  }
+
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-10 py-8 pb-16">
       <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <span className="text-[10px] font-extrabold text-violet-600 tracking-[0.2em]">VALUE</span>
-          <h1 className="mt-1.5 text-3xl font-black text-slate-900 flex items-center gap-2">
+          <h1 className="mt-3 text-3xl font-black text-slate-900 flex items-center gap-2">
             <Gem className="w-8 h-8 text-violet-500 shrink-0" />
             행동 자산 명세
           </h1>
@@ -186,6 +260,93 @@ export function ValuePage() {
           </button>
         </div>
       </header>
+
+      {/* 퀘스트 화면 Area·Projects 접기와 유사: 기본 접힘 */}
+      <div className="mb-8 rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setWorkflowSectionExpanded(v => !v)}
+          className={`w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 text-left border-0 cursor-pointer transition-colors ${
+            workflowSectionExpanded ? 'bg-violet-50/90' : 'bg-white hover:bg-slate-50/90'
+          }`}
+        >
+          <span className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-wrap min-w-0">
+            <Workflow className="w-4 h-4 text-violet-600 shrink-0" />
+            <span>작업 순서도 (Workflows)</span>
+            <span className="text-xs font-semibold text-slate-500">
+              ({workflowsLoading ? '…' : `${workflows.length}개`})
+            </span>
+          </span>
+          <span className="flex items-center gap-1.5 text-xs font-bold text-violet-600 shrink-0">
+            {workflowSectionExpanded ? '접기' : '펼치기'}
+            {workflowSectionExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </span>
+        </button>
+        {workflowSectionExpanded && (
+          <div className="px-4 sm:px-5 pb-5 pt-0 border-t border-slate-100">
+            <p className="text-xs text-slate-500 mt-3 mb-3 leading-relaxed">
+              작업 흐름을 <strong className="text-violet-700">순서도</strong>로 시각화합니다. 노드를 배치하고 연결하면 Supabase에 저장됩니다.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2 mb-4">
+              <button
+                type="button"
+                onClick={createWorkflow}
+                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-violet-500/25 hover:bg-violet-700"
+              >
+                <Plus className="w-4 h-4" />
+                새 순서도 만들기
+              </button>
+            </div>
+            {workflowsLoading ? (
+              <p className="text-slate-500 text-sm py-6 text-center">불러오는 중…</p>
+            ) : workflows.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/60 py-14 text-center">
+                <Sparkles className="w-10 h-10 text-violet-300 mx-auto mb-3" />
+                <p className="text-slate-600 m-0 text-sm">아직 순서도가 없습니다. &quot;새 순서도 만들기&quot;로 추가해 보세요.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {workflows.map(w => (
+                  <div
+                    key={w.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openWorkflow(w.id)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        openWorkflow(w.id)
+                      }
+                    }}
+                    className="rounded-2xl border-2 border-slate-200/90 bg-white p-5 shadow-sm hover:shadow-md hover:border-violet-300 cursor-pointer text-left transition-all flex flex-col gap-3 min-h-[140px]"
+                  >
+                    <div className="flex justify-between gap-2 items-start">
+                      <h2 className="text-lg font-black text-slate-900 m-0 leading-snug">{w.title}</h2>
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation()
+                          removeWorkflow(w.id)
+                        }}
+                        className="p-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50 shrink-0"
+                        title="삭제"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <p className="text-sm text-slate-600 m-0 line-clamp-4 flex-1">
+                      {(w.description ?? '').trim() || '설명이 없습니다. 카드를 열어 편집하세요.'}
+                    </p>
+                    <p className="text-[10px] text-slate-400 m-0 pt-1 border-t border-slate-100">
+                      수정 {new Date(w.updated_at).toLocaleString('ko-KR')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <section className="mb-6 flex flex-wrap items-center gap-3">
         <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">정체성 필터</label>

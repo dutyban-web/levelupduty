@@ -1,24 +1,41 @@
 import { useState, useEffect, useCallback } from 'react'
+import { kvSet } from './lib/supabase'
+import { GOALS_KV_KEY } from './kvSyncedKeys'
 
-const GOALS_KEY = 'creative-os-life-goals-v1'
+type GoalsPayload = { text: string }
 
-/** 인생 목표 — 로컬 저장 (추후 Supabase 연동 가능) */
+function readGoalsTextFromStorage(): string {
+  try {
+    const raw = localStorage.getItem(GOALS_KV_KEY)
+    if (!raw) return ''
+    try {
+      const p = JSON.parse(raw) as unknown
+      if (typeof p === 'object' && p !== null && 'text' in p && typeof (p as GoalsPayload).text === 'string') {
+        return (p as GoalsPayload).text
+      }
+    } catch {
+      return raw
+    }
+  } catch {
+    /* ignore */
+  }
+  return ''
+}
+
+/** 인생 목표 — app_kv + localStorage */
 export function GoalsPage() {
   const [text, setText] = useState('')
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(GOALS_KEY)
-      if (raw) setText(raw)
-    } catch {
-      /* ignore */
-    }
+    setText(readGoalsTextFromStorage())
   }, [])
 
   const save = useCallback(() => {
+    const payload: GoalsPayload = { text }
     try {
-      localStorage.setItem(GOALS_KEY, text)
+      localStorage.setItem(GOALS_KV_KEY, JSON.stringify(payload))
+      void kvSet(GOALS_KV_KEY, payload)
       setSaved(true)
       window.setTimeout(() => setSaved(false), 1500)
     } catch {
@@ -30,7 +47,7 @@ export function GoalsPage() {
     <div style={{ maxWidth: '720px', margin: '0 auto', padding: 'clamp(16px, 4vw, 36px) clamp(14px, 4vw, 48px) 48px' }}>
       <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 800, color: '#37352F' }}>Goals</h1>
       <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#787774', lineHeight: 1.6 }}>
-        인생의 목표를 자유롭게 적어 두세요. 이 브라우저(로컬)에만 저장됩니다.
+        인생의 목표를 자유롭게 적어 두세요. Supabase(app_kv)에 동기화됩니다.
       </p>
       <textarea
         value={text}

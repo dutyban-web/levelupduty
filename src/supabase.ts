@@ -217,10 +217,14 @@ export async function insertIdentity(name: string, role_model?: string | null): 
   }
 }
 
-export async function updateIdentity(id: string, name: string, role_model?: string | null): Promise<void> {
-  if (!supabase) return
+export async function updateIdentity(id: string, name: string, role_model?: string | null): Promise<boolean> {
+  if (!supabase) return false
   const { error } = await supabase.from('identities').update({ name, role_model: role_model ?? null }).eq('id', id)
-  if (error) console.error('[Supabase] updateIdentity 실패:', error.message)
+  if (error) {
+    console.error('[Supabase] updateIdentity 실패:', error.message)
+    return false
+  }
+  return true
 }
 
 export async function deleteIdentity(id: string): Promise<void> {
@@ -1965,6 +1969,311 @@ export async function replaceManifestLinksForEffect(effectId: string, causeIds: 
   const { error: insErr } = await supabase.from('cause_effect_links').insert(rows)
   if (insErr) {
     console.error('[Supabase] replaceManifestLinksForEffect insert 실패:', insErr.message)
+    return false
+  }
+  return true
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  workflows — Value 작업 순서도 (nodes / edges JSONB, RLS: 본인만)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface WorkflowRow {
+  id: string
+  user_id: string
+  title: string
+  description: string | null
+  nodes: unknown
+  edges: unknown
+  created_at: string
+  updated_at: string
+}
+
+async function _workflowUserId(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.user?.id) return session.user.id
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id ?? null
+}
+
+export async function fetchWorkflows(): Promise<WorkflowRow[]> {
+  if (!supabase) return []
+  const uid = await _workflowUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('workflows')
+      .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
+      .eq('user_id', uid)
+      .order('updated_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchWorkflows 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({
+      id: String(r.id),
+      user_id: String(r.user_id),
+      title: String(r.title ?? ''),
+      description: r.description != null ? String(r.description) : null,
+      nodes: r.nodes,
+      edges: r.edges,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+    }))
+  } catch (e) {
+    console.error('[Supabase] fetchWorkflows 예외:', e)
+    return []
+  }
+}
+
+export async function fetchWorkflowById(id: string): Promise<WorkflowRow | null> {
+  if (!supabase) return null
+  const uid = await _workflowUserId()
+  if (!uid) return null
+  try {
+    const { data, error } = await supabase
+      .from('workflows')
+      .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
+      .eq('id', id)
+      .eq('user_id', uid)
+      .maybeSingle()
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchWorkflowById 실패:', error.message)
+      return null
+    }
+    const r = data as Record<string, unknown>
+    return {
+      id: String(r.id),
+      user_id: String(r.user_id),
+      title: String(r.title ?? ''),
+      description: r.description != null ? String(r.description) : null,
+      nodes: r.nodes,
+      edges: r.edges,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+    }
+  } catch (e) {
+    console.error('[Supabase] fetchWorkflowById 예외:', e)
+    return null
+  }
+}
+
+export async function insertWorkflow(
+  title: string,
+  description = '',
+  nodes: unknown = [],
+  edges: unknown = [],
+): Promise<WorkflowRow | null> {
+  if (!supabase) return null
+  const uid = await _workflowUserId()
+  if (!uid) {
+    console.error('[Supabase] insertWorkflow: 로그인 필요')
+    return null
+  }
+  const { data, error } = await supabase
+    .from('workflows')
+    .insert({
+      user_id: uid,
+      title: title.trim() || '제목 없음',
+      description: description.trim(),
+      nodes,
+      edges,
+    })
+    .select('id, user_id, title, description, nodes, edges, created_at, updated_at')
+    .single()
+  if (error) {
+    console.error('[Supabase] insertWorkflow 실패:', error.message)
+    return null
+  }
+  const r = data as Record<string, unknown>
+  return {
+    id: String(r.id),
+    user_id: String(r.user_id),
+    title: String(r.title ?? ''),
+    description: r.description != null ? String(r.description) : null,
+    nodes: r.nodes,
+    edges: r.edges,
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
+}
+
+export async function updateWorkflow(
+  id: string,
+  patch: {
+    title?: string
+    description?: string | null
+    nodes?: unknown
+    edges?: unknown
+  },
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _workflowUserId()
+  if (!uid) return false
+  const payload: Record<string, unknown> = {}
+  if (patch.title !== undefined) payload.title = patch.title
+  if (patch.description !== undefined) payload.description = patch.description
+  if (patch.nodes !== undefined) payload.nodes = patch.nodes
+  if (patch.edges !== undefined) payload.edges = patch.edges
+  if (Object.keys(payload).length === 0) return true
+  payload.updated_at = new Date().toISOString()
+  const { error } = await supabase.from('workflows').update(payload).eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] updateWorkflow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteWorkflow(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _workflowUserId()
+  if (!uid) return false
+  const { error } = await supabase.from('workflows').delete().eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] deleteWorkflow 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  manual_documents — 통합 Manual (BlockNote blocks + 첨부 JSONB, RLS: 본인만)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface ManualDocumentRow {
+  id: string
+  user_id: string
+  title: string
+  sort_order: number
+  blocks: unknown
+  attachments: unknown
+  created_at: string
+  updated_at: string
+}
+
+export type ManualAttachment = {
+  id: string
+  name: string
+  url: string
+  size?: number
+  mime?: string
+}
+
+async function _manualUserId(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.user?.id) return session.user.id
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id ?? null
+}
+
+export async function fetchManualDocuments(): Promise<ManualDocumentRow[]> {
+  if (!supabase) return []
+  const uid = await _manualUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('manual_documents')
+      .select('id, user_id, title, sort_order, blocks, attachments, created_at, updated_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('updated_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManualDocuments 실패:', error.message)
+      return []
+    }
+    return data.map(r => ({
+      id: String(r.id),
+      user_id: String(r.user_id),
+      title: String(r.title ?? ''),
+      sort_order: Number(r.sort_order ?? 0),
+      blocks: r.blocks,
+      attachments: r.attachments,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+    }))
+  } catch (e) {
+    console.error('[Supabase] fetchManualDocuments 예외:', e)
+    return []
+  }
+}
+
+export async function insertManualDocument(title = '새 문서'): Promise<ManualDocumentRow | null> {
+  if (!supabase) return null
+  const uid = await _manualUserId()
+  if (!uid) {
+    console.error('[Supabase] insertManualDocument: 로그인 필요')
+    return null
+  }
+  const { count } = await supabase
+    .from('manual_documents')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', uid)
+  const sortOrder = count ?? 0
+  const { data, error } = await supabase
+    .from('manual_documents')
+    .insert({
+      user_id: uid,
+      title: title.trim() || '제목 없음',
+      sort_order: sortOrder,
+      blocks: [],
+      attachments: [],
+    })
+    .select('id, user_id, title, sort_order, blocks, attachments, created_at, updated_at')
+    .single()
+  if (error) {
+    console.error('[Supabase] insertManualDocument 실패:', error.message)
+    return null
+  }
+  const r = data as Record<string, unknown>
+  return {
+    id: String(r.id),
+    user_id: String(r.user_id),
+    title: String(r.title ?? ''),
+    sort_order: Number(r.sort_order ?? 0),
+    blocks: r.blocks,
+    attachments: r.attachments,
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
+}
+
+export async function updateManualDocument(
+  id: string,
+  patch: {
+    title?: string
+    blocks?: unknown
+    attachments?: unknown
+    sort_order?: number
+  },
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const payload: Record<string, unknown> = {}
+  if (patch.title !== undefined) payload.title = patch.title
+  if (patch.blocks !== undefined) payload.blocks = patch.blocks
+  if (patch.attachments !== undefined) payload.attachments = patch.attachments
+  if (patch.sort_order !== undefined) payload.sort_order = patch.sort_order
+  if (Object.keys(payload).length === 0) return true
+  payload.updated_at = new Date().toISOString()
+  const { error } = await supabase.from('manual_documents').update(payload).eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] updateManualDocument 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteManualDocument(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const { error } = await supabase.from('manual_documents').delete().eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] deleteManualDocument 실패:', error.message)
     return false
   }
   return true

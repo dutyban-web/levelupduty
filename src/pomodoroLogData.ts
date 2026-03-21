@@ -1,7 +1,9 @@
 /**
- * 포모도로 세션 로그 — 브라우저 로컬 백업 (Supabase focus_log 미연결 시에도 누적)
+ * 포모도로 세션 로그 — app_kv + localStorage
  * 통합 캘린더 날짜(YYYY-MM-DD)와 정렬
  */
+
+import { kvSet } from './lib/supabase'
 
 export const POMODORO_LOG_KEY = 'creative-os-pomodoro-log-v1'
 
@@ -59,6 +61,7 @@ export function loadPomodoroLog(): PomodoroLogStore {
 export function savePomodoroLog(store: PomodoroLogStore): void {
   try {
     localStorage.setItem(POMODORO_LOG_KEY, JSON.stringify(store))
+    void kvSet(POMODORO_LOG_KEY, store)
   } catch {
     /* quota */
   }

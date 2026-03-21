@@ -17,6 +17,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@supabase/supabase-js": "^2.99.2",
+    "@xyflow/react": "^12.10.1",
     "framer-motion": "^12.38.0",
     "lucide-react": "^0.577.0",
     "lunar-javascript": "^1.7.7",

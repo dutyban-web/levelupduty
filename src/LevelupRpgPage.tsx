@@ -690,7 +690,7 @@ export function LevelupRpgPage({
         </div>
 
         <p style={{ marginTop: 20, textAlign: 'center', fontSize: 11, color: C.hint, lineHeight: 1.6 }}>
-          데이터는 <strong style={{ color: C.purple }}>localStorage</strong>에 저장됩니다. 레벨·경험치는 퀘스트 XP와 연동됩니다.
+          프로필은 <strong style={{ color: C.purple }}>Supabase(app_kv)</strong>에 동기화됩니다. 레벨·경험치는 퀘스트 XP와 연동됩니다.
         </p>
       </div>
 

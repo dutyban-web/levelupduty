@@ -1,7 +1,9 @@
 /**
  * 인간관계론 — 전역 매뉴얼 (특정 연락처와 무관)
- * localStorage 영속
+ * app_kv + localStorage
  */
+
+import { kvSet } from './lib/supabase'
 
 export const PLAYBOOK_STORE_KEY = 'creative-os-human-relations-playbook-v1'
 
@@ -53,6 +55,7 @@ export function loadPlaybookStore(): PlaybookStore {
 export function savePlaybookStore(s: PlaybookStore): void {
   try {
     localStorage.setItem(PLAYBOOK_STORE_KEY, JSON.stringify(s))
+    void kvSet(PLAYBOOK_STORE_KEY, s)
   } catch {
     /* quota */
   }

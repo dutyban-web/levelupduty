@@ -30,6 +30,7 @@
 
 import { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../supabase'
+import { emitAppSyncStatus, scheduleSyncIdle } from '../syncIndicatorBus'
 
 export { supabase }
 export const isSupabaseReady = Boolean(supabase)
@@ -53,15 +54,21 @@ export async function kvGet<T>(key: string): Promise<T | null> {
 /** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 */
 export async function kvSet<T>(key: string, value: T): Promise<void> {
   if (!supabase) return
+  emitAppSyncStatus('syncing')
   try {
-    await supabase
+    const { error } = await supabase
       .from('app_kv')
       .upsert(
         { key, value, synced_at: new Date().toISOString() },
         { onConflict: 'key' }
       )
+    if (error) throw error
+    emitAppSyncStatus('synced')
+    scheduleSyncIdle(2000)
   } catch (e) {
     console.warn('[Supabase] kvSet error:', e)
+    emitAppSyncStatus('error')
+    scheduleSyncIdle(5000)
   }
 }
 

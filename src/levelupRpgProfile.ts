@@ -1,6 +1,8 @@
 /**
- * Levelup RPG 대시보드 — 사용자 커스터마이징 프로필 (localStorage)
+ * Levelup RPG 대시보드 — 사용자 커스터마이징 프로필 (app_kv + localStorage)
  */
+import { kvSet } from './lib/supabase'
+
 export const LEVELUP_RPG_KEY = 'levelup_rpg_profile_v2'
 
 export type RpgEquipmentSlot = { slot: string; name: string }
@@ -119,5 +121,6 @@ export function loadRpgProfile(): LevelupRpgProfile {
 export function saveRpgProfile(p: LevelupRpgProfile): void {
   try {
     localStorage.setItem(LEVELUP_RPG_KEY, JSON.stringify(p))
+    void kvSet(LEVELUP_RPG_KEY, p)
   } catch { /* quota */ }
 }

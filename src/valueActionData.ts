@@ -1,7 +1,9 @@
 /**
  * Value — 행동 자산 명세 (표준 원가·전략 가치)
- * 로컬 영속. 퀘스트와의 연결은 별도 맵으로 보관 (추후 Supabase quests 컬럼 확장 대비)
+ * app_kv + localStorage 동기화
  */
+
+import { kvSet } from './lib/supabase'
 
 export const VALUE_ACTION_STORE_KEY = 'creative-os-value-actions-v1'
 /** 퀘스트 UUID → 행동 자산 UUID (로컬만, 완료 시 가치 누적 로직에 사용) */
@@ -149,6 +151,7 @@ export function loadQuestValueLinks(): QuestValueLinkMap {
 export function saveQuestValueLinks(map: QuestValueLinkMap): void {
   try {
     localStorage.setItem(QUEST_VALUE_LINK_KEY, JSON.stringify(map))
+    void kvSet(QUEST_VALUE_LINK_KEY, map)
   } catch {
     /* ignore */
   }

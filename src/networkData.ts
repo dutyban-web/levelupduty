@@ -1,8 +1,9 @@
 /**
  * Network — 인적자원 명부
- * - v1: 로컬(localStorage) 단일 스토어
- * - Supabase 전용 테이블은 없음 → 연락처/본문은 KV·로컬, 히스토리 날짜는 calendar_events(event)로 동기화
+ * app_kv + localStorage 동기화 (연락처 본문). 히스토리 날짜는 calendar_events(event)로 별도 동기화
  */
+
+import { kvSet } from './lib/supabase'
 
 export const NETWORK_STORE_KEY = 'creative-os-network-contacts-v1'
 
@@ -182,6 +183,7 @@ export function loadNetworkStore(): NetworkStore {
 export function saveNetworkStore(s: NetworkStore): void {
   try {
     localStorage.setItem(NETWORK_STORE_KEY, JSON.stringify(s))
+    void kvSet(NETWORK_STORE_KEY, s)
   } catch {
     /* ignore */
   }

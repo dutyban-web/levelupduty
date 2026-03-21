@@ -1,8 +1,10 @@
 import type { PartialBlock } from '@blocknote/core'
+import { kvSet } from './lib/supabase'
 
 export type ManifestNoteKind = 'cause' | 'effect' | 'achieved'
 
-const NOTE_BUNDLE_KEY = 'manifestation_notion_notes_v1'
+export const MANIFEST_NOTE_BUNDLE_KEY = 'manifestation_notion_notes_v1'
+const NOTE_BUNDLE_KEY = MANIFEST_NOTE_BUNDLE_KEY
 
 export type StoredManifestNotionNote = {
   title: string
@@ -35,6 +37,7 @@ export function saveManifestNotionNote(key: string, data: StoredManifestNotionNo
     const all = raw ? (JSON.parse(raw) as Record<string, StoredManifestNotionNote>) : {}
     all[key] = data
     localStorage.setItem(NOTE_BUNDLE_KEY, JSON.stringify(all))
+    void kvSet(NOTE_BUNDLE_KEY, all)
   } catch {
     /* ignore quota */
   }

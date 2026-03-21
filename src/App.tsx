@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { kvSet, kvGet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
+import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle } from './syncIndicatorBus'
+import { hydrateLocalStorageFromKvRecord, migrateLocalToKvIfMissing, ACT_ROLE_REF_KEY, ACT_MASTER_KEY } from './kvSyncedKeys'
 import {
   supabase as _sbClient,
   fetchUserStats, upsertUserStats,
@@ -49,6 +51,8 @@ import { ACCOUNT_LEDGER_KEY } from './accountLedgerData'
 import { EVOLUTION_KEY } from './evolutionData'
 import { FragmentPage } from './FragmentPage'
 import { MasterBoardPage } from './MasterBoardPage'
+import { ManualPage } from './ManualPage'
+import { fetchSeoulWeatherNow, wmoCodeToEmoji } from './seoulWeather'
 import { FRAGMENT_KEY } from './fragmentData'
 import { LevelupRpgPage } from './LevelupRpgPage'
 import { ProjectHubPage, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY } from './ProjectHubPage'
@@ -83,6 +87,7 @@ type PageId =
   | 'manifestation'
   | 'act'
   | 'master-board'
+  | 'manual'
   | 'levelup'
   | 'project'
   | 'value'
@@ -94,7 +99,41 @@ type PageId =
   | 'travel'
   | 'fragment'
 
-const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
+const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
+
+/** 데스크톱 상단 GNB — 한 줄·한 묶음 (Board부터 Note까지 순서 고정, sep = 구분선) */
+type GnbRowItem =
+  | { kind: 'link'; id: PageId; label: string; emoji: string; to?: string }
+  | { kind: 'sep' }
+
+const GNB_ROW_ITEMS: GnbRowItem[] = [
+  { kind: 'sep' },
+  { kind: 'link', id: 'master-board', label: 'Board', emoji: '📋' },
+  { kind: 'link', id: 'manual', label: 'Manu', emoji: '📖' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'life', label: 'Life', emoji: '📅' },
+  { kind: 'link', id: 'goals', label: 'Goals', emoji: '🎯' },
+  { kind: 'link', id: 'evolution', label: 'Evol', emoji: '🧬' },
+  { kind: 'link', id: 'fortune', label: 'Fortu', emoji: '🔮' },
+  { kind: 'link', id: 'manifestation', label: 'Manif', emoji: '✨' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'act', label: 'Act', emoji: '🎭' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'levelup', label: 'Level', emoji: '⬆️' },
+  { kind: 'link', id: 'project', label: 'Project', emoji: '📁' },
+  { kind: 'link', id: 'value', label: 'Value', emoji: '💎' },
+  { kind: 'link', id: 'quest', label: 'Quest', emoji: '⚡', to: '/' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'review', label: 'Review', emoji: '📓' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'quantum', label: 'Quant', emoji: '✦' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'network', label: 'Net', emoji: '🌐' },
+  { kind: 'link', id: 'account', label: 'Acc', emoji: '💰' },
+  { kind: 'link', id: 'travel', label: 'Trav', emoji: '✈️' },
+  { kind: 'link', id: 'fragment', label: 'Note', emoji: '◇' },
+  { kind: 'sep' },
+]
 
 /** 오늘 날짜의 만세력 월·일 기둥 (예: 辛卯월 癸巳일) — lunar-javascript EightChar */
 function formatTodayGanzhiLine(d = new Date()): string {
@@ -592,13 +631,14 @@ function FortuneReadingBlockNoteSection({
 // ── MobileBottomNav ───────────────────────────────────────────────────────────
 function MobileBottomNav({ active }: { active: PageId }) {
   const ITEMS: { id: PageId; emoji: string; label: string }[] = [
+    { id: 'master-board', emoji: '📋', label: 'Board' },
+    { id: 'manual', emoji: '📖', label: 'Manu' },
     { id: 'life', emoji: '📅', label: 'Life' },
     { id: 'goals', emoji: '🎯', label: 'Goals' },
     { id: 'evolution', emoji: '🧬', label: 'Evol' },
     { id: 'fortune', emoji: '🔮', label: 'Fortu' },
     { id: 'manifestation', emoji: '✨', label: 'Manif' },
     { id: 'act', emoji: '🎭', label: 'Act' },
-    { id: 'master-board', emoji: '📋', label: 'Board' },
     { id: 'levelup', emoji: '⬆️', label: 'Level' },
     { id: 'project', emoji: '📁', label: 'Proj' },
     { id: 'value', emoji: '💎', label: 'Value' },
@@ -606,8 +646,8 @@ function MobileBottomNav({ active }: { active: PageId }) {
     { id: 'review', emoji: '📓', label: 'Review' },
     { id: 'quantum', emoji: '✦', label: 'Quant' },
     { id: 'network', emoji: '🌐', label: 'Net' },
-    { id: 'account', emoji: '💰', label: 'Acct' },
-    { id: 'travel', emoji: '✈️', label: 'Trip' },
+    { id: 'account', emoji: '💰', label: 'Acc' },
+    { id: 'travel', emoji: '✈️', label: 'Trav' },
     { id: 'fragment', emoji: '◇', label: 'Note' },
   ]
   return (
@@ -1833,22 +1873,6 @@ const DEFAULT_STATS: StatDef[] = [
   { id: 'health', label: '오늘 건강', value: '0', unit: '보 걸음', memo: '', col: '#f472b6', emoji: '💪', isText: false, hasMemo: false },
   { id: 'fortune', label: '내 운세', value: '갑술(甲戌)', unit: '', memo: '', col: '#fbbf24', emoji: '🔯', isText: true, hasMemo: true },
 ]
-
-// 갑술(甲戌) 일주 — 산 위의 나무 — 매일 랜덤 응원 메시지
-const FORTUNE_MSGS = [
-  '산 위의 나무는 깊은 뿌리로 버팁니다. 오늘은 콘티에만 집중하세요.',
-  '갑술의 기운은 흔들리지 않는 줄기. 외부 소음 차단, 원고에 몰입하세요.',
-  '높은 곳의 나무는 바람을 맞아도 자랍니다. 오늘의 난관이 내공이 됩니다.',
-  '갑목(甲木)의 곧은 기운 — 타협하지 말고 작품의 방향을 지켜내세요.',
-  '술토(戌土) 위에 뿌리내린 나무. 오늘은 세계관을 단단히 다지는 날입니다.',
-  '가을 산의 나무는 열매를 맺습니다. 마감 전 완성도를 높이세요.',
-  '갑술 일주는 고집과 뚝심이 재능. 오늘도 묵묵히 한 칸씩 채워가세요.',
-  '산 정상의 나무는 혼자이지만 강합니다. 고독한 창작이 걸작을 만듭니다.',
-  '갑술의 기운 — 오늘은 아이디어 스케치보다 완성에 에너지를 쏟으세요.',
-  '뿌리가 깊은 나무는 폭풍도 이깁니다. 슬럼프는 성장의 전조입니다.',
-]
-// 날짜 기반으로 하루 동안 같은 메시지 유지
-const DAILY_FORTUNE = FORTUNE_MSGS[new Date().getDate() % FORTUNE_MSGS.length]
 
 function loadStats(): StatDef[] {
   try {
@@ -4161,22 +4185,49 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
 
   async function saveNote() {
     if (!edTitle.trim() || !edDate || !edGroup || !edSub) return
-    setEdSaving(true)
+    const fields = { record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub }
     if (editorNoteId === null) {
-      const created = await insertJournalEvent({ record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub })
-      if (created) {
-        setNotes(prev => [created, ...prev])
-        setJournalDates(prev => new Set([...prev, edDate]))
-        refreshJournal()
+      const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+      const optimistic: JournalEventRow = { ...fields, id: tempId, created_at: new Date().toISOString() }
+      setNotes(prev => [optimistic, ...prev])
+      setJournalDates(prev => new Set([...prev, edDate]))
+      setEdSaving(false)
+      setEditorOpen(false)
+      emitAppSyncStatus('syncing')
+      try {
+        const created = await insertJournalEvent({ record_date: edDate, title: fields.title, content: fields.content, group_name: edGroup, sub_name: edSub })
+        if (created) {
+          setNotes(prev => prev.map(n => n.id === tempId ? created : n))
+          refreshJournal()
+          emitAppSyncStatus('synced')
+          scheduleSyncIdle(2000)
+        } else {
+          setNotes(prev => prev.filter(n => n.id !== tempId))
+          emitAppSyncStatus('error')
+          scheduleSyncIdle(5000)
+        }
+      } catch {
+        setNotes(prev => prev.filter(n => n.id !== tempId))
+        emitAppSyncStatus('error')
+        scheduleSyncIdle(5000)
       }
     } else {
-      const fields = { record_date: edDate, title: edTitle.trim(), content: edContent, group_name: edGroup, sub_name: edSub }
-      await updateJournalEvent(editorNoteId, fields)
+      const prevSnap = notes.find(n => n.id === editorNoteId)
       setNotes(prev => prev.map(n => n.id === editorNoteId ? { ...n, ...fields } : n))
-      refreshJournal()
+      setEdSaving(false)
+      setEditorOpen(false)
+      emitAppSyncStatus('syncing')
+      try {
+        await updateJournalEvent(editorNoteId, fields)
+        refreshJournal()
+        emitAppSyncStatus('synced')
+        scheduleSyncIdle(2000)
+      } catch {
+        if (prevSnap) setNotes(prev => prev.map(n => n.id === editorNoteId ? prevSnap : n))
+        emitAppSyncStatus('error')
+        scheduleSyncIdle(5000)
+      }
     }
-    setEdSaving(false)
-    setEditorOpen(false)
   }
 
   async function handleDeleteNote(id: string) {
@@ -4698,16 +4749,14 @@ function CalendarPage() {
   )
 }
 
-const ACT_ROLE_REF_KEY = 'act-role-reference-v1'
-const ACT_MASTER_KEY = 'act-master-area-v1'
-
 // ═══════════════════════════════════════ IDENTITY PAGE ══════════════════════════
-function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast }: {
+function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast, onOptimisticIdentityPatch }: {
   identities: IdentityRow[]
   activeIdentityId: string | null
   onRefresh: () => void
   onRefreshActive: () => void
   onToast?: (msg: string) => void
+  onOptimisticIdentityPatch?: (id: string, name: string, role_model: string | null) => void
 }) {
   const isMobile = useIsMobile()
   const [roleRefText, setRoleRefText] = useState('')
@@ -4722,8 +4771,19 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
 
   useEffect(() => {
     try {
-      setRoleRefText(localStorage.getItem(ACT_ROLE_REF_KEY) ?? '')
-      setMasterText(localStorage.getItem(ACT_MASTER_KEY) ?? '')
+      const readAct = (key: string): string => {
+        const raw = localStorage.getItem(key)
+        if (!raw) return ''
+        try {
+          const p = JSON.parse(raw) as { text?: string }
+          if (p && typeof p.text === 'string') return p.text
+        } catch {
+          return raw
+        }
+        return ''
+      }
+      setRoleRefText(readAct(ACT_ROLE_REF_KEY))
+      setMasterText(readAct(ACT_MASTER_KEY))
     } catch {
       /* ignore */
     }
@@ -4732,7 +4792,9 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
   const persistRoleRef = useCallback((v: string) => {
     setRoleRefText(v)
     try {
-      localStorage.setItem(ACT_ROLE_REF_KEY, v)
+      const payload = { text: v }
+      localStorage.setItem(ACT_ROLE_REF_KEY, JSON.stringify(payload))
+      void kvSet(ACT_ROLE_REF_KEY, payload)
     } catch {
       /* ignore */
     }
@@ -4741,7 +4803,9 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
   const persistMaster = useCallback((v: string) => {
     setMasterText(v)
     try {
-      localStorage.setItem(ACT_MASTER_KEY, v)
+      const payload = { text: v }
+      localStorage.setItem(ACT_MASTER_KEY, JSON.stringify(payload))
+      void kvSet(ACT_MASTER_KEY, payload)
     } catch {
       /* ignore */
     }
@@ -4800,9 +4864,19 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
   async function handleSave(id: string) {
     const name = editName.trim()
     if (!name) return
-    await updateIdentity(id, name, editRoleModel.trim() || null)
+    const rm = editRoleModel.trim() || null
     setEditingId(null)
-    onRefresh()
+    onOptimisticIdentityPatch?.(id, name, rm)
+    emitAppSyncStatus('syncing')
+    const ok = await updateIdentity(id, name, rm)
+    if (ok) {
+      emitAppSyncStatus('synced')
+      scheduleSyncIdle(2000)
+    } else {
+      onRefresh()
+      emitAppSyncStatus('error')
+      scheduleSyncIdle(5000)
+    }
   }
 
   async function handleDelete(id: string) {
@@ -4839,7 +4913,7 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
           <span style={{ fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em' }}>ROLE REF</span>
           <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>역할참조</h2>
           <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
-            지금 맡은 역할·참고할 롤모델·기대 행동을 적어 두세요. (이 기기 브라우저에만 저장)
+            지금 맡은 역할·참고할 롤모델·기대 행동을 적어 두세요. (Supabase app_kv 동기화)
           </p>
           <textarea
             value={roleRefText}
@@ -4962,7 +5036,7 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
           <span style={{ fontSize: '10px', fontWeight: 800, color: '#0d9488', letterSpacing: '0.12em' }}>MASTER</span>
           <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>Master</h2>
           <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
-            한 단계 위 시야·원칙·메모를 적어 두세요. (이 기기 브라우저에만 저장)
+            한 단계 위 시야·원칙·메모를 적어 두세요. (Supabase app_kv 동기화)
           </p>
           <textarea
             value={masterText}
@@ -10139,6 +10213,8 @@ export default function App() {
   type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
 
+  useEffect(() => subscribeAppSyncStatus(setSyncStatus), [])
+
   // 타이머 상태 (App 레벨 — 모달↔젠모드 전환 중에도 계속 실행됨)
   const [timerTotal, setTimerTotal] = useState(25 * 60)
   const [timerSec, setTimerSec] = useState(25 * 60)
@@ -10150,6 +10226,8 @@ export default function App() {
   const [levelRewards, setLevelRewards] = useState<{ id: string; target_level: number; reward_text: string; is_claimed: boolean }[]>([])
   const [newRewardLevel, setNewRewardLevel] = useState('')
   const [newRewardText, setNewRewardText] = useState('')
+  /** Quest 탭: Area·프로젝트 관리 패널 접기 (기본 접힘 → 퀘스트가 첫 화면 중심) */
+  const [questAreaProjectExpanded, setQuestAreaProjectExpanded] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerSecRef = useRef(timerSec)
   const isOvertimeRef = useRef(false)
@@ -10178,7 +10256,7 @@ export default function App() {
   //    worlds / saju / calendar / travel / gourmet → app_kv (KV 스토어)
   useEffect(() => {
     if (!isSupabaseReady) return
-    setSyncStatus('syncing')
+    emitAppSyncStatus('syncing')
 
     Promise.all([
       // ① user_stats 테이블에서 레벨·경험치·스탯 가져오기
@@ -10255,10 +10333,12 @@ export default function App() {
       // ⑤-d 레벨 보상함 로드
       fetchLevelRewards().then(rows => setLevelRewards(rows)),
 
-      // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet) → app_kv
-      kvGetAll().then(all => {
+      // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet · Goals·Manifest·Value·…) → app_kv
+      kvGetAll().then(async all => {
         const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, FRAGMENT_KEY]
         passThrough.forEach(k => { if (all[k] !== undefined && all[k] !== null) localStorage.setItem(k, JSON.stringify(all[k])) })
+        hydrateLocalStorageFromKvRecord(all)
+        await migrateLocalToKvIfMissing(all)
       }),
 
       // ⑥ CalStore → calendar_events 1회 마이그레이션
@@ -10275,16 +10355,16 @@ export default function App() {
         localStorage.setItem('cal_store_migrated_v1', '1')
       })(),
     ])
-      .then(() => { setSyncStatus('synced'); setTimeout(() => setSyncStatus('idle'), 3000) })
-      .catch(() => { setSyncStatus('error'); setTimeout(() => setSyncStatus('idle'), 5000) })
+      .then(() => { emitAppSyncStatus('synced'); scheduleSyncIdle(3000) })
+      .catch(() => { emitAppSyncStatus('error'); scheduleSyncIdle(5000) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Supabase 실시간 구독 (다른 기기 변경 → 자동 반영) ──
   useEffect(() => {
     const channel = subscribeKv((key, value) => {
-      setSyncStatus('synced')
-      setTimeout(() => setSyncStatus('idle'), 2000)
+      emitAppSyncStatus('synced')
+      scheduleSyncIdle(2000)
       if (key === STATS_KEY) {
         localStorage.setItem(key, JSON.stringify(value))
         setStats(loadStats())
@@ -10883,6 +10963,27 @@ export default function App() {
   const today = navNow.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
   const todayISOWeek = getISOWeekNumber(navNow)
 
+  const [seoulWx, setSeoulWx] = useState<{ temp: number; emoji: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      fetchSeoulWeatherNow()
+        .then(w => {
+          if (cancelled || !w) return
+          setSeoulWx({ temp: w.tempC, emoji: wmoCodeToEmoji(w.code) })
+        })
+        .catch(() => {
+          if (!cancelled) setSeoulWx(null)
+        })
+    }
+    tick()
+    const id = window.setInterval(tick, 15 * 60 * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
   // ── Auth 게이트 ──
   if (session === 'loading') {
     return (
@@ -11050,89 +11151,84 @@ export default function App() {
 
         {/* ════════════════ NAV ════════════════ */}
         <nav style={{ backgroundColor: '#FFFFFF', borderBottom: '1px solid rgba(0,0,0,0.06)', position: 'sticky', top: 0, zIndex: 100, display: isMobile ? 'none' : undefined }}>
-          <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '0 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '48px', gap: '12px' }}>
+          <div style={{ maxWidth: '1600px', margin: '0 auto', padding: '0 12px 0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '52px', gap: '8px' }}>
 
-            {/* 좌측: 브랜딩 + 날짜(양력) / 주차+만세력 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <IcoPen />
-                </div>
-                <div>
-                  <p style={{ margin: 0, fontWeight: 800, fontSize: '12px', color: '#37352F', lineHeight: 1 }}>창작 OS</p>
-                  <p style={{ margin: 0, fontSize: '9px', color: '#9B9A97', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session?.user?.email ?? ''}>
-                    {session?.user?.email ?? ''}
-                  </p>
-                </div>
+            {/* 좌측: 브랜딩+메일만 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, minWidth: 0 }}>
+              <div style={{ width: '26px', height: '26px', borderRadius: '8px', background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <IcoPen />
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '2px', minWidth: 0 }}>
-                <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap' }}>{today}</p>
-                <span
-                  style={{
-                    fontSize: '10px',
-                    color: '#787774',
-                    fontWeight: 500,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    textAlign: 'right',
-                    display: 'block',
-                  }}
-                  title="ISO 주차 · 만세력(월·일 기둥)"
-                >
-                  {todayISOWeek}주차 {formatTodayGanzhiLine(navNow)}
-                </span>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: 0, fontWeight: 800, fontSize: '12px', color: '#37352F', lineHeight: 1.2 }}>창작 OS</p>
+                <p style={{ margin: '3px 0 0', fontSize: '9px', color: '#9B9A97', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={session?.user?.email ?? ''}>
+                  {session?.user?.email ?? ''}
+                </p>
               </div>
             </div>
 
-            {/* 중앙: GNB */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flex: 1, justifyContent: 'center', flexWrap: 'wrap', minWidth: 0 }}>
-              {([
-                { id: 'life' as const, label: 'Life', emoji: '📅' },
-                { id: 'goals' as const, label: 'Goals', emoji: '🎯' },
-                { id: 'evolution' as const, label: 'Evol', emoji: '🧬' },
-                { id: 'fortune' as const, label: 'Fortu', emoji: '🔮' },
-                { id: 'manifestation' as const, label: 'Manif', emoji: '✨' },
-                { id: 'act' as const, label: 'Act', emoji: '🎭' },
-                { id: 'master-board' as const, label: 'Board', emoji: '📋' },
-                { id: 'levelup' as const, label: 'Level', emoji: '⬆️' },
-                { id: 'project' as const, label: 'Project', emoji: '📁' },
-                { id: 'value' as const, label: 'Value', emoji: '💎' },
-                { id: 'quest' as const, label: 'Quest', emoji: '⚡' },
-                { id: 'review' as const, label: 'Review', emoji: '📓' },
-                { id: 'quantum' as const, label: 'Quant', emoji: '✦' },
-                { id: 'network' as const, label: 'Network', emoji: '🌐' },
-                { id: 'account' as const, label: 'Account', emoji: '💰' },
-                { id: 'travel' as const, label: 'Travel', emoji: '✈️' },
-                { id: 'fragment' as const, label: 'Note', emoji: '◇' },
-              ]).map(p => (
-                <Link key={p.id} to={p.id === 'quest' ? '/' : `/${p.id}`} style={{
-                  display: 'flex', alignItems: 'center', gap: '4px',
-                  padding: '5px 8px', borderRadius: '8px', cursor: 'pointer', border: 'none',
-                  fontSize: '11px', fontWeight: activePage === p.id ? 700 : 500,
-                  color: activePage === p.id ? '#4F46E5' : '#787774',
-                  backgroundColor: activePage === p.id ? 'rgba(99,102,241,0.1)' : 'transparent',
-                  transition: 'all 0.15s', textDecoration: 'none',
-                }}>
-                  <span style={{ fontSize: '12px' }}>{p.emoji}</span>
-                  {p.label}
-                </Link>
-              ))}
+            {/* 중앙: GNB — Board~Note 단일 행(스크롤 없음, 링크는 가용 폭에 맞춰 균등 분배) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                flex: 1,
+                minWidth: 0,
+                flexWrap: 'nowrap',
+                gap: 0,
+                overflow: 'hidden',
+              }}
+            >
+              {GNB_ROW_ITEMS.map((item, idx) => {
+                if (item.kind === 'sep') {
+                  return (
+                    <span
+                      key={`gnb-sep-${idx}`}
+                      aria-hidden
+                      style={{
+                        width: '1px',
+                        height: '18px',
+                        backgroundColor: 'rgba(0,0,0,0.08)',
+                        flexShrink: 0,
+                        margin: '0 2px',
+                      }}
+                    />
+                  )
+                }
+                const to = item.to ?? `/${item.id}`
+                return (
+                  <Link
+                    key={item.id}
+                    to={to}
+                    title={item.label}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      padding: '6px 4px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      border: 'none',
+                      fontSize: '11px',
+                      fontWeight: activePage === item.id ? 700 : 500,
+                      color: activePage === item.id ? '#4F46E5' : '#787774',
+                      backgroundColor: activePage === item.id ? 'rgba(99,102,241,0.1)' : 'transparent',
+                      transition: 'all 0.15s',
+                      textDecoration: 'none',
+                      flex: '1 1 0',
+                      minWidth: 0,
+                      maxWidth: '100%',
+                    }}
+                  >
+                    <span style={{ fontSize: '13px', lineHeight: 1, flexShrink: 0 }}>{item.emoji}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+                  </Link>
+                )
+              })}
             </div>
 
-            {/* 우측: 동기화 · 젠모드 · 로그아웃 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-              {isSupabaseReady && syncStatus !== 'idle' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
-                  <span style={{ fontSize: '9px', fontWeight: 700, color: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399' }}>
-                    {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'synced' ? 'Synced ✓' : 'Sync Error'}
-                  </span>
-                </div>
-              )}
-              {isSupabaseReady && syncStatus === 'idle' && (
-                <div title="Supabase 연결됨" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399', boxShadow: '0 0 6px rgba(52,211,153,0.6)', flexShrink: 0 }} />
-              )}
+            {/* 우측: 젠모드 · 날짜·날씨·만세력 · 동기화(로그아웃 옆) · 로그아웃 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
               {timerRunning && (
                 <button type="button" onClick={() => setIsZenMode(true)} style={{
                   display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700,
@@ -11142,6 +11238,90 @@ export default function App() {
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#6366f1', display: 'inline-block' }} />
                   집중 중 · 젠모드 복귀
                 </button>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-end',
+                  gap: '2px',
+                  minWidth: 0,
+                  maxWidth: '320px',
+                  marginLeft: '12px',
+                }}
+              >
+                <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap', textAlign: 'right' }}>{today}</p>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    width: '100%',
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '10px',
+                      color: '#787774',
+                      fontWeight: 500,
+                      flexShrink: 0,
+                    }}
+                    title={seoulWx ? `실시간 기온 · 서울 (Open-Meteo)` : '날씨 불러오는 중'}
+                  >
+                    {seoulWx ? (
+                      <>
+                        <span aria-hidden style={{ fontSize: '9px', lineHeight: 1 }}>{seoulWx.emoji}</span>
+                        <span style={{ fontWeight: 700, color: '#5c6b8a' }}>{seoulWx.temp}°</span>
+                      </>
+                    ) : (
+                      <span style={{ opacity: 0.45 }}>날씨 …</span>
+                    )}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      color: '#787774',
+                      fontWeight: 500,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      textAlign: 'right',
+                      minWidth: 0,
+                    }}
+                    title="ISO 주차 · 만세력(월·일 기둥)"
+                  >
+                    {todayISOWeek}주차 {formatTodayGanzhiLine(navNow)}
+                  </span>
+                </div>
+              </div>
+              <span
+                aria-hidden
+                style={{
+                  width: '1px',
+                  height: '32px',
+                  alignSelf: 'center',
+                  backgroundColor: 'rgba(0,0,0,0.06)',
+                  flexShrink: 0,
+                  marginLeft: '8px',
+                  marginRight: '0',
+                }}
+              />
+              {isSupabaseReady && syncStatus !== 'idle' && (
+                <div
+                  title={syncStatus === 'syncing' ? '저장 중' : syncStatus === 'synced' ? '저장 완료' : '동기화 오류'}
+                  style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}
+                >
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none', boxShadow: syncStatus === 'synced' ? '0 0 6px rgba(52,211,153,0.5)' : undefined }} />
+                  <span style={{ fontSize: '9px', fontWeight: 700, color: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#16a34a' }}>
+                    {syncStatus === 'syncing' ? '저장 중…' : syncStatus === 'synced' ? '저장 완료' : '오류 · 재시도'}
+                  </span>
+                </div>
               )}
               <button
                 type="button"
@@ -11154,6 +11334,31 @@ export default function App() {
             </div>
           </div>
         </nav>
+
+        {isSupabaseReady && syncStatus !== 'idle' && (
+          <div
+            aria-live="polite"
+            style={{
+              position: 'fixed',
+              bottom: isMobile ? 84 : 20,
+              right: 16,
+              zIndex: 9998,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 12px',
+              borderRadius: 12,
+              backgroundColor: '#fff',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
+              border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.35)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.4)' : 'rgba(52,211,153,0.35)'}`,
+            }}
+          >
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
+            <span style={{ fontSize: '11px', fontWeight: 700, color: syncStatus === 'error' ? '#b91c1c' : syncStatus === 'syncing' ? '#b45309' : '#15803d' }}>
+              {syncStatus === 'syncing' ? '저장 중…' : syncStatus === 'synced' ? '저장 완료' : '동기화 오류'}
+            </span>
+          </div>
+        )}
 
         {/* ════════════════ MOBILE BOTTOM NAV ════════════════ */}
         {isMobile && <MobileBottomNav active={activePage} />}
@@ -11179,6 +11384,9 @@ export default function App() {
               onRefresh={() => fetchIdentities().then(rows => setIdentities(rows))}
               onRefreshActive={() => fetchActiveIdentity().then(id => setActiveIdentityId(id))}
               onToast={fireToast}
+              onOptimisticIdentityPatch={(id, name, role_model) => {
+                setIdentities(prev => prev.map(r => r.id === id ? { ...r, name, role_model } : r))
+              }}
             />
           )}
           {activePage === 'master-board' && (() => {
@@ -11200,6 +11408,7 @@ export default function App() {
               />
             )
           })()}
+          {activePage === 'manual' && <ManualPage />}
           {activePage === 'levelup' && (() => {
             const lv = calculateLevel(xpState.totalXp)
             return (
@@ -11278,8 +11487,192 @@ export default function App() {
               <div style={{ display: 'flex', gap: isMobile ? 0 : 20, alignItems: 'flex-start', width: '100%' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
 
-            {activePage === 'quest' && (
             <>
+            {/* Area · Real Projects — 접기 (기본 접힘, 퀘스트가 첫 화면 중심) */}
+            <div style={{
+              backgroundColor: '#FFFFFF',
+              border: '1px solid rgba(0,0,0,0.06)',
+              borderRadius: '16px',
+              marginBottom: '16px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              overflow: 'hidden',
+            }}>
+              <button
+                type="button"
+                onClick={() => setQuestAreaProjectExpanded(v => !v)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  padding: '14px 18px',
+                  border: 'none',
+                  background: questAreaProjectExpanded ? 'rgba(99,102,241,0.05)' : '#FFFFFF',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 700, color: '#37352F', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span>🌐</span> Area · <span>📁</span> Real Projects
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#9B9A97' }}>
+                    ({areas.length}개 영역 · {projects.length}개 프로젝트)
+                  </span>
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#6366f1', fontWeight: 700, flexShrink: 0 }}>
+                  {questAreaProjectExpanded ? '접기' : '펼치기'}
+                  {questAreaProjectExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                </span>
+              </button>
+              {questAreaProjectExpanded && (
+                <div style={{ padding: '0 18px 18px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', paddingTop: '16px' }}>
+                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                        <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
+                          <span style={{ marginRight: '6px' }}>🌐</span>Area
+                        </h2>
+                        <span style={{ fontSize: '10px', color: '#9B9A97' }}>{areas.length}개</span>
+                      </div>
+                      {areas.length === 0 ? (
+                        <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 Vision Area 없음</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
+                          {areas.map(a => (
+                            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)' }}>
+                              {editingAreaId === a.id ? (
+                                <>
+                                  <input autoFocus value={editingAreaName}
+                                    onChange={e => setEditingAreaName(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') commitEditArea(a.id); if (e.key === 'Escape') setEditingAreaId(null) }}
+                                    onBlur={() => commitEditArea(a.id)}
+                                    style={{ flex: 1, backgroundColor: '#FFFFFF', border: '1px solid #6366f1', borderRadius: '6px', padding: '3px 6px', fontSize: '12px', color: '#37352F', outline: 'none' }}
+                                  />
+                                  <button onClick={() => setEditingAreaId(null)} style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '10px', cursor: 'pointer' }}>취소</button>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <span
+                                      onClick={() => setNoteTarget({ table: 'areas', id: a.id, title: a.name, meta: { timeSpentSec: a.time_spent_sec } })}
+                                      style={{ fontSize: '12px', color: '#37352F', fontWeight: 500, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(0,0,0,0.15)' }}
+                                      title="클릭하여 노트 열기"
+                                    >{a.name}</span>
+                                    {fmtHM(a.time_spent_sec) && (
+                                      <span style={{ fontSize: '10px', color: '#0369A1', fontWeight: 600 }}>⏱ {fmtHM(a.time_spent_sec)}</span>
+                                    )}
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                    <button onClick={() => moveAreaUp(a.id)} disabled={areas.indexOf(a) === 0} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: areas.indexOf(a) === 0 ? 'default' : 'pointer', opacity: areas.indexOf(a) === 0 ? 0.4 : 1 }} title="위로"><ChevronUp size={14} /></button>
+                                    <button onClick={() => moveAreaDown(a.id)} disabled={areas.indexOf(a) === areas.length - 1} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: areas.indexOf(a) === areas.length - 1 ? 'default' : 'pointer', opacity: areas.indexOf(a) === areas.length - 1 ? 0.4 : 1 }} title="아래로"><ChevronDown size={14} /></button>
+                                  </div>
+                                  <button onClick={() => { setEditingAreaId(a.id); setEditingAreaName(a.name) }}
+                                    style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#787774', fontSize: '10px', cursor: 'pointer' }} title="수정">✏️</button>
+                                  <button onClick={() => removeArea(a.id)}
+                                    style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(248,113,113,0.2)', backgroundColor: 'transparent', color: '#f87171', fontSize: '10px', cursor: 'pointer' }}
+                                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.1)')}
+                                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                                    title="삭제">삭제</button>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <input value={newAreaName} onChange={e => setNewAreaName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') addArea() }}
+                          placeholder="새 Vision Area 이름"
+                          style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: '#37352F', fontSize: '12px', outline: 'none' }}
+                          onFocus={e => (e.target.style.borderColor = '#0369A1')}
+                          onBlur={e => (e.target.style.borderColor = 'rgba(0,0,0,0.06)')}
+                        />
+                        <button onClick={addArea} disabled={!newAreaName.trim()}
+                          style={{ padding: '7px 12px', borderRadius: '7px', border: 'none', backgroundColor: newAreaName.trim() ? '#0369A1' : '#EBEBEA', color: newAreaName.trim() ? '#fff' : '#787774', fontSize: '12px', fontWeight: 700, cursor: newAreaName.trim() ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                        >+</button>
+                      </div>
+                    </div>
+                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                        <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
+                          <span style={{ marginRight: '6px' }}>📁</span>Real Projects
+                        </h2>
+                        <span style={{ fontSize: '10px', color: '#9B9A97' }}>{projects.length}개</span>
+                      </div>
+                      {projects.length === 0 ? (
+                        <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 프로젝트 없음</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
+                          {projects.map(p => {
+                            const parentArea = p.area_id ? areas.find(a => a.id === p.area_id) : null
+                            return (
+                              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)' }}>
+                                {editingProjectId === p.id ? (
+                                  <>
+                                    <input autoFocus value={editingProjectName}
+                                      onChange={e => setEditingProjectName(e.target.value)}
+                                      onKeyDown={e => { if (e.key === 'Enter') commitEditProject(p.id); if (e.key === 'Escape') setEditingProjectId(null) }}
+                                      onBlur={() => commitEditProject(p.id)}
+                                      style={{ flex: 1, backgroundColor: '#FFFFFF', border: '1px solid #6366f1', borderRadius: '6px', padding: '3px 6px', fontSize: '12px', color: '#37352F', outline: 'none' }}
+                                    />
+                                    <button onClick={() => setEditingProjectId(null)} style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '10px', cursor: 'pointer' }}>취소</button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <span
+                                        onClick={() => setNoteTarget({ table: 'projects', id: p.id, title: p.name, meta: { timeSpentSec: p.time_spent_sec, areaName: areas.find(a => String(a.id) === String(p.area_id))?.name } })}
+                                        style={{ fontSize: '12px', color: '#37352F', fontWeight: 500, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(0,0,0,0.15)' }}
+                                        title="클릭하여 노트 열기"
+                                      >{p.name}</span>
+                                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '1px' }}>
+                                        {parentArea && <span style={{ fontSize: '9px', color: '#0369A1', backgroundColor: '#E0F2FE', padding: '1px 5px', borderRadius: '999px' }}>{parentArea.name}</span>}
+                                        {fmtHM(p.time_spent_sec) && <span style={{ fontSize: '9px', color: '#6366f1', fontWeight: 600 }}>⏱ {fmtHM(p.time_spent_sec)}</span>}
+                                      </div>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                      <button onClick={() => moveProjectUp(p.id)} disabled={projects.indexOf(p) === 0} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: projects.indexOf(p) === 0 ? 'default' : 'pointer', opacity: projects.indexOf(p) === 0 ? 0.4 : 1 }} title="위로"><ChevronUp size={14} /></button>
+                                      <button onClick={() => moveProjectDown(p.id)} disabled={projects.indexOf(p) === projects.length - 1} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: projects.indexOf(p) === projects.length - 1 ? 'default' : 'pointer', opacity: projects.indexOf(p) === projects.length - 1 ? 0.4 : 1 }} title="아래로"><ChevronDown size={14} /></button>
+                                    </div>
+                                    <button onClick={() => { setEditingProjectId(p.id); setEditingProjectName(p.name) }}
+                                      style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#787774', fontSize: '10px', cursor: 'pointer' }} title="수정">✏️</button>
+                                    <button onClick={() => removeProject(p.id)}
+                                      style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(248,113,113,0.2)', backgroundColor: 'transparent', color: '#f87171', fontSize: '10px', cursor: 'pointer' }}
+                                      onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.1)')}
+                                      onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                                      title="삭제">삭제</button>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <select value={newProjectAreaId} onChange={e => setNewProjectAreaId(e.target.value)}
+                          style={{ padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: newProjectAreaId ? '#37352F' : '#9B9A97', fontSize: '12px', outline: 'none' }}>
+                          <option value="">{areas.length === 0 ? 'Vision Area를 먼저 생성해주세요' : 'Vision Area 선택 (필수)'}</option>
+                          {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        </select>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <input value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') addProject() }}
+                            placeholder="새 프로젝트 이름"
+                            style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: '#37352F', fontSize: '12px', outline: 'none' }}
+                            onFocus={e => (e.target.style.borderColor = '#6366f1')}
+                            onBlur={e => (e.target.style.borderColor = 'rgba(0,0,0,0.06)')}
+                          />
+                          <button onClick={addProject} disabled={!newProjectName.trim() || !newProjectAreaId}
+                            style={{ padding: '7px 12px', borderRadius: '7px', border: 'none', backgroundColor: (newProjectName.trim() && newProjectAreaId) ? '#6366f1' : '#EBEBEA', color: (newProjectName.trim() && newProjectAreaId) ? '#fff' : '#787774', fontSize: '12px', fontWeight: 700, cursor: (newProjectName.trim() && newProjectAreaId) ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                          >+</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* ── 현재 태세 (우디르) ── */}
             <div style={{
               backgroundColor: '#FFFFFF',
@@ -11317,115 +11710,114 @@ export default function App() {
               )}
             </div>
 
-            {/* ── 일일 경험치 대시보드 (Daily XP Bar) ── */}
+            {/* ── 오늘의 핵심 퀘스트 (메인) ── */}
             <div style={{
               backgroundColor: '#FFFFFF',
-              border: '1px solid rgba(0,0,0,0.06)',
-              borderRadius: '16px',
-              padding: '20px 24px',
-              marginBottom: '20px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              border: '2px solid rgba(99,102,241,0.38)',
+              borderRadius: '18px',
+              padding: isMobile ? '18px 14px' : '28px 32px',
+              marginBottom: '24px',
+              boxShadow: '0 8px 36px rgba(99,102,241,0.14), 0 1px 3px rgba(0,0,0,0.06)',
             }}>
-              <p style={{ margin: '0 0 12px', fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                오늘의 몰입 레벨
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: '200px' }}>
-                  <div style={{
-                    height: '12px',
-                    borderRadius: '999px',
-                    backgroundColor: '#EBEBEA',
-                    overflow: 'hidden',
-                  }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${Math.min(100, ((dailyLog?.total_pomodoros ?? 0) / 10) * 100)}%`,
-                      borderRadius: '999px',
-                      background: 'linear-gradient(90deg, #818cf8 0%, #6366f1 50%, #4f46e5 100%)',
-                      transition: 'width 0.5s ease',
-                    }} />
-                  </div>
-                  <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#9B9A97' }}>
-                    목표 10개 중 {(dailyLog?.total_pomodoros ?? 0)}개 완료
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <p style={{ margin: '0 0 4px', fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.12em', textTransform: 'uppercase' }}>오늘의 핵심</p>
+                  <h2 style={{ margin: 0, fontSize: isMobile ? '22px' : '26px', fontWeight: 800, color: '#37352F', lineHeight: 1.15 }}>
+                    퀘스트
+                  </h2>
+                  <p style={{ margin: '8px 0 0', fontSize: '13px', color: '#787774', maxWidth: '520px' }}>
+                    이 화면의 중심입니다. 목록을 채우고 하나씩 완료해 나가세요.
                   </p>
                 </div>
-                <div style={{ display: 'flex', gap: '20px', flexShrink: 0, alignItems: 'flex-start' }}>
-                  <div>
-                    <p style={{ margin: 0, fontSize: '10px', color: '#9B9A97', marginBottom: '6px' }}>포모도로 도장</p>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      {(dailyLog?.total_pomodoros ?? 0) > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                          {Array.from({ length: dailyLog!.total_pomodoros }, (_, i) => (
-                            <span key={i} style={{ width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }} title="완료한 몰입 세션">
-                              <Timer size={18} strokeWidth={2.5} />
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4', fontStyle: 'italic' }}>오늘의 첫 몰입 도장을 찍어보세요!</p>
-                      )}
-                      <span style={{ display: 'flex', gap: '2px', marginLeft: '4px' }}>
-                        <button
-                          onClick={async () => {
-                            const today = new Date().toISOString().split('T')[0]
-                            const cur = dailyLog?.total_pomodoros ?? 0
-                            if (cur <= 0) return
-                            setDailyLog(prev => prev ? { ...prev, total_pomodoros: Math.max(0, cur - 1) } : { total_pomodoros: 0, total_time_sec: 0 })
-                            const res = await updateDailyLogPomodoros(today, -1)
-                            if (res) setDailyLog(prev => prev ? { ...prev, total_pomodoros: res.total_pomodoros, total_time_sec: res.total_time_sec } : null)
-                          }}
-                          style={{
-                            width: '24px', height: '24px', padding: 0, borderRadius: '6px',
-                            border: '1px solid rgba(0,0,0,0.1)', background: '#FFFFFF',
-                            color: (dailyLog?.total_pomodoros ?? 0) <= 0 ? '#AEAAA4' : '#6366f1',
-                            fontSize: '12px', fontWeight: 700, cursor: (dailyLog?.total_pomodoros ?? 0) <= 0 ? 'default' : 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}
-                          disabled={(dailyLog?.total_pomodoros ?? 0) <= 0}
-                        >−</button>
-                        <button
-                          onClick={async () => {
-                            const today = new Date().toISOString().split('T')[0]
-                            const cur = dailyLog?.total_pomodoros ?? 0
-                            setDailyLog(prev => prev ? { ...prev, total_pomodoros: cur + 1 } : { total_pomodoros: 1, total_time_sec: 0 })
-                            const res = await updateDailyLogPomodoros(today, 1)
-                            if (res) setDailyLog(prev => prev ? { ...prev, total_pomodoros: res.total_pomodoros, total_time_sec: res.total_time_sec } : null)
-                          }}
-                          style={{
-                            width: '24px', height: '24px', padding: 0, borderRadius: '6px',
-                            border: '1px solid rgba(0,0,0,0.1)', background: '#FFFFFF',
-                            color: '#6366f1', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}
-                        >+</button>
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#7C3AED', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                      <EditableTimeMinutes
-                        totalSec={dailyLog?.total_time_sec ?? 0}
-                        displayOverride={dailyLog ? fmtDailyTime(dailyLog.total_time_sec) : '0분'}
-                        onSave={async sec => {
-                          const today = new Date().toISOString().split('T')[0]
-                          const res = await setDailyLogTime(today, sec)
-                          const pom = res?.total_pomodoros ?? dailyLog?.total_pomodoros ?? 0
-                          setDailyLog(prev => prev ? { ...prev, total_time_sec: sec } : { total_pomodoros: pom, total_time_sec: sec })
-                          syncTimeScoreToXp(today)
-                        }}
-                      />
-                    </p>
-                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#9B9A97' }}>누적 집중 (분 단위 수정)</p>
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {selectedQuests.length > 0 && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: '#7C3AED', backgroundColor: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', padding: '4px 12px', borderRadius: '999px' }}>
+                      {selectedQuests.length}개 선택
+                    </span>
+                  )}
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.25)', padding: '4px 12px', borderRadius: '999px' }}>
+                    {completedQuests.filter(id => userQuests.some(q => q.id === id)).length} / {userQuests.length} 완료
+                  </span>
                 </div>
               </div>
+              <QuestTable
+                quests={userQuests}
+                completed={completedQuests}
+                activePomodoroId={focusQuestId}
+                projects={projects}
+                areas={areas}
+                identities={identities}
+                newTitle={newQuestTitle}
+                onNewTitle={setNewQuestTitle}
+                newCat={newQuestCat}
+                onNewCat={v => setNewQuestCat(v as CatId)}
+                newQuestAreaId={newQuestAreaId}
+                onNewQuestAreaId={setNewQuestAreaId}
+                newProjectId={newQuestProjectId}
+                onNewProjectId={setNewQuestProjectId}
+                newQuestIdentityId={newQuestIdentityId}
+                onNewQuestIdentityId={setNewQuestIdentityId}
+                newQuestTags={newQuestTags}
+                onNewQuestTags={setNewQuestTags}
+                adding={addingQuest}
+                onAdd={addUserQuest}
+                onToggleComplete={toggleComplete}
+                onDelete={removeUserQuest}
+                onSelectPomodoro={handleSelectFocusQuest}
+                onOpenNote={(id, title, meta) => setNoteTarget({ table: 'quests', id, title, meta })}
+                onQuestNameUpdate={(id, newName) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: newName } : q))}
+                onQuestDeadlineUpdate={(id, deadline) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: deadline ?? undefined } : q))}
+                onQuestStatusUpdate={(id, status) => { updateQuestStatus(id, status); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, status } : q)) }}
+                onQuestTagsUpdate={(id, tags) => { updateQuestTags(id, tags); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, tags } : q)) }}
+                onMoveQuestUp={(id) => {
+                  const idx = userQuests.findIndex(q => q.id === id)
+                  if (idx <= 0) return
+                  const prev = userQuests[idx - 1]
+                  const curr = userQuests[idx]
+                  updateQuestSortOrder(prev.id, idx)
+                  updateQuestSortOrder(curr.id, idx - 1)
+                  setUserQuests(prevQ => { const n = [...prevQ]; n[idx - 1] = curr; n[idx] = prev; return n })
+                }}
+                onMoveQuestDown={(id) => {
+                  const idx = userQuests.findIndex(q => q.id === id)
+                  if (idx < 0 || idx >= userQuests.length - 1) return
+                  const curr = userQuests[idx]
+                  const nextItem = userQuests[idx + 1]
+                  updateQuestSortOrder(curr.id, idx + 1)
+                  updateQuestSortOrder(nextItem.id, idx)
+                  setUserQuests(prevQ => { const n = [...prevQ]; n[idx] = nextItem; n[idx + 1] = curr; return n })
+                }}
+                onPushQuestNameUndo={pushQuestNameUndo}
+                onPushQuestDeadlineUndo={pushQuestDeadlineUndo}
+              />
             </div>
 
-            {/* Stats — 클릭 편집 가능 */}
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)', gap: isMobile ? '10px' : '18px', marginBottom: '16px' }}>
-              {stats.map(s => (
-                <StatCard key={s.id} stat={s} onUpdate={updateStat} />
-              ))}
+            {/* Focus CTA — 퀘스트 바로 아래 */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', marginBottom: '28px' }}>
+              {selectedProjects.length === 0 && selectedQuests.length === 0 && (
+                <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4' }}>
+                  퀘스트를 선택하면 집중 세션이 활성화됩니다
+                </p>
+              )}
+              <button
+                onClick={() => { setFocusOpen(true); handleReset() }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '17px 52px', borderRadius: '16px', border: 'none',
+                  background: 'linear-gradient(135deg,#7c3aed,#4f46e5)',
+                  color: '#fff', fontSize: '15px', fontWeight: 700, letterSpacing: '0.03em', cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(99,102,241,0.2)',
+                  transition: 'transform 0.15s,box-shadow 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 14px 60px rgba(99,102,241,0.54)' }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 8px 48px rgba(99,102,241,0.38)' }}
+              >
+                <IcoFocus />
+                몰입 시작 (Focus Mode)
+              </button>
+              <p style={{ margin: 0, fontSize: '11px', color: '#AEAAA4' }}>
+                ▶ 재생 버튼 누르면 자동으로 젠 모드 진입 · ESC로 복귀
+              </p>
             </div>
 
             {/* ── 스스로에게 줄 보상함 (Level Rewards) ── */}
@@ -11520,6 +11912,111 @@ export default function App() {
               </div>
             </div>
 
+            {/* 오늘 누적 포모도로 · 누적 작업 시간 */}
+            <div style={{
+              backgroundColor: '#FFFFFF',
+              border: '1px solid rgba(0,0,0,0.06)',
+              borderRadius: '16px',
+              padding: '20px 24px',
+              marginBottom: '20px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
+              <p style={{ margin: '0 0 12px', fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                오늘 누적 포모도로 · 누적 작업 시간
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <div style={{
+                    height: '12px',
+                    borderRadius: '999px',
+                    backgroundColor: '#EBEBEA',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(100, ((dailyLog?.total_pomodoros ?? 0) / 10) * 100)}%`,
+                      borderRadius: '999px',
+                      background: 'linear-gradient(90deg, #818cf8 0%, #6366f1 50%, #4f46e5 100%)',
+                      transition: 'width 0.5s ease',
+                    }} />
+                  </div>
+                  <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#9B9A97' }}>
+                    목표 10회 중 {(dailyLog?.total_pomodoros ?? 0)}회 (포모도로)
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '20px', flexShrink: 0, alignItems: 'flex-start' }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: '10px', color: '#9B9A97', marginBottom: '6px' }}>오늘 누적 포모도로</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      {(dailyLog?.total_pomodoros ?? 0) > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                          {Array.from({ length: dailyLog!.total_pomodoros }, (_, i) => (
+                            <span key={i} style={{ width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }} title="완료한 몰입 세션">
+                              <Timer size={18} strokeWidth={2.5} />
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4', fontStyle: 'italic' }}>오늘의 첫 몰입 도장을 찍어보세요!</p>
+                      )}
+                      <span style={{ display: 'flex', gap: '2px', marginLeft: '4px' }}>
+                        <button
+                          onClick={async () => {
+                            const today = new Date().toISOString().split('T')[0]
+                            const cur = dailyLog?.total_pomodoros ?? 0
+                            if (cur <= 0) return
+                            setDailyLog(prev => prev ? { ...prev, total_pomodoros: Math.max(0, cur - 1) } : { total_pomodoros: 0, total_time_sec: 0 })
+                            const res = await updateDailyLogPomodoros(today, -1)
+                            if (res) setDailyLog(prev => prev ? { ...prev, total_pomodoros: res.total_pomodoros, total_time_sec: res.total_time_sec } : null)
+                          }}
+                          style={{
+                            width: '24px', height: '24px', padding: 0, borderRadius: '6px',
+                            border: '1px solid rgba(0,0,0,0.1)', background: '#FFFFFF',
+                            color: (dailyLog?.total_pomodoros ?? 0) <= 0 ? '#AEAAA4' : '#6366f1',
+                            fontSize: '12px', fontWeight: 700, cursor: (dailyLog?.total_pomodoros ?? 0) <= 0 ? 'default' : 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                          disabled={(dailyLog?.total_pomodoros ?? 0) <= 0}
+                        >−</button>
+                        <button
+                          onClick={async () => {
+                            const today = new Date().toISOString().split('T')[0]
+                            const cur = dailyLog?.total_pomodoros ?? 0
+                            setDailyLog(prev => prev ? { ...prev, total_pomodoros: cur + 1 } : { total_pomodoros: 1, total_time_sec: 0 })
+                            const res = await updateDailyLogPomodoros(today, 1)
+                            if (res) setDailyLog(prev => prev ? { ...prev, total_pomodoros: res.total_pomodoros, total_time_sec: res.total_time_sec } : null)
+                          }}
+                          style={{
+                            width: '24px', height: '24px', padding: 0, borderRadius: '6px',
+                            border: '1px solid rgba(0,0,0,0.1)', background: '#FFFFFF',
+                            color: '#6366f1', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >+</button>
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <p style={{ margin: 0, fontSize: '10px', color: '#9B9A97', marginBottom: '6px' }}>누적 작업 시간</p>
+                    <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#7C3AED', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      <EditableTimeMinutes
+                        totalSec={dailyLog?.total_time_sec ?? 0}
+                        displayOverride={dailyLog ? fmtDailyTime(dailyLog.total_time_sec) : '0분'}
+                        onSave={async sec => {
+                          const today = new Date().toISOString().split('T')[0]
+                          const res = await setDailyLogTime(today, sec)
+                          const pom = res?.total_pomodoros ?? dailyLog?.total_pomodoros ?? 0
+                          setDailyLog(prev => prev ? { ...prev, total_time_sec: sec } : { total_pomodoros: pom, total_time_sec: sec })
+                          syncTimeScoreToXp(today)
+                        }}
+                      />
+                    </p>
+                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#9B9A97' }}>분 단위로 수정 (집중·작업 누적)</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* XP 게이지 바 */}
             <XpBar
               currentLevelXp={calculateLevel(xpState.totalXp).currentLevelXp}
@@ -11530,282 +12027,7 @@ export default function App() {
               onEditCurrentLevelXp={handleEditCurrentLevelXp}
               onEditTotalXp={handleEditTotalXp}
             />
-
-            {/* 갑술(甲戌) 오늘의 기운 */}
-            <div style={{
-              backgroundColor: '#F1F1EF', border: '1px solid rgba(251,191,36,0.18)',
-              borderRadius: '16px', padding: '16px 22px', marginBottom: '28px',
-              display: 'flex', alignItems: 'flex-start', gap: '14px',
-            }}>
-              <span style={{ fontSize: '22px', flexShrink: 0, marginTop: '1px' }}>🌲</span>
-              <div>
-                <p style={{ margin: 0, fontSize: '10px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '5px' }}>
-                  갑술(甲戌) · 산 위의 나무 — 오늘의 기운
-                </p>
-                <p style={{ margin: 0, fontSize: '13px', color: '#fde68a', lineHeight: 1.7, fontStyle: 'italic' }}>
-                  "{DAILY_FORTUNE}"
-                </p>
-              </div>
-            </div>
             </>
-            )}
-
-            {/* 2~3열 그리드: Area + 프로젝트 + 퀘스트 (Quest 탭) — 상세 프로젝트 허브는 Project 메뉴 */}
-            <div style={{ display: 'grid', gridTemplateColumns: (isMobile ? '1fr' : '1fr 1fr 2fr'), gap: '16px', marginBottom: '20px' }}>
-
-              {/* ── Area 관리 섹션 ── */}
-              <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                  <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
-                    <span style={{ marginRight: '6px' }}>🌐</span>Area
-                  </h2>
-                  <span style={{ fontSize: '10px', color: '#9B9A97' }}>{areas.length}개</span>
-                </div>
-
-                {areas.length === 0 ? (
-                  <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 Vision Area 없음</p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
-                    {areas.map(a => (
-                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)' }}>
-                        {editingAreaId === a.id ? (
-                          <>
-                            <input autoFocus value={editingAreaName}
-                              onChange={e => setEditingAreaName(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') commitEditArea(a.id); if (e.key === 'Escape') setEditingAreaId(null) }}
-                              onBlur={() => commitEditArea(a.id)}
-                              style={{ flex: 1, backgroundColor: '#FFFFFF', border: '1px solid #6366f1', borderRadius: '6px', padding: '3px 6px', fontSize: '12px', color: '#37352F', outline: 'none' }}
-                            />
-                            <button onClick={() => setEditingAreaId(null)} style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '10px', cursor: 'pointer' }}>취소</button>
-                          </>
-                        ) : (
-                          <>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <span
-                                onClick={() => setNoteTarget({ table: 'areas', id: a.id, title: a.name, meta: { timeSpentSec: a.time_spent_sec } })}
-                                style={{ fontSize: '12px', color: '#37352F', fontWeight: 500, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(0,0,0,0.15)' }}
-                                title="클릭하여 노트 열기"
-                              >{a.name}</span>
-                              {fmtHM(a.time_spent_sec) && (
-                                <span style={{ fontSize: '10px', color: '#0369A1', fontWeight: 600 }}>⏱ {fmtHM(a.time_spent_sec)}</span>
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                              <button onClick={() => moveAreaUp(a.id)} disabled={areas.indexOf(a) === 0} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: areas.indexOf(a) === 0 ? 'default' : 'pointer', opacity: areas.indexOf(a) === 0 ? 0.4 : 1 }} title="위로"><ChevronUp size={14} /></button>
-                              <button onClick={() => moveAreaDown(a.id)} disabled={areas.indexOf(a) === areas.length - 1} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: areas.indexOf(a) === areas.length - 1 ? 'default' : 'pointer', opacity: areas.indexOf(a) === areas.length - 1 ? 0.4 : 1 }} title="아래로"><ChevronDown size={14} /></button>
-                            </div>
-                            <button onClick={() => { setEditingAreaId(a.id); setEditingAreaName(a.name) }}
-                              style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#787774', fontSize: '10px', cursor: 'pointer' }} title="수정">✏️</button>
-                            <button onClick={() => removeArea(a.id)}
-                              style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(248,113,113,0.2)', backgroundColor: 'transparent', color: '#f87171', fontSize: '10px', cursor: 'pointer' }}
-                              onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.1)')}
-                              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-                              title="삭제">삭제</button>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <input value={newAreaName} onChange={e => setNewAreaName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') addArea() }}
-                    placeholder="새 Vision Area 이름"
-                    style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: '#37352F', fontSize: '12px', outline: 'none' }}
-                    onFocus={e => (e.target.style.borderColor = '#0369A1')}
-                    onBlur={e => (e.target.style.borderColor = 'rgba(0,0,0,0.06)')}
-                  />
-                  <button onClick={addArea} disabled={!newAreaName.trim()}
-                    style={{ padding: '7px 12px', borderRadius: '7px', border: 'none', backgroundColor: newAreaName.trim() ? '#0369A1' : '#EBEBEA', color: newAreaName.trim() ? '#fff' : '#787774', fontSize: '12px', fontWeight: 700, cursor: newAreaName.trim() ? 'pointer' : 'default', transition: 'background 0.15s' }}
-                  >+</button>
-                </div>
-              </div>
-
-              {/* ── 프로젝트 관리 섹션 ── */}
-              <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                  <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
-                    <span style={{ marginRight: '6px' }}>📁</span>Real Projects
-                  </h2>
-                  <span style={{ fontSize: '10px', color: '#9B9A97' }}>{projects.length}개</span>
-                </div>
-
-                {projects.length === 0 ? (
-                  <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 프로젝트 없음</p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
-                    {projects.map(p => {
-                      const parentArea = p.area_id ? areas.find(a => a.id === p.area_id) : null
-                      return (
-                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)' }}>
-                          {editingProjectId === p.id ? (
-                            <>
-                              <input autoFocus value={editingProjectName}
-                                onChange={e => setEditingProjectName(e.target.value)}
-                                onKeyDown={e => { if (e.key === 'Enter') commitEditProject(p.id); if (e.key === 'Escape') setEditingProjectId(null) }}
-                                onBlur={() => commitEditProject(p.id)}
-                                style={{ flex: 1, backgroundColor: '#FFFFFF', border: '1px solid #6366f1', borderRadius: '6px', padding: '3px 6px', fontSize: '12px', color: '#37352F', outline: 'none' }}
-                              />
-                              <button onClick={() => setEditingProjectId(null)} style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '10px', cursor: 'pointer' }}>취소</button>
-                            </>
-                          ) : (
-                            <>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <span
-                                  onClick={() => setNoteTarget({ table: 'projects', id: p.id, title: p.name, meta: { timeSpentSec: p.time_spent_sec, areaName: areas.find(a => String(a.id) === String(p.area_id))?.name } })}
-                                  style={{ fontSize: '12px', color: '#37352F', fontWeight: 500, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(0,0,0,0.15)' }}
-                                  title="클릭하여 노트 열기"
-                                >{p.name}</span>
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '1px' }}>
-                                  {parentArea && <span style={{ fontSize: '9px', color: '#0369A1', backgroundColor: '#E0F2FE', padding: '1px 5px', borderRadius: '999px' }}>{parentArea.name}</span>}
-                                  {fmtHM(p.time_spent_sec) && <span style={{ fontSize: '9px', color: '#6366f1', fontWeight: 600 }}>⏱ {fmtHM(p.time_spent_sec)}</span>}
-                                </div>
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                <button onClick={() => moveProjectUp(p.id)} disabled={projects.indexOf(p) === 0} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: projects.indexOf(p) === 0 ? 'default' : 'pointer', opacity: projects.indexOf(p) === 0 ? 0.4 : 1 }} title="위로"><ChevronUp size={14} /></button>
-                                <button onClick={() => moveProjectDown(p.id)} disabled={projects.indexOf(p) === projects.length - 1} style={{ padding: '2px 4px', border: 'none', backgroundColor: 'transparent', color: '#9B9A97', cursor: projects.indexOf(p) === projects.length - 1 ? 'default' : 'pointer', opacity: projects.indexOf(p) === projects.length - 1 ? 0.4 : 1 }} title="아래로"><ChevronDown size={14} /></button>
-                              </div>
-                              <button onClick={() => { setEditingProjectId(p.id); setEditingProjectName(p.name) }}
-                                style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#787774', fontSize: '10px', cursor: 'pointer' }} title="수정">✏️</button>
-                              <button onClick={() => removeProject(p.id)}
-                                style={{ padding: '2px 6px', borderRadius: '5px', border: '1px solid rgba(248,113,113,0.2)', backgroundColor: 'transparent', color: '#f87171', fontSize: '10px', cursor: 'pointer' }}
-                                onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.1)')}
-                                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-                                title="삭제">삭제</button>
-                            </>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* 새 프로젝트 추가 */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <select value={newProjectAreaId} onChange={e => setNewProjectAreaId(e.target.value)}
-                    style={{ padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: newProjectAreaId ? '#37352F' : '#9B9A97', fontSize: '12px', outline: 'none' }}>
-                    <option value="">{areas.length === 0 ? 'Vision Area를 먼저 생성해주세요' : 'Vision Area 선택 (필수)'}</option>
-                    {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <input value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') addProject() }}
-                      placeholder="새 프로젝트 이름"
-                      style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: '#37352F', fontSize: '12px', outline: 'none' }}
-                      onFocus={e => (e.target.style.borderColor = '#6366f1')}
-                      onBlur={e => (e.target.style.borderColor = 'rgba(0,0,0,0.06)')}
-                    />
-                    <button onClick={addProject} disabled={!newProjectName.trim() || !newProjectAreaId}
-                      style={{ padding: '7px 12px', borderRadius: '7px', border: 'none', backgroundColor: (newProjectName.trim() && newProjectAreaId) ? '#6366f1' : '#EBEBEA', color: (newProjectName.trim() && newProjectAreaId) ? '#fff' : '#787774', fontSize: '12px', fontWeight: 700, cursor: (newProjectName.trim() && newProjectAreaId) ? 'pointer' : 'default', transition: 'background 0.15s' }}
-                    >+</button>
-                  </div>
-                </div>
-              </div>
-
-              {activePage === 'quest' && (
-              <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '30px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#37352F' }}>
-                    <span style={{ color: '#6366f1', marginRight: '8px' }}>2.</span>오늘의 핵심 퀘스트
-                  </h2>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {selectedQuests.length > 0 && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, color: '#7C3AED', backgroundColor: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', padding: '3px 10px', borderRadius: '999px' }}>
-                        {selectedQuests.length}개 선택
-                      </span>
-                    )}
-                    <span style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', backgroundColor: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', padding: '3px 10px', borderRadius: '999px' }}>
-                      {completedQuests.filter(id => userQuests.some(q => q.id === id)).length} / {userQuests.length} 완료
-                    </span>
-                  </div>
-                </div>
-
-                {/* QuestTable — Supabase 데이터만 표시 */}
-                <QuestTable
-                  quests={userQuests}
-                  completed={completedQuests}
-                  activePomodoroId={focusQuestId}
-                  projects={projects}
-                  areas={areas}
-                  identities={identities}
-                  newTitle={newQuestTitle}
-                  onNewTitle={setNewQuestTitle}
-                  newCat={newQuestCat}
-                  onNewCat={v => setNewQuestCat(v as CatId)}
-                  newQuestAreaId={newQuestAreaId}
-                  onNewQuestAreaId={setNewQuestAreaId}
-                  newProjectId={newQuestProjectId}
-                  onNewProjectId={setNewQuestProjectId}
-                  newQuestIdentityId={newQuestIdentityId}
-                  onNewQuestIdentityId={setNewQuestIdentityId}
-                  newQuestTags={newQuestTags}
-                  onNewQuestTags={setNewQuestTags}
-                  adding={addingQuest}
-                  onAdd={addUserQuest}
-                  onToggleComplete={toggleComplete}
-                  onDelete={removeUserQuest}
-                  onSelectPomodoro={handleSelectFocusQuest}
-                  onOpenNote={(id, title, meta) => setNoteTarget({ table: 'quests', id, title, meta })}
-                  onQuestNameUpdate={(id, newName) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, name: newName } : q))}
-                  onQuestDeadlineUpdate={(id, deadline) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: deadline ?? undefined } : q))}
-                  onQuestStatusUpdate={(id, status) => { updateQuestStatus(id, status); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, status } : q)) }}
-                  onQuestTagsUpdate={(id, tags) => { updateQuestTags(id, tags); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, tags } : q)) }}
-                  onMoveQuestUp={(id) => {
-                    const idx = userQuests.findIndex(q => q.id === id)
-                    if (idx <= 0) return
-                    const prev = userQuests[idx - 1]
-                    const curr = userQuests[idx]
-                    updateQuestSortOrder(prev.id, idx)
-                    updateQuestSortOrder(curr.id, idx - 1)
-                    setUserQuests(prevQ => { const n = [...prevQ]; n[idx - 1] = curr; n[idx] = prev; return n })
-                  }}
-                  onMoveQuestDown={(id) => {
-                    const idx = userQuests.findIndex(q => q.id === id)
-                    if (idx < 0 || idx >= userQuests.length - 1) return
-                    const curr = userQuests[idx]
-                    const nextItem = userQuests[idx + 1]
-                    updateQuestSortOrder(curr.id, idx + 1)
-                    updateQuestSortOrder(nextItem.id, idx)
-                    setUserQuests(prevQ => { const n = [...prevQ]; n[idx] = nextItem; n[idx + 1] = curr; return n })
-                  }}
-                  onPushQuestNameUndo={pushQuestNameUndo}
-                  onPushQuestDeadlineUndo={pushQuestDeadlineUndo}
-                />
-              </div>
-              )}
-
-            </div>
-
-            {/* Focus CTA — Quest 전용 */}
-            {activePage === 'quest' && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', paddingBottom: '48px' }}>
-              {selectedProjects.length === 0 && selectedQuests.length === 0 && (
-                <p style={{ margin: 0, fontSize: '12px', color: '#AEAAA4' }}>
-                  ↑ 프로젝트와 퀘스트를 선택하면 집중 세션이 활성화됩니다
-                </p>
-              )}
-              <button
-                onClick={() => { setFocusOpen(true); handleReset() }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  padding: '17px 52px', borderRadius: '16px', border: 'none',
-                  background: 'linear-gradient(135deg,#7c3aed,#4f46e5)',
-                  color: '#fff', fontSize: '15px', fontWeight: 700, letterSpacing: '0.03em', cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(99,102,241,0.2)',
-                  transition: 'transform 0.15s,box-shadow 0.15s',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 14px 60px rgba(99,102,241,0.54)' }}
-                onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 8px 48px rgba(99,102,241,0.38)' }}
-              >
-                <IcoFocus />
-                몰입 시작 (Focus Mode)
-              </button>
-              <p style={{ margin: 0, fontSize: '11px', color: '#AEAAA4' }}>
-                ▶ 재생 버튼 누르면 자동으로 젠 모드 진입 · ESC로 복귀
-              </p>
-            </div>
-            )}
 
                 </div>
                 {!isMobile && (
