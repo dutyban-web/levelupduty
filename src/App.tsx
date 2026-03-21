@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { kvSet, kvGet, kvGetAll, isSupabaseReady, subscribeKv } from './lib/supabase'
-import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle } from './syncIndicatorBus'
+import { kvSet, kvSetAttempt, kvGet, kvGetAll, kvListTrashedKeys, isSupabaseReady, subscribeKv } from './lib/supabase'
+import { TrashPage } from './TrashPage'
+import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from './syncIndicatorBus'
 import { hydrateLocalStorageFromKvRecord, migrateLocalToKvIfMissing, ACT_ROLE_REF_KEY, ACT_MASTER_KEY } from './kvSyncedKeys'
 import {
   supabase as _sbClient,
@@ -98,8 +99,9 @@ type PageId =
   | 'account'
   | 'travel'
   | 'fragment'
+  | 'trash'
 
-const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
+const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment', 'trash']
 
 /** 데스크톱 상단 GNB — 한 줄·한 묶음 (Board부터 Note까지 순서 고정, sep = 구분선) */
 type GnbRowItem =
@@ -132,6 +134,8 @@ const GNB_ROW_ITEMS: GnbRowItem[] = [
   { kind: 'link', id: 'account', label: 'Acc', emoji: '💰' },
   { kind: 'link', id: 'travel', label: 'Trav', emoji: '✈️' },
   { kind: 'link', id: 'fragment', label: 'Note', emoji: '◇' },
+  { kind: 'sep' },
+  { kind: 'link', id: 'trash', label: 'Trash', emoji: '🗑️' },
   { kind: 'sep' },
 ]
 
@@ -649,6 +653,7 @@ function MobileBottomNav({ active }: { active: PageId }) {
     { id: 'account', emoji: '💰', label: 'Acc' },
     { id: 'travel', emoji: '✈️', label: 'Trav' },
     { id: 'fragment', emoji: '◇', label: 'Note' },
+    { id: 'trash', emoji: '🗑️', label: 'Trash' },
   ]
   return (
     <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 500, display: 'flex', overflowX: 'auto', WebkitOverflowScrolling: 'touch', backgroundColor: 'rgba(255,255,255,0.95)', borderTop: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
@@ -1893,7 +1898,7 @@ function persistStats(stats: StatDef[]) {
 }
 
 // ── LoginView — 시네마틱 / 미니멀 (설명·브랜딩 문구 없음) ─────────────────────
-const LOGIN_BG_URL = 'https://images.unsplash.com/photo-1559827260-dc66d52bef19?auto=format&fit=crop&w=1920&q=80'
+const LOGIN_BG_URL = '/login-bg-surf.png'
 
 function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
   const [email, setEmail] = useState('')
@@ -4200,16 +4205,14 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
           setNotes(prev => prev.map(n => n.id === tempId ? created : n))
           refreshJournal()
           emitAppSyncStatus('synced')
-          scheduleSyncIdle(2000)
+          scheduleSyncIdle(SYNC_IDLE_MS)
         } else {
           setNotes(prev => prev.filter(n => n.id !== tempId))
           emitAppSyncStatus('error')
-          scheduleSyncIdle(5000)
         }
       } catch {
         setNotes(prev => prev.filter(n => n.id !== tempId))
         emitAppSyncStatus('error')
-        scheduleSyncIdle(5000)
       }
     } else {
       const prevSnap = notes.find(n => n.id === editorNoteId)
@@ -4221,11 +4224,10 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
         await updateJournalEvent(editorNoteId, fields)
         refreshJournal()
         emitAppSyncStatus('synced')
-        scheduleSyncIdle(2000)
+        scheduleSyncIdle(SYNC_IDLE_MS)
       } catch {
         if (prevSnap) setNotes(prev => prev.map(n => n.id === editorNoteId ? prevSnap : n))
         emitAppSyncStatus('error')
-        scheduleSyncIdle(5000)
       }
     }
   }
@@ -4871,11 +4873,10 @@ function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActi
     const ok = await updateIdentity(id, name, rm)
     if (ok) {
       emitAppSyncStatus('synced')
-      scheduleSyncIdle(2000)
+      scheduleSyncIdle(SYNC_IDLE_MS)
     } else {
       onRefresh()
       emitAppSyncStatus('error')
-      scheduleSyncIdle(5000)
     }
   }
 
@@ -8752,7 +8753,7 @@ function TripDocumentsSection({
 }
 
 // ── TravelPage ────────────────────────────────────────────────────────────────
-function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' | 'synced' | 'error'; onToast?: (msg: string) => void }) {
+function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
@@ -8770,11 +8771,14 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
     if (isSupabaseReady) fetchTravelEvents().then(setTripsBase)
   }, [])
   useEffect(() => {
-    if (syncStatus === 'synced' && prevSyncRef.current !== 'synced') {
-      fetchTravelEvents().then(setTripsBase)
-    }
-    prevSyncRef.current = syncStatus ?? ''
-  }, [syncStatus])
+    const unsub = subscribeAppSyncStatus(s => {
+      if (s === 'synced' && prevSyncRef.current !== 'synced') {
+        fetchTravelEvents().then(setTripsBase)
+      }
+      prevSyncRef.current = s
+    })
+    return unsub
+  }, [])
   const [addTripOpen, setAddTripOpen] = useState(false)
   const coverInputRef = useRef<HTMLInputElement>(null)
   const [coverUploading, setCoverUploading] = useState(false)
@@ -10112,6 +10116,8 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
   )
 }
 
+const FORCE_RECOVER_HIDE_KEY = 'creative_os_force_recover_ui_hidden_v1'
+
 // ═══════════════════════════════════════ APP ═════════════════════════════════
 export default function App() {
   // ── Auth ──
@@ -10205,15 +10211,29 @@ export default function App() {
   const [toastVisible, setToastVisible] = useState(false)
   const [toastMsg, setToastMsg] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [kvRecovering, setKvRecovering] = useState(false)
+  const kvRecoveringRef = useRef(false)
+  const [forceRecoverHidden, setForceRecoverHidden] = useState(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return localStorage.getItem(FORCE_RECOVER_HIDE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
 
   // ── Undo/Redo ──
   const { pushUndo } = useUndoRedo()
 
-  // ── Supabase 동기화 상태 ──
-  type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle')
+  // ── Supabase 동기화: 평소 UI 없음, 실패 시에만 코너에 1회성 고정 알림 ──
+  const [syncError, setSyncError] = useState<string | null>(null)
 
-  useEffect(() => subscribeAppSyncStatus(setSyncStatus), [])
+  useEffect(() => subscribeAppSyncStatus(s => {
+    if (s === 'synced') setSyncError(null)
+    if (s === 'error') {
+      setSyncError(prev => prev ?? '동기화에 실패했습니다. 네트워크와 로그인 상태를 확인해 주세요.')
+    }
+  }), [])
 
   // 타이머 상태 (App 레벨 — 모달↔젠모드 전환 중에도 계속 실행됨)
   const [timerTotal, setTimerTotal] = useState(25 * 60)
@@ -10335,6 +10355,10 @@ export default function App() {
 
       // ⑤ 나머지 데이터(worlds · saju · calendar · travel · gourmet · Goals·Manifest·Value·…) → app_kv
       kvGetAll().then(async all => {
+        const trashed = await kvListTrashedKeys()
+        for (const k of trashed) {
+          try { localStorage.removeItem(k) } catch { /* ignore */ }
+        }
         const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, FRAGMENT_KEY]
         passThrough.forEach(k => { if (all[k] !== undefined && all[k] !== null) localStorage.setItem(k, JSON.stringify(all[k])) })
         hydrateLocalStorageFromKvRecord(all)
@@ -10355,16 +10379,26 @@ export default function App() {
         localStorage.setItem('cal_store_migrated_v1', '1')
       })(),
     ])
-      .then(() => { emitAppSyncStatus('synced'); scheduleSyncIdle(3000) })
-      .catch(() => { emitAppSyncStatus('error'); scheduleSyncIdle(5000) })
+      .then(() => { emitAppSyncStatus('synced'); scheduleSyncIdle(SYNC_IDLE_MS) })
+      .catch(() => { emitAppSyncStatus('error') })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Supabase 실시간 구독 (다른 기기 변경 → 자동 반영) ──
   useEffect(() => {
-    const channel = subscribeKv((key, value) => {
+    const channel = subscribeKv((key, value, meta) => {
+      if (meta?.permanentlyRemoved || meta?.softDeleted) {
+        try { localStorage.removeItem(key) } catch { /* ignore */ }
+        if (key === STATS_KEY) setStats(loadStats())
+        else if (key === COMPLETED_KEY) setCompletedQuests([])
+        else if (key === XP_KEY) setXpState(loadXp())
+        emitAppSyncStatus('synced')
+        scheduleSyncIdle(SYNC_IDLE_MS)
+        return
+      }
       emitAppSyncStatus('synced')
-      scheduleSyncIdle(2000)
+      scheduleSyncIdle(SYNC_IDLE_MS)
+      if (value === undefined || value === null) return
       if (key === STATS_KEY) {
         localStorage.setItem(key, JSON.stringify(value))
         setStats(loadStats())
@@ -10435,6 +10469,91 @@ export default function App() {
     setToastMsg(msg); setToastVisible(true)
     toastTimer.current = setTimeout(() => setToastVisible(false), 2200)
   }
+
+  /** 임시: localStorage의 creative_os_* · creative-os-* 전부 app_kv로 일괄 업로드 */
+  const handleForceRecoverLocalToKv = useCallback(async () => {
+    if (!isSupabaseReady) {
+      alert('Supabase에 연결되지 않았습니다.')
+      return
+    }
+    if (kvRecoveringRef.current) return
+    kvRecoveringRef.current = true
+    setKvRecovering(true)
+    const parseValueForKv = (raw: string): unknown => {
+      try {
+        return JSON.parse(raw)
+      } catch {
+        return { text: raw }
+      }
+    }
+    try {
+      const keys: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && (k.startsWith('creative_os_') || k.startsWith('creative-os-'))) keys.push(k)
+      }
+      keys.sort()
+      if (keys.length === 0) {
+        alert('localStorage에 creative_os_* · creative-os-* 키가 없습니다.')
+        return
+      }
+
+      type Row = { key: string; raw: string }
+      const toUpload: Row[] = []
+      for (const key of keys) {
+        if (key === FORCE_RECOVER_HIDE_KEY) continue
+        const raw = localStorage.getItem(key)
+        if (raw != null && raw !== '') toUpload.push({ key, raw })
+      }
+      if (toUpload.length === 0) {
+        alert('업로드할 값이 있는 키가 없습니다. (값이 비어 있습니다)')
+        return
+      }
+
+      const results = await Promise.all(
+        toUpload.map(async ({ key, raw }) => {
+          const value = parseValueForKv(raw)
+          const r = await kvSetAttempt(key, value)
+          return { key, r }
+        }),
+      )
+
+      let ok = 0
+      let fail = 0
+      for (const { key, r } of results) {
+        if (r.ok) ok += 1
+        else {
+          fail += 1
+          console.error('[forceRecover] kv upload failed', key, r.error)
+        }
+      }
+
+      const total = toUpload.length
+      const summary = `총 ${total}개 중 ${ok}개 성공, ${fail}개 실패`
+
+      if (fail > 0) {
+        emitAppSyncStatus('error')
+        alert(`${summary}\n\n실패한 항목은 개발자 도구 콘솔에 상세 로그가 있습니다.`)
+        return
+      }
+
+      try {
+        localStorage.setItem(FORCE_RECOVER_HIDE_KEY, '1')
+      } catch {
+        /* ignore */
+      }
+      setForceRecoverHidden(true)
+      alert(`${summary}\n\n확인을 누르면 새로고침되어 DB 데이터를 불러옵니다.`)
+      window.location.reload()
+    } catch (e) {
+      console.error('[forceRecover] unexpected', e)
+      emitAppSyncStatus('error')
+      alert('업로드 처리 중 예외가 발생했습니다. 콘솔을 확인하세요.')
+    } finally {
+      kvRecoveringRef.current = false
+      setKvRecovering(false)
+    }
+  }, [isSupabaseReady])
 
   // ── 시간 점수 → total_xp 동기화 (Delta만 가산) ──
   async function syncTimeScoreToXp(recordDate: string) {
@@ -11312,16 +11431,27 @@ export default function App() {
                   marginRight: '0',
                 }}
               />
-              {isSupabaseReady && syncStatus !== 'idle' && (
-                <div
-                  title={syncStatus === 'syncing' ? '저장 중' : syncStatus === 'synced' ? '저장 완료' : '동기화 오류'}
-                  style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '999px', backgroundColor: syncStatus === 'error' ? 'rgba(239,68,68,0.1)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.1)' : 'rgba(52,211,153,0.1)', border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.3)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.3)' : 'rgba(52,211,153,0.3)'}` }}
+              {isSupabaseReady && !forceRecoverHidden && (
+                <button
+                  type="button"
+                  onClick={() => void handleForceRecoverLocalToKv()}
+                  disabled={kvRecovering}
+                  title="localStorage의 creative_os_* · creative-os-* 키를 Supabase app_kv로 일괄 업로드 (임시)"
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '8px',
+                    border: '1px solid #b91c1c',
+                    backgroundColor: '#dc2626',
+                    color: '#fff',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                    cursor: kvRecovering ? 'wait' : 'pointer',
+                    flexShrink: 0,
+                    opacity: kvRecovering ? 0.88 : 1,
+                  }}
                 >
-                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none', boxShadow: syncStatus === 'synced' ? '0 0 6px rgba(52,211,153,0.5)' : undefined }} />
-                  <span style={{ fontSize: '9px', fontWeight: 700, color: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#16a34a' }}>
-                    {syncStatus === 'syncing' ? '저장 중…' : syncStatus === 'synced' ? '저장 완료' : '오류 · 재시도'}
-                  </span>
-                </div>
+                  {kvRecovering ? '업로드 중…' : '데이터 강제 복구'}
+                </button>
               )}
               <button
                 type="button"
@@ -11335,32 +11465,91 @@ export default function App() {
           </div>
         </nav>
 
-        {isSupabaseReady && syncStatus !== 'idle' && (
+        {isSupabaseReady && syncError != null && (
           <div
-            aria-live="polite"
+            role="alert"
+            aria-live="assertive"
             style={{
               position: 'fixed',
               bottom: isMobile ? 84 : 20,
               right: 16,
-              zIndex: 9998,
+              zIndex: 9999,
+              maxWidth: Math.min(360, typeof window !== 'undefined' ? window.innerWidth - 32 : 360),
               display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 12px',
-              borderRadius: 12,
+              alignItems: 'flex-start',
+              gap: '8px',
+              padding: '10px 12px',
+              borderRadius: 10,
               backgroundColor: '#fff',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
-              border: `1px solid ${syncStatus === 'error' ? 'rgba(239,68,68,0.35)' : syncStatus === 'syncing' ? 'rgba(251,191,36,0.4)' : 'rgba(52,211,153,0.35)'}`,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+              border: '1px solid rgba(239,68,68,0.35)',
             }}
           >
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#34d399', display: 'inline-block', animation: syncStatus === 'syncing' ? 'spin 1s linear infinite' : 'none' }} />
-            <span style={{ fontSize: '11px', fontWeight: 700, color: syncStatus === 'error' ? '#b91c1c' : syncStatus === 'syncing' ? '#b45309' : '#15803d' }}>
-              {syncStatus === 'syncing' ? '저장 중…' : syncStatus === 'synced' ? '저장 완료' : '동기화 오류'}
+            <span
+              aria-hidden
+              style={{
+                width: '8px',
+                height: '8px',
+                marginTop: '4px',
+                flexShrink: 0,
+                borderRadius: '50%',
+                backgroundColor: '#ef4444',
+                boxShadow: '0 0 0 2px rgba(239,68,68,0.25)',
+              }}
+            />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#991b1b', lineHeight: 1.45 }}>
+              {syncError}
             </span>
+            <button
+              type="button"
+              aria-label="동기화 오류 알림 닫기"
+              onClick={() => setSyncError(null)}
+              style={{
+                flexShrink: 0,
+                margin: '-4px -4px -4px 0',
+                padding: '4px 8px',
+                border: 'none',
+                borderRadius: 6,
+                background: 'transparent',
+                color: '#9B9A97',
+                fontSize: '16px',
+                lineHeight: 1,
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
 
         {/* ════════════════ MOBILE BOTTOM NAV ════════════════ */}
+        {isMobile && isSupabaseReady && !forceRecoverHidden && (
+          <button
+            type="button"
+            onClick={() => void handleForceRecoverLocalToKv()}
+            disabled={kvRecovering}
+            title="creative_os_* · creative-os-* → app_kv 일괄 업로드 (임시)"
+            style={{
+              position: 'fixed',
+              top: 10,
+              right: 10,
+              zIndex: 120,
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1px solid #b91c1c',
+              backgroundColor: '#dc2626',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 800,
+              cursor: kvRecovering ? 'wait' : 'pointer',
+              boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+              opacity: kvRecovering ? 0.88 : 1,
+            }}
+          >
+            {kvRecovering ? '업로드 중…' : '데이터 강제 복구'}
+          </button>
+        )}
+
         {isMobile && <MobileBottomNav active={activePage} />}
 
         {/* ════════════════ BODY ════════════════ */}
@@ -11426,7 +11615,8 @@ export default function App() {
           })()}
           {activePage === 'account' && <AccountLedgerPage />}
           {activePage === 'fragment' && <FragmentPage />}
-          {activePage === 'travel' && <TravelPage syncStatus={syncStatus} onToast={fireToast} />}
+          {activePage === 'trash' && <TrashPage />}
+          {activePage === 'travel' && <TravelPage onToast={fireToast} />}
           {activePage === 'project' && (
             <ProjectHubPage
               areas={areas}

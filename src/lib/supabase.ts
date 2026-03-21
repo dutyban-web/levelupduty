@@ -2,43 +2,29 @@
  * ┌─────────────────────────────────────────────────────────────────────┐
  *  창작 OS — Supabase 연결 설정
  * ├─────────────────────────────────────────────────────────────────────┤
- *  📋 초기 설정 방법:
- *
- *  1. https://app.supabase.com 에서 새 프로젝트 생성
- *  2. 프로젝트 > Settings > API 에서 복사:
- *       - Project URL  → VITE_SUPABASE_URL
- *       - anon public  → VITE_SUPABASE_ANON_KEY
- *  3. 프로젝트 루트의 .env.local 파일에 위 값 입력 (이미 파일 생성됨)
- *
- *  4. Supabase Dashboard > SQL Editor — app_kv (PK: user_id, key):
- * ─────────────────────────────────────────────────────────────────────
- *  CREATE TABLE IF NOT EXISTS app_kv (
- *    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
- *    key        TEXT        NOT NULL,
- *    value      JSONB       NOT NULL,
- *    synced_at  TIMESTAMPTZ DEFAULT NOW(),
- *    PRIMARY KEY (user_id, key)
- *  );
- *
- *  ALTER TABLE app_kv DISABLE ROW LEVEL SECURITY;
- *
- *  -- 실시간 동기화 활성화
- *  ALTER PUBLICATION supabase_realtime ADD TABLE app_kv;
- * ─────────────────────────────────────────────────────────────────────
- *  5. npm run dev 재시작 후 앱 새로고침
+ *  app_kv 행: value(JSONB), is_deleted(BOOLEAN DEFAULT false)
+ *  · 활성 데이터: is_deleted IS DISTINCT FROM true (false 또는 null)
+ *  · 휴지통: is_deleted = true (복구 시 false, 영구 삭제 시 DELETE)
  * └─────────────────────────────────────────────────────────────────────┘
  */
 
 import { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../supabase'
-import { emitAppSyncStatus, scheduleSyncIdle } from '../syncIndicatorBus'
+import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from '../syncIndicatorBus'
 
 export { supabase }
 export const isSupabaseReady = Boolean(supabase)
 
+export type KvSyncMeta = {
+  /** DB에서 행이 DELETE 됨 (영구 삭제) */
+  permanentlyRemoved?: boolean
+  /** is_deleted 가 true 로 마킹됨 (소프트 삭제) */
+  softDeleted?: boolean
+}
+
 // ── Key-Value 유틸 ─────────────────────────────────────────────────────────────
 
-/** Supabase에서 키 하나의 값을 읽어온다. 연결 없거나 비로그인이면 null 반환 */
+/** Supabase에서 키 하나의 값을 읽어온다. 휴지통 행은 null. */
 export async function kvGet<T>(key: string): Promise<T | null> {
   if (!supabase) return null
   try {
@@ -46,46 +32,63 @@ export async function kvGet<T>(key: string): Promise<T | null> {
     if (!user?.id) return null
     const { data, error } = await supabase
       .from('app_kv')
-      .select('value')
+      .select('value, is_deleted')
       .eq('user_id', user.id)
       .eq('key', key)
       .maybeSingle()
     if (error || !data) return null
+    if (data.is_deleted === true) return null
     return data.value as T
   } catch { return null }
+}
+
+/** 실제 upsert — 항상 is_deleted: false (활성 데이터) */
+async function upsertAppKvRow<T>(key: string, value: T): Promise<void> {
+  if (!supabase) throw new Error('Supabase client not configured')
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user?.id) throw new Error('Not signed in (cannot sync app_kv)')
+  emitAppSyncStatus('syncing')
+  const { error } = await supabase
+    .from('app_kv')
+    .upsert({
+      user_id: user.id,
+      key,
+      value,
+      synced_at: new Date().toISOString(),
+      is_deleted: false,
+    })
+  if (error) throw error
+  emitAppSyncStatus('synced')
+  scheduleSyncIdle(SYNC_IDLE_MS)
 }
 
 /** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 (PK: user_id, key) */
 export async function kvSet<T>(key: string, value: T): Promise<void> {
   if (!supabase) return
   try {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user?.id) return
-    emitAppSyncStatus('syncing')
-    const { error } = await supabase
-      .from('app_kv')
-      .upsert({ user_id: user.id, key, value, synced_at: new Date().toISOString() })
-    if (error) throw error
-    emitAppSyncStatus('synced')
-    scheduleSyncIdle(2000)
+    await upsertAppKvRow(key, value)
   } catch (error) {
-    console.warn('[Supabase] kvSet error:', error)
-    const forJson =
-      error && typeof error === 'object'
-        ? {
-            message: 'message' in error ? String((error as { message: unknown }).message) : undefined,
-            code: 'code' in error ? String((error as { code: unknown }).code) : undefined,
-            details: 'details' in error ? String((error as { details: unknown }).details) : undefined,
-            hint: 'hint' in error ? String((error as { hint: unknown }).hint) : undefined,
-          }
-        : { error: String(error) }
-    alert('동기화 에러: ' + JSON.stringify({ key, ...forJson }))
+    console.warn('[Supabase] kvSet error:', error, { key })
     emitAppSyncStatus('error')
-    scheduleSyncIdle(5000)
   }
 }
 
-/** 모든 KV 데이터를 한 번에 가져온다 (초기 마운트 sync용, 현재 로그인 사용자 행만) */
+/**
+ * upsert 결과를 반환한다 (에러를 삼키지 않음). 일괄 복구 등에서 성공/실패 집계용.
+ */
+export async function kvSetAttempt<T>(
+  key: string,
+  value: T,
+): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  try {
+    await upsertAppKvRow(key, value)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error }
+  }
+}
+
+/** 활성 KV만 (휴지통 제외) */
 export async function kvGetAll(): Promise<Record<string, unknown>> {
   if (!supabase) return {}
   try {
@@ -93,16 +96,192 @@ export async function kvGetAll(): Promise<Record<string, unknown>> {
     if (!user?.id) return {}
     const { data, error } = await supabase
       .from('app_kv')
-      .select('key, value')
+      .select('key, value, is_deleted')
       .eq('user_id', user.id)
     if (error || !data) return {}
-    return Object.fromEntries(data.map(row => [row.key, row.value]))
+    const active = data.filter(r => r.is_deleted !== true)
+    return Object.fromEntries(active.map(row => [row.key, row.value]))
   } catch { return {} }
 }
 
-/** 실시간 변경 구독 (다른 기기에서 업데이트 시 자동 반영) */
+/** 휴지통에 있는 키 목록 (마이그레이션 시 로컬 덮어쓰기 방지용) */
+export async function kvListTrashedKeys(): Promise<string[]> {
+  if (!supabase) return []
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return []
+    const { data, error } = await supabase
+      .from('app_kv')
+      .select('key')
+      .eq('user_id', user.id)
+      .eq('is_deleted', true)
+    if (error || !data) return []
+    return data.map(r => r.key)
+  } catch { return [] }
+}
+
+export type KvTrashRow = { key: string; value: unknown; synced_at: string | null }
+
+/** 휴지통 행 목록 */
+export async function kvGetTrash(): Promise<KvTrashRow[]> {
+  if (!supabase) return []
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return []
+    const { data, error } = await supabase
+      .from('app_kv')
+      .select('key, value, synced_at')
+      .eq('user_id', user.id)
+      .eq('is_deleted', true)
+      .order('synced_at', { ascending: false })
+    if (error || !data) return []
+    return data.map(r => ({
+      key: r.key,
+      value: r.value,
+      synced_at: r.synced_at ?? null,
+    }))
+  } catch { return [] }
+}
+
+/**
+ * 키를 휴지통으로 보냄 (DELETE 금지). DB·로컬 캐시에서 메인 목록에 안 보이게 함.
+ */
+export async function kvSoftDelete(key: string): Promise<boolean> {
+  if (!supabase) return false
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return false
+
+    const { data: alreadyTrashed } = await supabase
+      .from('app_kv')
+      .select('key')
+      .eq('user_id', user.id)
+      .eq('key', key)
+      .eq('is_deleted', true)
+      .maybeSingle()
+    if (alreadyTrashed) return true
+
+    const { data: row } = await supabase
+      .from('app_kv')
+      .select('value, is_deleted')
+      .eq('user_id', user.id)
+      .eq('key', key)
+      .maybeSingle()
+
+    let value: unknown
+    if (row && row.is_deleted !== true && row.value !== undefined && row.value !== null) {
+      value = row.value
+    } else {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
+      if (raw == null || raw === '') return false
+      try {
+        value = JSON.parse(raw)
+      } catch {
+        value = { text: raw }
+      }
+    }
+
+    emitAppSyncStatus('syncing')
+    const { error } = await supabase
+      .from('app_kv')
+      .upsert({
+        user_id: user.id,
+        key,
+        value,
+        synced_at: new Date().toISOString(),
+        is_deleted: true,
+      })
+    if (error) throw error
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(key)
+    } catch { /* ignore */ }
+    emitAppSyncStatus('synced')
+    scheduleSyncIdle(SYNC_IDLE_MS)
+    return true
+  } catch (e) {
+    console.warn('[Supabase] kvSoftDelete error:', e, { key })
+    emitAppSyncStatus('error')
+    return false
+  }
+}
+
+/** 휴지통에서 복구 (is_deleted → false) */
+export async function kvRestore(key: string): Promise<boolean> {
+  if (!supabase) return false
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return false
+    const { data: row, error: selErr } = await supabase
+      .from('app_kv')
+      .select('value')
+      .eq('user_id', user.id)
+      .eq('key', key)
+      .eq('is_deleted', true)
+      .maybeSingle()
+    if (selErr || !row) return false
+
+    emitAppSyncStatus('syncing')
+    const { error } = await supabase
+      .from('app_kv')
+      .upsert({
+        user_id: user.id,
+        key,
+        value: row.value,
+        synced_at: new Date().toISOString(),
+        is_deleted: false,
+      })
+    if (error) throw error
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, JSON.stringify(row.value))
+      }
+    } catch { /* ignore */ }
+    emitAppSyncStatus('synced')
+    scheduleSyncIdle(SYNC_IDLE_MS)
+    return true
+  } catch (e) {
+    console.warn('[Supabase] kvRestore error:', e, { key })
+    emitAppSyncStatus('error')
+    return false
+  }
+}
+
+/** 휴지통에서 영구 삭제 (유일하게 DELETE 허용) */
+export async function kvPermanentDelete(key: string): Promise<boolean> {
+  if (!supabase) return false
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return false
+    emitAppSyncStatus('syncing')
+    const { data: delRows, error } = await supabase
+      .from('app_kv')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('key', key)
+      .eq('is_deleted', true)
+      .select('key')
+    if (error) throw error
+    if (!delRows?.length) {
+      emitAppSyncStatus('synced')
+      scheduleSyncIdle(SYNC_IDLE_MS)
+      return false
+    }
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(key)
+    } catch { /* ignore */ }
+    emitAppSyncStatus('synced')
+    scheduleSyncIdle(SYNC_IDLE_MS)
+    return true
+  } catch (e) {
+    console.warn('[Supabase] kvPermanentDelete error:', e, { key })
+    emitAppSyncStatus('error')
+    return false
+  }
+}
+
+/** 실시간 변경 구독 */
 export function subscribeKv(
-  onUpdate: (key: string, value: unknown) => void
+  onUpdate: (key: string, value: unknown | null, meta?: KvSyncMeta) => void,
 ): RealtimeChannel | null {
   if (!supabase) return null
   const channel = supabase
@@ -111,9 +290,19 @@ export function subscribeKv(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'app_kv' },
       (payload) => {
-        const row = payload.new as { key: string; value: unknown }
-        if (row?.key) onUpdate(row.key, row.value)
-      }
+        if (payload.eventType === 'DELETE') {
+          const oldRow = payload.old as { key?: string }
+          if (oldRow?.key) onUpdate(oldRow.key, null, { permanentlyRemoved: true })
+          return
+        }
+        const row = payload.new as { key: string; value: unknown; is_deleted?: boolean | null }
+        if (!row?.key) return
+        if (row.is_deleted === true) {
+          onUpdate(row.key, row.value, { softDeleted: true })
+          return
+        }
+        onUpdate(row.key, row.value)
+      },
     )
     .subscribe()
   return channel

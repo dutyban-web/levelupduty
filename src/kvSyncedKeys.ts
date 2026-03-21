@@ -1,7 +1,7 @@
 /**
  * app_kv 동기화 대상 키 목록 — 초기 하이드레이션·로컬→KV 이사용
  */
-import { kvSet, isSupabaseReady } from './lib/supabase'
+import { kvSet, isSupabaseReady, kvListTrashedKeys } from './lib/supabase'
 import { VALUE_ACTION_STORE_KEY, QUEST_VALUE_LINK_KEY } from './valueActionData'
 import { NETWORK_STORE_KEY } from './networkData'
 import { PLAYBOOK_STORE_KEY } from './humanRelationsPlaybookData'
@@ -58,7 +58,9 @@ export function hydrateLocalStorageFromKvRecord(all: Record<string, unknown>): v
  */
 export async function migrateLocalToKvIfMissing(all: Record<string, unknown>): Promise<void> {
   if (!isSupabaseReady) return
+  const trashed = new Set(await kvListTrashedKeys())
   for (const key of ALL_KV_SYNC_KEYS) {
+    if (trashed.has(key)) continue
     if (all[key] != null && all[key] !== undefined) continue
     let raw: string | null
     try {
