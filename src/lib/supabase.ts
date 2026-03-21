@@ -10,15 +10,16 @@
  *       - anon public  → VITE_SUPABASE_ANON_KEY
  *  3. 프로젝트 루트의 .env.local 파일에 위 값 입력 (이미 파일 생성됨)
  *
- *  4. Supabase Dashboard > SQL Editor 에서 아래 SQL 실행:
+ *  4. Supabase Dashboard > SQL Editor — app_kv (per-user, UNIQUE(user_id, key)):
  * ─────────────────────────────────────────────────────────────────────
  *  CREATE TABLE IF NOT EXISTS app_kv (
- *    key       TEXT        PRIMARY KEY,
- *    value     JSONB       NOT NULL,
- *    synced_at TIMESTAMPTZ DEFAULT NOW()
+ *    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+ *    key        TEXT        NOT NULL,
+ *    value      JSONB       NOT NULL,
+ *    synced_at  TIMESTAMPTZ DEFAULT NOW(),
+ *    UNIQUE (user_id, key)
  *  );
  *
- *  -- 인증 없이 바로 사용 (개인 앱이므로)
  *  ALTER TABLE app_kv DISABLE ROW LEVEL SECURITY;
  *
  *  -- 실시간 동기화 활성화
@@ -37,13 +38,16 @@ export const isSupabaseReady = Boolean(supabase)
 
 // ── Key-Value 유틸 ─────────────────────────────────────────────────────────────
 
-/** Supabase에서 키 하나의 값을 읽어온다. 연결 없으면 null 반환 */
+/** Supabase에서 키 하나의 값을 읽어온다. 연결 없거나 비로그인이면 null 반환 */
 export async function kvGet<T>(key: string): Promise<T | null> {
   if (!supabase) return null
   try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return null
     const { data, error } = await supabase
       .from('app_kv')
       .select('value')
+      .eq('user_id', user.id)
       .eq('key', key)
       .maybeSingle()
     if (error || !data) return null
@@ -51,16 +55,18 @@ export async function kvGet<T>(key: string): Promise<T | null> {
   } catch { return null }
 }
 
-/** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 */
+/** Supabase에 키-값을 upsert한다. localStorage와 병행 사용 (UNIQUE(user_id, key) 기준) */
 export async function kvSet<T>(key: string, value: T): Promise<void> {
   if (!supabase) return
-  emitAppSyncStatus('syncing')
   try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return
+    emitAppSyncStatus('syncing')
     const { error } = await supabase
       .from('app_kv')
       .upsert(
-        { key, value, synced_at: new Date().toISOString() },
-        { onConflict: 'key' }
+        { user_id: user.id, key, value, synced_at: new Date().toISOString() },
+        { onConflict: 'user_id, key' }
       )
     if (error) throw error
     emitAppSyncStatus('synced')
@@ -82,13 +88,16 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
   }
 }
 
-/** 모든 KV 데이터를 한 번에 가져온다 (초기 마운트 sync용) */
+/** 모든 KV 데이터를 한 번에 가져온다 (초기 마운트 sync용, 현재 로그인 사용자 행만) */
 export async function kvGetAll(): Promise<Record<string, unknown>> {
   if (!supabase) return {}
   try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.id) return {}
     const { data, error } = await supabase
       .from('app_kv')
       .select('key, value')
+      .eq('user_id', user.id)
     if (error || !data) return {}
     return Object.fromEntries(data.map(row => [row.key, row.value]))
   } catch { return {} }
