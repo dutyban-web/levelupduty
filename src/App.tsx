@@ -42,6 +42,8 @@ import { AccountLedgerPage } from './AccountLedgerPage'
 import { EvolutionPage } from './EvolutionPage'
 import { GoalsPage } from './GoalsPage'
 import { NetworkPage } from './NetworkPage'
+import { ValuePage } from './ValuePage'
+import { ValueReferencePanel, ValueReferenceMobileFab } from './ValueReferencePanel'
 import { loadQuantumFlowStore, QUANTUM_FLOW_KEY, canReadLetter, type QuantumLetter } from './quantumFlowData'
 import { ACCOUNT_LEDGER_KEY } from './accountLedgerData'
 import { EVOLUTION_KEY } from './evolutionData'
@@ -51,6 +53,8 @@ import { FRAGMENT_KEY } from './fragmentData'
 import { LevelupRpgPage } from './LevelupRpgPage'
 import { ProjectHubPage, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY } from './ProjectHubPage'
 import { loadStatus, recordFocusSession } from './utils/storage'
+import { appendPomodoroLog } from './pomodoroLogData'
+import { PomodoroWeeklyCalendar } from './PomodoroWeeklyCalendar'
 import { useUndoRedo } from './contexts/UndoRedoContext'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
@@ -81,6 +85,7 @@ type PageId =
   | 'master-board'
   | 'levelup'
   | 'project'
+  | 'value'
   | 'quest'
   | 'network'
   | 'review'
@@ -89,7 +94,7 @@ type PageId =
   | 'travel'
   | 'fragment'
 
-const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'levelup', 'project', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
+const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment']
 
 /** 오늘 날짜의 만세력 월·일 기둥 (예: 辛卯월 癸巳일) — lunar-javascript EightChar */
 function formatTodayGanzhiLine(d = new Date()): string {
@@ -589,16 +594,17 @@ function MobileBottomNav({ active }: { active: PageId }) {
   const ITEMS: { id: PageId; emoji: string; label: string }[] = [
     { id: 'life', emoji: '📅', label: 'Life' },
     { id: 'goals', emoji: '🎯', label: 'Goals' },
-    { id: 'evolution', emoji: '🧬', label: 'Evo' },
-    { id: 'fortune', emoji: '🔮', label: 'Fortune' },
-    { id: 'manifestation', emoji: '✨', label: 'Cause' },
+    { id: 'evolution', emoji: '🧬', label: 'Evol' },
+    { id: 'fortune', emoji: '🔮', label: 'Fortu' },
+    { id: 'manifestation', emoji: '✨', label: 'Manif' },
     { id: 'act', emoji: '🎭', label: 'Act' },
     { id: 'master-board', emoji: '📋', label: 'Board' },
-    { id: 'levelup', emoji: '⬆️', label: 'Lv' },
+    { id: 'levelup', emoji: '⬆️', label: 'Level' },
     { id: 'project', emoji: '📁', label: 'Proj' },
+    { id: 'value', emoji: '💎', label: 'Value' },
     { id: 'quest', emoji: '⚡', label: 'Quest' },
     { id: 'review', emoji: '📓', label: 'Review' },
-    { id: 'quantum', emoji: '✦', label: 'Q' },
+    { id: 'quantum', emoji: '✦', label: 'Quant' },
     { id: 'network', emoji: '🌐', label: 'Net' },
     { id: 'account', emoji: '💰', label: 'Acct' },
     { id: 'travel', emoji: '✈️', label: 'Trip' },
@@ -3483,6 +3489,7 @@ const SETTLEMENT_KIND_LABEL: Record<string, string> = {
 function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests: Card[]; refreshTrigger?: number }) {
   const isMobile = useIsMobile()
   const todayStr = toYMD(new Date())
+  const [calendarUIMode, setCalendarUIMode] = useState<'month' | 'week'>('month')
   const [viewDate, setViewDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<string | null>(todayStr)
   const [filterQuest, setFilterQuest] = useState(true)
@@ -3651,9 +3658,37 @@ function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests: Card[
         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세, 결산, 시공편지 도착일을 한눈에 확인하세요</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: '24px', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile || calendarUIMode === 'week' ? '1fr' : '1fr 280px', gap: '24px', alignItems: 'start' }}>
         {/* 캘린더 + 필터 */}
         <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#9B9A97', letterSpacing: '0.08em' }}>보기</span>
+            <button
+              type="button"
+              onClick={() => setCalendarUIMode('month')}
+              style={{
+                padding: '6px 12px', borderRadius: '8px', border: calendarUIMode === 'month' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+                background: calendarUIMode === 'month' ? 'rgba(99,102,241,0.1)' : '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: calendarUIMode === 'month' ? 700 : 500, color: calendarUIMode === 'month' ? '#4F46E5' : '#787774',
+              }}
+            >
+              월간 (통합)
+            </button>
+            <button
+              type="button"
+              onClick={() => setCalendarUIMode('week')}
+              style={{
+                padding: '6px 12px', borderRadius: '8px', border: calendarUIMode === 'week' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+                background: calendarUIMode === 'week' ? 'rgba(99,102,241,0.1)' : '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: calendarUIMode === 'week' ? 700 : 500, color: calendarUIMode === 'week' ? '#4F46E5' : '#787774',
+              }}
+            >
+              위클리 포모도로
+            </button>
+          </div>
+
+          {calendarUIMode === 'week' ? (
+            <PomodoroWeeklyCalendar userQuests={userQuests.map(q => ({ id: q.id, name: q.name }))} refreshTrigger={refreshTrigger} />
+          ) : (
+            <>
           {/* 필터 */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '20px', alignItems: 'center' }}>
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#9B9A97', letterSpacing: '0.1em' }}>표시할 항목</span>
@@ -3696,6 +3731,8 @@ function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests: Card[
                 formatShortWeekday={(_, d) => ['일', '월', '화', '수', '목', '금', '토'][d.getDay()]}
               />
             </div>
+          )}
+            </>
           )}
         </div>
 
@@ -6394,6 +6431,210 @@ function isDomesticTrip(trip: TravelTrip): boolean {
   return domesticKeywords.some(k => trip.title?.includes(k))
 }
 
+/**
+ * 카드에 표시할 국기. 예전 잘못된 기본값 🗾(일본 지도 문자)는 사용하지 않음.
+ * 저장값 없을 때: 국내면 🇰🇷, 아니면 🌍(기타).
+ */
+function resolvedCountryFlag(trip: TravelTrip): string {
+  const f = trip.countryFlag
+  if (f && f !== '🗾') return f
+  if (f === '🗾') return isDomesticTrip(trip) ? '🇰🇷' : '🌍'
+  return isDomesticTrip(trip) ? '🇰🇷' : '🌍'
+}
+
+function countryCodeForSelect(trip: TravelTrip): string {
+  const flag = resolvedCountryFlag(trip)
+  return COUNTRY_OPTIONS.find(c => c.flag === flag)?.code ?? 'ETC'
+}
+
+/** 여행 카드 제목 + 기간. vertical: 목록 카드 중단 히어로 영역(국가는 상단 셀렉트에서만 변경) */
+function TravelTripTitleRow({
+  trip,
+  onSaveTitle,
+  isEditing,
+  onCloseEdit,
+  compact,
+  variant = 'default',
+  ddayText,
+}: {
+  trip: TravelTrip
+  onSaveTitle: (title: string) => void
+  isEditing: boolean
+  onCloseEdit: () => void
+  compact?: boolean
+  variant?: 'default' | 'vertical'
+  /** vertical 전용: 기간 줄 오른쪽 끝에 D-Day 등 표시 */
+  ddayText?: string
+}) {
+  const [draft, setDraft] = useState(trip.title)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    setDraft(trip.title)
+  }, [trip.id, trip.title])
+  useEffect(() => {
+    if (isEditing) {
+      const t = window.setTimeout(() => inputRef.current?.focus(), 0)
+      return () => window.clearTimeout(t)
+    }
+  }, [isEditing])
+
+  const flag = resolvedCountryFlag(trip)
+  const fs = compact ? 16 : 20
+  const titleFs = variant === 'vertical' ? 22 : (compact ? 15 : 20)
+
+  function commit() {
+    const t = draft.trim()
+    if (t && t !== trip.title) onSaveTitle(t)
+    else setDraft(trip.title)
+    onCloseEdit()
+  }
+
+  const stopCard = (e: React.SyntheticEvent) => {
+    e.stopPropagation()
+  }
+
+  if (variant === 'vertical') {
+    return (
+      <div style={{ width: '100%', minWidth: 0, position: 'relative', zIndex: 2 }}>
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onBlur={commit}
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') {
+                setDraft(trip.title)
+                onCloseEdit()
+              }
+            }}
+            style={{
+              width: '100%',
+              minWidth: 0,
+              fontSize: titleFs,
+              fontWeight: 800,
+              color: '#37352F',
+              padding: '8px 10px',
+              borderRadius: 10,
+              border: '1px solid #6366f1',
+              outline: 'none',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+              lineHeight: 1.35,
+            }}
+          />
+        ) : (
+          <h3
+            style={{
+              margin: 0,
+              fontSize: titleFs,
+              fontWeight: 800,
+              color: '#111827',
+              width: '100%',
+              lineHeight: 1.35,
+              wordBreak: 'break-word',
+              whiteSpace: 'normal',
+            }}
+          >
+            {trip.title}
+          </h3>
+        )}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 10,
+            marginTop: 8,
+            width: '100%',
+            minWidth: 0,
+          }}
+        >
+          <span style={{ fontSize: 12, color: '#787774', fontWeight: 500, lineHeight: 1.45, minWidth: 0, flex: 1 }}>
+            {fmtTripDateRange(trip.startDate, trip.endDate)}
+          </span>
+          {ddayText != null && ddayText !== '' && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#475569', lineHeight: 1.45, flexShrink: 0, textAlign: 'right' }}>
+              {ddayText}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ width: '100%', minWidth: 0, position: 'relative', zIndex: 2 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '8px',
+          minWidth: 0,
+          width: '100%',
+        }}
+      >
+        <span style={{ fontSize: fs, lineHeight: 1.35, flexShrink: 0, paddingTop: 2 }} title="국가는 위 드롭다운에서 변경">{flag}</span>
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onBlur={commit}
+            onMouseDown={stopCard}
+            onClick={stopCard}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') {
+                setDraft(trip.title)
+                onCloseEdit()
+              }
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: compact ? 15 : 20,
+              fontWeight: 800,
+              color: '#37352F',
+              padding: '4px 8px',
+              borderRadius: 8,
+              border: '1px solid #6366f1',
+              outline: 'none',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+            }}
+          />
+        ) : (
+          <p
+            style={{
+              margin: 0,
+              fontSize: compact ? 15 : 20,
+              fontWeight: 800,
+              color: '#37352F',
+              flex: 1,
+              minWidth: 0,
+              lineHeight: 1.35,
+              wordBreak: 'break-word',
+              whiteSpace: 'normal',
+            }}
+          >
+            {trip.title}
+          </p>
+        )}
+      </div>
+      <div style={{ marginTop: 8, width: '100%' }}>
+        <span style={{ fontSize: 11, color: '#787774', fontWeight: 500, lineHeight: 1.45 }}>
+          {fmtTripDateRange(trip.startDate, trip.endDate)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 const TRIP_COLORS = ['#f97316', '#6366f1', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#7C3AED']
 
 function loadManualOrderIds(tripIds: string[]): string[] {
@@ -6452,24 +6693,6 @@ function calcDDay(startDate: string): { text: string; isPast: boolean } {
 /** 천 단위 콤마 포맷 (예: 1,250,000) */
 function formatAmount(n: number): string {
   return n.toLocaleString('ko-KR')
-}
-
-/** 카드 목록용 우측 정보: 연도 · 총점(게이지) · D-Day · 지출액 */
-function CardRightInfo({ year, totalScore, expenseTotal, ddayText }: { year: string; totalScore: number; expenseTotal: number; ddayText: string }) {
-  const pct = Math.min(100, Math.max(0, totalScore))
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, minWidth: 88 }}>
-      <span style={{ fontSize: 14, fontWeight: 700, color: '#37352F', letterSpacing: '0.03em', textAlign: 'right' }}>{year}년</span>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, width: '100%' }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', textAlign: 'right' }}>{totalScore} / 100</span>
-        <div style={{ width: '100%', height: 4, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 999, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: '#8B5CF6', transition: 'width 0.3s ease' }} />
-        </div>
-      </div>
-      <span style={{ fontSize: 15, fontWeight: 700, color: '#475569', letterSpacing: '-0.02em', textAlign: 'right' }}>{ddayText}</span>
-      <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', textAlign: 'right' }}>{formatAmount(expenseTotal)}원</span>
-    </div>
-  )
 }
 
 /** 대시보드 헤더 요약: 여행 총점(게이지) · D-Day · 가계부 총액 */
@@ -8502,6 +8725,8 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
   const [manageMode, setManageMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  /** 카드 제목 인라인 편집 — 연필(우하단)과 동기화 */
+  const [editingTitleTripId, setEditingTitleTripId] = useState<string | null>(null)
 
   useEffect(() => {
     loadExpenseCategories().then(setExpenseCategories)
@@ -8591,10 +8816,12 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
 
   async function updateTrip(tripId: string, patch: Partial<TravelTrip>) {
     const p = { ...patch }
-    if (patch.countryFlag === '🇰🇷') p.isDomestic = true
-    else if (patch.countryFlag) p.isDomestic = false
+    if (patch.countryFlag !== undefined) {
+      p.isDomestic = patch.countryFlag === '🇰🇷'
+    }
     const row = await updateTravelEvent(tripId, p)
     if (row) setTripsBase(prev => prev.map(t => t.id === tripId ? row : t))
+    else onToast?.('저장에 실패했습니다. Supabase 연결을 확인해 주세요.')
   }
 
   async function handleRemoveSelected() {
@@ -8826,7 +9053,175 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
     outline: 'none', resize: 'none', boxSizing: 'border-box', lineHeight: '1.7', fontFamily: 'inherit',
   }
 
-  function SortableTripCard({ trip, dday, totalScore, expenseTotal, year, manageMode, selectedIds, onToggleSelect, onSelect, onUpdateCountry }: {
+  /** 목록 카드: 상단(국가·연도) / 중단(제목) / 하단(메타·연필) — Link 없이 본문만 */
+  function TravelTripListCardContent({
+    trip,
+    year,
+    dday,
+    totalScore,
+    expenseTotal,
+    onCountryChange,
+    onSaveTitle,
+  }: {
+    trip: TravelTrip
+    year: string
+    dday: { text: string; isPast: boolean }
+    totalScore: number
+    expenseTotal: number
+    onCountryChange: (flag: string) => void
+    onSaveTitle: (title: string) => void
+  }) {
+    const pct = Math.min(100, Math.max(0, totalScore))
+    return (
+      <>
+        {/* Top: 국가 셀렉트 + 연도 */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            width: '100%',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                padding: '3px 8px',
+                borderRadius: 6,
+                flexShrink: 0,
+                ...(isDomesticTrip(trip) ? { color: '#16a34a', backgroundColor: '#f0fdf4' } : { color: '#2563eb', backgroundColor: '#eff6ff' }),
+              }}
+            >
+              {isDomesticTrip(trip) ? '국내' : '국외'}
+            </span>
+            <div
+              data-trip-select-wrap
+              role="presentation"
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+              style={{ position: 'relative', zIndex: 5, flex: 1, minWidth: 0, maxWidth: 196 }}
+            >
+              {/* preventDefault는 네이티브 드롭다운을 막을 수 있어 버블링만 차단 (카드 이동은 handleTripCardNavigate의 closest('select')로 차단) */}
+              <select
+                value={countryCodeForSelect(trip)}
+                onPointerDown={e => e.stopPropagation()}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                onChange={e => {
+                  e.stopPropagation()
+                  const o = COUNTRY_OPTIONS.find(c => c.code === e.target.value)
+                  if (o) onCountryChange(o.flag)
+                }}
+                style={{
+                  width: '100%',
+                  padding: '5px 7px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(0,0,0,0.14)',
+                  background: '#fff',
+                  fontSize: 9,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  lineHeight: 1.35,
+                }}
+              >
+                {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b', letterSpacing: '0.02em', flexShrink: 0 }}>{year}년</span>
+        </div>
+
+        {/* Middle: 제목 히어로 */}
+        <div style={{ marginTop: 16, width: '100%' }}>
+          <TravelTripTitleRow
+            trip={trip}
+            onSaveTitle={onSaveTitle}
+            isEditing={editingTitleTripId === trip.id}
+            onCloseEdit={() => setEditingTitleTripId(null)}
+            variant="vertical"
+            ddayText={dday.text}
+          />
+        </div>
+        {trip.note && (
+          <p style={{ margin: '10px 0 0', fontSize: 11, color: '#9B9A97', lineHeight: 1.5, width: '100%' }}>{trip.note}</p>
+        )}
+
+        {/* Bottom: 부가정보 + 연필 */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            marginTop: 16,
+            gap: 12,
+            width: '100%',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 10,
+              rowGap: 8,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{totalScore} / 100</span>
+            <div style={{ width: 64, height: 4, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 999, overflow: 'hidden', flexShrink: 0 }}>
+              <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: '#8B5CF6', transition: 'width 0.3s ease' }} />
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>{formatAmount(expenseTotal)}원</span>
+          </div>
+          {editingTitleTripId !== trip.id && (
+            <button
+              type="button"
+              data-trip-edit="title"
+              title="제목 수정"
+              onPointerDown={e => { e.stopPropagation(); e.preventDefault() }}
+              onClick={e => {
+                e.stopPropagation()
+                e.preventDefault()
+                setEditingTitleTripId(trip.id)
+              }}
+              style={{
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 26,
+                height: 26,
+                borderRadius: 7,
+                border: '1px solid rgba(0,0,0,0.08)',
+                background: '#fafafa',
+                cursor: 'pointer',
+                color: '#9ca3af',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+              }}
+            >
+              <Pencil size={11} strokeWidth={2.25} />
+            </button>
+          )}
+        </div>
+      </>
+    )
+  }
+
+  function handleTripCardNavigate(e: React.MouseEvent, tripId: string) {
+    if (manageMode) return
+    if ((e.target as Element).closest('select, button, input, [data-drag-handle], [data-trip-select-wrap]')) return
+    navigate(`/travel?trip=${tripId}`)
+  }
+
+  function SortableTripCard({ trip, dday, totalScore, expenseTotal, year, manageMode, selectedIds, onToggleSelect, onUpdateCountry, onUpdateTitle }: {
     trip: TravelTrip
     dday: { text: string; isPast: boolean }
     totalScore: number
@@ -8835,48 +9230,54 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
     manageMode: boolean
     selectedIds: Set<string>
     onToggleSelect: (e: React.MouseEvent) => void
-    onSelect?: () => void
     onUpdateCountry: (flag: string) => void
+    onUpdateTitle: (title: string) => void
   }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: trip.id })
     const style: React.CSSProperties = {
-      display: 'flex', flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-between', gap: '16px',
-      padding: '28px 22px 24px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#FFFFFF',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'stretch',
+      gap: 0,
+      padding: '24px 22px',
+      borderRadius: '16px',
+      border: '1px solid rgba(0,0,0,0.06)',
+      backgroundColor: '#FFFFFF',
       boxShadow: isDragging ? '0 12px 28px rgba(0,0,0,0.2)' : '0 2px 12px rgba(0,0,0,0.06)',
-      cursor: manageMode ? 'default' : 'pointer', textAlign: 'left', transition, position: 'relative' as const,
-      transform: CSS.Transform.toString(transform), opacity: isDragging ? 0.9 : 1,
+      cursor: manageMode ? 'default' : 'pointer',
+      textAlign: 'left',
+      transition,
+      position: 'relative' as const,
+      transform: CSS.Transform.toString(transform),
+      opacity: isDragging ? 0.9 : 1,
     }
     return (
-      <div ref={setNodeRef} style={style} onClick={onSelect} role="button" tabIndex={0}>
+      <div
+        ref={setNodeRef}
+        style={style}
+        onClick={e => handleTripCardNavigate(e, trip.id)}
+        role="button"
+        tabIndex={0}
+      >
         {manageMode && (
           <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 1 }} onClick={e => { e.stopPropagation(); onToggleSelect(e); }}>
             <input type="checkbox" checked={selectedIds.has(trip.id)} readOnly style={{ width: 18, height: 18, cursor: 'pointer', pointerEvents: 'none' }} />
           </div>
         )}
-        <div style={{ position: 'absolute', top: 12, right: 12, cursor: 'grab', touchAction: 'none', zIndex: 1 }} {...attributes} {...listeners} title="드래그하여 순서 변경">
+        <div data-drag-handle style={{ position: 'absolute', top: 12, right: 12, cursor: 'grab', touchAction: 'none', zIndex: 2 }} {...attributes} {...listeners} title="드래그하여 순서 변경">
           <GripVertical size={18} color="#9B9A97" />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '10px', minWidth: 0, flex: 1, marginLeft: manageMode ? 28 : 0, marginRight: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: 6, ...(isDomesticTrip(trip) ? { color: '#16a34a', backgroundColor: '#f0fdf4' } : { color: '#2563eb', backgroundColor: '#eff6ff' }) }}>
-              {isDomesticTrip(trip) ? '국내' : '국외'}
-            </span>
-          </div>
-          <select value={COUNTRY_OPTIONS.find(c => c.flag === (trip.countryFlag ?? '🗾'))?.code ?? 'ETC'} onChange={e => { e.stopPropagation(); const o = COUNTRY_OPTIONS.find(c => c.code === e.target.value); if (o) onUpdateCountry(o.flag) }} onClick={e => e.stopPropagation()} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
-            {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
-          </select>
-          <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-            <span style={{ fontSize: '20px', lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
-            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#37352F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trip.title}</p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-            <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
-            <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
-          </div>
-          {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
+        <div style={{ marginLeft: manageMode ? 28 : 0, marginRight: 8, width: '100%', minWidth: 0 }}>
+          <TravelTripListCardContent
+            trip={trip}
+            year={year}
+            dday={dday}
+            totalScore={totalScore}
+            expenseTotal={expenseTotal}
+            onCountryChange={onUpdateCountry}
+            onSaveTitle={onUpdateTitle}
+          />
         </div>
-        <CardRightInfo year={year} totalScore={totalScore} expenseTotal={expenseTotal} ddayText={dday.text} />
       </div>
     )
   }
@@ -9027,8 +9428,8 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
                       manageMode={manageMode}
                       selectedIds={selectedIds}
                       onToggleSelect={e => { e.stopPropagation(); setSelectedIds(prev => { const n = new Set(prev); if (n.has(trip.id)) n.delete(trip.id); else n.add(trip.id); return n }) }}
-                      onSelect={manageMode ? undefined : () => setSelectedTrip(trip.id)}
                       onUpdateCountry={flag => updateTrip(trip.id, { countryFlag: flag })}
+                      onUpdateTitle={title => updateTrip(trip.id, { title })}
                     />
                   ))}
                 </SortableContext>
@@ -9041,18 +9442,28 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
                 const expenseTotal = (detail.expenses ?? []).reduce((s, e) => s + e.amount, 0)
                 const year = trip.startDate.split('-')[0]
                 const cardStyle: React.CSSProperties = {
-                  display: 'flex', flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-between', gap: '16px',
-                  padding: '28px 22px 24px', borderRadius: '16px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#FFFFFF',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)', cursor: manageMode ? 'default' : 'pointer', textAlign: 'left',
-                  transition: 'transform 0.2s, box-shadow 0.2s', position: 'relative', textDecoration: 'none', color: 'inherit',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  gap: 0,
+                  padding: '24px 22px',
+                  borderRadius: '16px',
+                  border: '1px solid rgba(0,0,0,0.06)',
+                  backgroundColor: '#FFFFFF',
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+                  cursor: manageMode ? 'default' : 'pointer',
+                  textAlign: 'left',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  position: 'relative',
+                  color: 'inherit',
                 }
-                const CardWrapper = manageMode ? 'div' : Link
-                const cardProps = manageMode ? {} : { to: `/travel?trip=${trip.id}` }
                 return (
-                  <CardWrapper
+                  <div
                     key={trip.id}
-                    {...cardProps}
                     style={cardStyle}
+                    onClick={e => handleTripCardNavigate(e, trip.id)}
+                    role="button"
+                    tabIndex={0}
                     onMouseEnter={e => { if (!manageMode) { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 12px 28px rgba(0,0,0,0.12)' } }}
                     onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.06)' }}
                   >
@@ -9067,31 +9478,18 @@ function TravelPage({ syncStatus, onToast }: { syncStatus?: 'idle' | 'syncing' |
                         />
                       </div>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '10px', minWidth: 0, flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', marginLeft: manageMode ? 28 : 0 }}>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: 6,
-                          ...(isDomesticTrip(trip) ? { color: '#16a34a', backgroundColor: '#f0fdf4' } : { color: '#2563eb', backgroundColor: '#eff6ff' }),
-                        }}>
-                          {isDomesticTrip(trip) ? '국내' : '국외'}
-                        </span>
-                      </div>
-                      <select value={COUNTRY_OPTIONS.find(c => c.flag === (trip.countryFlag ?? '🗾'))?.code ?? 'ETC'} onChange={e => { e.stopPropagation(); const o = COUNTRY_OPTIONS.find(c => c.code === e.target.value); if (o) updateTrip(trip.id, { countryFlag: o.flag }) }} onClick={e => e.stopPropagation()} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', outline: 'none' }}>
-                        {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
-                      </select>
-                      <span style={{ fontSize: '28px', lineHeight: 1 }}>✈️</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <span style={{ fontSize: '20px', lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
-                        <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#37352F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trip.title}</p>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                        <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>{trip.countryFlag ?? '🗾'}</span>
-                        <span style={{ fontSize: '11px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtTripDateRange(trip.startDate, trip.endDate)}</span>
-                      </div>
-                      {trip.note && <p style={{ margin: 0, fontSize: '11px', color: '#9B9A97', lineHeight: 1.5 }}>{trip.note}</p>}
+                    <div style={{ marginLeft: manageMode ? 28 : 0, marginRight: 8, width: '100%', minWidth: 0 }}>
+                      <TravelTripListCardContent
+                        trip={trip}
+                        year={year}
+                        dday={dday}
+                        totalScore={totalScore}
+                        expenseTotal={expenseTotal}
+                        onCountryChange={flag => updateTrip(trip.id, { countryFlag: flag })}
+                        onSaveTitle={title => updateTrip(trip.id, { title })}
+                      />
                     </div>
-                    <CardRightInfo year={year} totalScore={totalScore} expenseTotal={expenseTotal} ddayText={dday.text} />
-                  </CardWrapper>
+                  </div>
                 )
               })
             )}
@@ -10400,18 +10798,46 @@ export default function App() {
       setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: 0, pomodoroCount: (q.pomodoroCount ?? 0) + 1 } : q))
     }
     if (elapsedClamped > 0) {
-      const result = await addFocusSession(elapsedClamped)
+      const qMeta = focusQuestId ? userQuests.find(q => q.id === focusQuestId) : null
+      const nowComplete = new Date()
+      const startTimeLocal = `${String(nowComplete.getHours()).padStart(2, '0')}:${String(nowComplete.getMinutes()).padStart(2, '0')}`
+      const result = await addFocusSession(elapsedClamped, {
+        questId: focusQuestId ?? undefined,
+        questTitle: qMeta?.name,
+      })
       if ('xpGain' in result) {
         fireToast(`축하합니다! ${result.xpGain} XP를 획득했습니다. (${result.identityName} 태세)`)
         fetchIdentities().then(rows => setIdentities(rows))
+        appendPomodoroLog({
+          date: today,
+          startTimeLocal,
+          minutes: Math.max(1, Math.floor(elapsedClamped / 60)),
+          seconds: elapsedClamped,
+          questId: focusQuestId ?? null,
+          questTitle: qMeta?.name ?? null,
+          identityName: result.identityName,
+          xpGain: result.xpGain,
+          source: 'session',
+          remoteId: result.focusLogId,
+        })
       } else {
         fireToast(result.error || 'XP 적립에 실패했습니다.')
+        appendPomodoroLog({
+          date: today,
+          startTimeLocal,
+          minutes: Math.max(1, Math.floor(elapsedClamped / 60)),
+          seconds: elapsedClamped,
+          questId: focusQuestId ?? null,
+          questTitle: qMeta?.name ?? null,
+          source: 'session',
+        })
       }
     }
     recordFocusSession(Math.round(timerTotal / 60))
     setIsOvertime(false)
     setOvertimeSec(0)
     isOvertimeRef.current = false
+    setCalendarRefreshKey(k => k + 1)
   }
 
   function handleExtend() {
@@ -10639,9 +11065,21 @@ export default function App() {
                   </p>
                 </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px', minWidth: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '2px', minWidth: 0 }}>
                 <p style={{ margin: 0, fontSize: '11px', color: '#37352F', fontWeight: 600, whiteSpace: 'nowrap' }}>{today}</p>
-                <span style={{ fontSize: '10px', color: '#787774', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title="ISO 주차 · 만세력(월·일 기둥)">
+                <span
+                  style={{
+                    fontSize: '10px',
+                    color: '#787774',
+                    fontWeight: 500,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    textAlign: 'right',
+                    display: 'block',
+                  }}
+                  title="ISO 주차 · 만세력(월·일 기둥)"
+                >
                   {todayISOWeek}주차 {formatTodayGanzhiLine(navNow)}
                 </span>
               </div>
@@ -10652,16 +11090,17 @@ export default function App() {
               {([
                 { id: 'life' as const, label: 'Life', emoji: '📅' },
                 { id: 'goals' as const, label: 'Goals', emoji: '🎯' },
-                { id: 'evolution' as const, label: 'Evolution', emoji: '🧬' },
-                { id: 'fortune' as const, label: 'Fortune', emoji: '🔮' },
-                { id: 'manifestation' as const, label: 'Manifest', emoji: '✨' },
+                { id: 'evolution' as const, label: 'Evol', emoji: '🧬' },
+                { id: 'fortune' as const, label: 'Fortu', emoji: '🔮' },
+                { id: 'manifestation' as const, label: 'Manif', emoji: '✨' },
                 { id: 'act' as const, label: 'Act', emoji: '🎭' },
                 { id: 'master-board' as const, label: 'Board', emoji: '📋' },
-                { id: 'levelup' as const, label: 'Levelup', emoji: '⬆️' },
+                { id: 'levelup' as const, label: 'Level', emoji: '⬆️' },
                 { id: 'project' as const, label: 'Project', emoji: '📁' },
+                { id: 'value' as const, label: 'Value', emoji: '💎' },
                 { id: 'quest' as const, label: 'Quest', emoji: '⚡' },
                 { id: 'review' as const, label: 'Review', emoji: '📓' },
-                { id: 'quantum' as const, label: 'Quantum', emoji: '✦' },
+                { id: 'quantum' as const, label: 'Quant', emoji: '✦' },
                 { id: 'network' as const, label: 'Network', emoji: '🌐' },
                 { id: 'account' as const, label: 'Account', emoji: '💰' },
                 { id: 'travel' as const, label: 'Travel', emoji: '✈️' },
@@ -10832,8 +11271,12 @@ export default function App() {
           {activePage === 'quantum' && (
             <QuantumFlowPage onSaved={() => setCalendarRefreshKey(k => k + 1)} />
           )}
+          {activePage === 'value' && <ValuePage />}
           {activePage === 'network' && <NetworkPage />}
-          {activePage === 'quest' && <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
+          {activePage === 'quest' && (
+            <div style={{ maxWidth: '1800px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
+              <div style={{ display: 'flex', gap: isMobile ? 0 : 20, alignItems: 'flex-start', width: '100%' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
 
             {activePage === 'quest' && (
             <>
@@ -11364,7 +11807,27 @@ export default function App() {
             </div>
             )}
 
-          </div>}
+                </div>
+                {!isMobile && (
+                  <aside
+                    style={{
+                      width: 300,
+                      flexShrink: 0,
+                      position: 'sticky',
+                      top: 56,
+                      alignSelf: 'flex-start',
+                      maxHeight: 'calc(100vh - 72px)',
+                      overflowY: 'auto',
+                      paddingBottom: 24,
+                    }}
+                  >
+                    <ValueReferencePanel quests={userQuests.map(q => ({ id: q.id, name: q.name }))} />
+                  </aside>
+                )}
+              </div>
+              <ValueReferenceMobileFab quests={userQuests.map(q => ({ id: q.id, name: q.name }))} />
+            </div>
+          )}
         </div>{/* end body wrapper */}
       </div>
     </>

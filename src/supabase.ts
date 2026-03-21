@@ -270,9 +270,18 @@ export async function updateActiveIdentity(identityId: string | null): Promise<b
 /** 집중 세션 완료: 활성 태세에 XP/시간 적립 + calendar_events에 focus_log 추가
  * XP = 분 × 10 (최소 1)
  * @returns { xpGain, identityName } 성공 시, null 실패 시 */
-export type AddFocusSessionResult = { xpGain: number; identityName: string } | { error: string }
+export type FocusSessionMeta = {
+  /** 현재 포모도로에 연결된 퀘스트 (통합 캘린더·로그 추적용) */
+  questId?: string | null
+  questTitle?: string | null
+}
 
-export async function addFocusSession(seconds: number): Promise<AddFocusSessionResult> {
+export type AddFocusSessionResult =
+  | { xpGain: number; identityName: string; focusLogId?: string }
+  | { error: string }
+
+/** 집중 완료 시 호출. focus_log.content 에 시작 시각(HH:mm)·퀘스트 메타를 넣어 위클리 타임그리드에 표시합니다. */
+export async function addFocusSession(seconds: number, meta?: FocusSessionMeta): Promise<AddFocusSessionResult> {
   if (!supabase || seconds <= 0) return { error: '유효하지 않은 집중 시간입니다.' }
   const identityId = await fetchActiveIdentity()
   if (!identityId) return { error: '먼저 태세를 선택해주세요.' }
@@ -287,16 +296,38 @@ export async function addFocusSession(seconds: number): Promise<AddFocusSessionR
   if (updErr) { console.error('[Supabase] addFocusSession identities 업데이트 실패:', updErr.message); return { error: 'XP 적립에 실패했습니다.' } }
   const today = new Date().toISOString().split('T')[0]
   const minutes = Math.floor(seconds / 60)
-  const title = `[집중] ${identity.name} 태세로 ${minutes}분 몰입`
-  const content = { identity_id: identityId, identity_name: identity.name, seconds, minutes, xp_gain: xpGain }
-  const { error: insErr } = await supabase.from('calendar_events').insert({
-    event_date: today,
-    event_type: 'focus_log',
-    title,
-    content,
-  })
+  const now = new Date()
+  const start_time_local = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const qid = meta?.questId ?? null
+  const qtitle = meta?.questTitle ?? null
+  const title =
+    qtitle && String(qtitle).trim()
+      ? `[집중] ${String(qtitle).slice(0, 40)}${String(qtitle).length > 40 ? '…' : ''} · ${minutes}분`
+      : `[집중] ${identity.name} 태세로 ${minutes}분 몰입`
+  const content: Record<string, unknown> = {
+    identity_id: identityId,
+    identity_name: identity.name,
+    seconds,
+    minutes,
+    xp_gain: xpGain,
+    start_time_local,
+    quest_id: qid,
+    quest_title: qtitle,
+    source: 'pomodoro_complete',
+  }
+  const { data: insData, error: insErr } = await supabase
+    .from('calendar_events')
+    .insert({
+      event_date: today,
+      event_type: 'focus_log',
+      title,
+      content,
+    })
+    .select('id')
+    .single()
   if (insErr) console.error('[Supabase] addFocusSession focus_log insert 실패:', insErr.message)
-  return { xpGain, identityName: identity.name as string }
+  const focusLogId = insData?.id != null ? String(insData.id) : undefined
+  return { xpGain, identityName: identity.name as string, focusLogId }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
