@@ -25,6 +25,7 @@ import {
 import { kvSet } from './lib/supabase'
 import { MANIFEST_LOCAL_KEY, MANIFEST_ACHIEVED_KEY } from './kvSyncedKeys'
 import { ManifestNotionNotePanel } from './ManifestNotionNotePanel'
+import { ManifestationStudio } from './ManifestationStudio'
 import { blockNoteToPlainPreview, collectTagsForEntities, entityHasNoteTag } from './manifestNoteUtils'
 import type { ManifestNoteKind } from './manifestNoteUtils'
 
@@ -1735,6 +1736,8 @@ export function ManifestationPage() {
             )}
           </div>
         </div>
+
+        <ManifestationStudio />
         </>
       )}
 

@@ -8,6 +8,8 @@ import { PLAYBOOK_STORE_KEY } from './humanRelationsPlaybookData'
 import { LEVELUP_RPG_KEY } from './levelupRpgProfile'
 import { POMODORO_LOG_KEY } from './pomodoroLogData'
 import { MANIFEST_NOTE_BUNDLE_KEY } from './manifestNoteUtils'
+import { MANIFEST_STUDIO_BUNDLE_KEY } from './manifestationStudioData'
+import { TRACKER_BUNDLE_KEY } from './trackerData'
 
 export const GOALS_KV_KEY = 'creative-os-life-goals-v1'
 export const MANIFEST_LOCAL_KEY = 'manifestation_local_v1'
@@ -19,6 +21,7 @@ export const ALL_KV_SYNC_KEYS: string[] = [
   GOALS_KV_KEY,
   MANIFEST_LOCAL_KEY,
   MANIFEST_ACHIEVED_KEY,
+  MANIFEST_STUDIO_BUNDLE_KEY,
   MANIFEST_NOTE_BUNDLE_KEY,
   ACT_ROLE_REF_KEY,
   ACT_MASTER_KEY,
@@ -28,6 +31,7 @@ export const ALL_KV_SYNC_KEYS: string[] = [
   PLAYBOOK_STORE_KEY,
   LEVELUP_RPG_KEY,
   POMODORO_LOG_KEY,
+  TRACKER_BUNDLE_KEY,
 ]
 
 function parseStoredValueForMigration(key: string, raw: string): unknown {

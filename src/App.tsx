@@ -38,6 +38,7 @@ import {
   type JournalCategoryRow, type JournalNoteRow, type ProjectRow, type AreaRow,
 } from './supabase'
 import { ManifestationPage } from './Manifestation'
+import { TrackerPage } from './TrackerPage'
 import { SettlementReviewPage } from './SettlementReviewPage'
 import { loadSettlementStore, SETTLEMENT_KEY, type SettlementEntry } from './settlementData'
 import { QuantumFlowPage } from './QuantumFlowPage'
@@ -82,6 +83,7 @@ import { Solar } from 'lunar-javascript'
 /** GNB + HashRouter 경로 (하이픈 포함) */
 type PageId =
   | 'life'
+  | 'tracker'
   | 'goals'
   | 'evolution'
   | 'fortune'
@@ -101,7 +103,7 @@ type PageId =
   | 'fragment'
   | 'trash'
 
-const PAGE_IDS: PageId[] = ['life', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment', 'trash']
+const PAGE_IDS: PageId[] = ['life', 'tracker', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment', 'trash']
 
 /** 데스크톱 상단 GNB — 한 줄·한 묶음 (Board부터 Note까지 순서 고정, sep = 구분선) */
 type GnbRowItem =
@@ -114,6 +116,7 @@ const GNB_ROW_ITEMS: GnbRowItem[] = [
   { kind: 'link', id: 'manual', label: 'Manu', emoji: '📖' },
   { kind: 'sep' },
   { kind: 'link', id: 'life', label: 'Life', emoji: '📅' },
+  { kind: 'link', id: 'tracker', label: 'Track', emoji: '⏱️' },
   { kind: 'link', id: 'goals', label: 'Goals', emoji: '🎯' },
   { kind: 'link', id: 'evolution', label: 'Evol', emoji: '🧬' },
   { kind: 'link', id: 'fortune', label: 'Fortu', emoji: '🔮' },
@@ -638,6 +641,7 @@ function MobileBottomNav({ active }: { active: PageId }) {
     { id: 'master-board', emoji: '📋', label: 'Board' },
     { id: 'manual', emoji: '📖', label: 'Manu' },
     { id: 'life', emoji: '📅', label: 'Life' },
+    { id: 'tracker', emoji: '⏱️', label: 'Track' },
     { id: 'goals', emoji: '🎯', label: 'Goals' },
     { id: 'evolution', emoji: '🧬', label: 'Evol' },
     { id: 'fortune', emoji: '🔮', label: 'Fortu' },
@@ -11447,12 +11451,12 @@ export default function App() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: '4px',
-                      padding: '6px 4px',
+                      gap: '3px',
+                      padding: '6px 3px',
                       borderRadius: '8px',
                       cursor: 'pointer',
                       border: 'none',
-                      fontSize: '11px',
+                      fontSize: '10.5px',
                       fontWeight: activePage === item.id ? 700 : 500,
                       color: activePage === item.id ? '#4F46E5' : '#787774',
                       backgroundColor: activePage === item.id ? 'rgba(99,102,241,0.1)' : 'transparent',
@@ -11463,7 +11467,7 @@ export default function App() {
                       maxWidth: '100%',
                     }}
                   >
-                    <span style={{ fontSize: '13px', lineHeight: 1, flexShrink: 0 }}>{item.emoji}</span>
+                    <span style={{ fontSize: '12px', lineHeight: 1, flexShrink: 0 }}>{item.emoji}</span>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
                   </Link>
                 )
@@ -11686,6 +11690,7 @@ export default function App() {
               onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
             />
           )}
+          {activePage === 'tracker' && <TrackerPage />}
           {activePage === 'goals' && <GoalsPage />}
           {activePage === 'evolution' && <EvolutionPage />}
           {activePage === 'fortune' && <FortunePage onReadingSaved={() => setCalendarRefreshKey(k => k + 1)} />}
