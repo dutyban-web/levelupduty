@@ -8085,11 +8085,17 @@ function ItineraryStepsCarousel({
           scrollbarWidth: 'thin',
         }}
       >
-        {steps.map((step, idx) => (
-          <div key={step.id} style={{ scrollSnapAlign: 'start' }}>
-            <ItineraryStepBox step={step} index={idx} onUpdate={p => onUpdate(step.id, p)} onRemove={steps.length > 1 ? () => onRemove(step.id) : undefined} uploadImageToMedia={uploadImageToMedia} />
+        {steps.length === 0 ? (
+          <div style={{ padding: '20px 24px', borderRadius: 12, border: '1px dashed rgba(99,102,241,0.35)', background: 'rgba(99,102,241,0.04)', color: '#787774', fontSize: 13, fontWeight: 600 }}>
+            방문 단계가 없습니다. 위의 &quot;단계 추가&quot;로 카드를 만들면 이미지·장소명·메모를 넣을 수 있어요.
           </div>
-        ))}
+        ) : (
+          steps.map((step, idx) => (
+            <div key={step.id} style={{ scrollSnapAlign: 'start' }}>
+              <ItineraryStepBox step={step} index={idx} onUpdate={p => onUpdate(step.id, p)} onRemove={() => onRemove(step.id)} uploadImageToMedia={uploadImageToMedia} />
+            </div>
+          ))
+        )}
       </div>
       {showArrows && (
         <button onClick={() => scroll(1)} style={{ flexShrink: 0, width: 40, height: 40, borderRadius: 12, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }} title="오른쪽으로">
@@ -8805,6 +8811,8 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   /** 카드 제목 인라인 편집 — 연필(우하단)과 동기화 */
   const [editingTitleTripId, setEditingTitleTripId] = useState<string | null>(null)
+  /** 여행 카드/히어로 짧은 메모 (Supabase travel content.note) 편집용 */
+  const [tripNoteDraft, setTripNoteDraft] = useState('')
 
   useEffect(() => {
     loadExpenseCategories().then(setExpenseCategories)
@@ -8813,6 +8821,10 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
 
   const trips = tripsBase
   const currentTrip = trips.find(t => t.id === selectedTrip)
+
+  useEffect(() => {
+    setTripNoteDraft(currentTrip?.note ?? '')
+  }, [selectedTrip, currentTrip?.id, currentTrip?.note])
 
   // manualOrderIds 동기화 (trips 변경 시)
   useEffect(() => {
@@ -8971,6 +8983,21 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
   const pct = totalCount > 0 ? Math.round(checkedCount / totalCount * 100) : 0
 
   const ddayResult = currentTrip ? calcDDay(currentTrip.startDate) : { text: '-', isPast: false }
+
+  const saveTripNoteFromDraft = useCallback(() => {
+    if (!selectedTrip || !currentTrip) return
+    const next = tripNoteDraft.trim()
+    if (next === (currentTrip.note ?? '').trim()) return
+    void updateTrip(selectedTrip, { note: next })
+  }, [selectedTrip, currentTrip, tripNoteDraft, updateTrip])
+
+  const clearTripCardNote = useCallback(() => {
+    if (!selectedTrip) return
+    if (!tripNoteDraft.trim() && !(currentTrip?.note ?? '').trim()) return
+    if (!window.confirm('카드에 표시되는 짧은 메모를 삭제할까요?')) return
+    setTripNoteDraft('')
+    void updateTrip(selectedTrip, { note: '' })
+  }, [selectedTrip, currentTrip?.note, tripNoteDraft])
 
   const CAT_COLOR: Record<string, string> = { essential: '#6366f1', creative: '#f472b6', daily: '#34d399' }
   const PACK_COLORS = ['#6366f1', '#f472b6', '#34d399', '#f97316', '#8b5cf6']
@@ -9140,6 +9167,7 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
     expenseTotal,
     onCountryChange,
     onSaveTitle,
+    onClearTripNote,
   }: {
     trip: TravelTrip
     year: string
@@ -9148,6 +9176,8 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
     expenseTotal: number
     onCountryChange: (flag: string) => void
     onSaveTitle: (title: string) => void
+    /** 카드에 보이는 짧은 메모(trip.note) 삭제 */
+    onClearTripNote?: () => void
   }) {
     const pct = Math.min(100, Math.max(0, totalScore))
     return (
@@ -9227,7 +9257,34 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
           />
         </div>
         {trip.note && (
-          <p style={{ margin: '10px 0 0', fontSize: 11, color: '#9B9A97', lineHeight: 1.5, width: '100%' }}>{trip.note}</p>
+          <div style={{ margin: '10px 0 0', display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%' }}>
+            <p style={{ margin: 0, fontSize: 11, color: '#9B9A97', lineHeight: 1.5, flex: 1, minWidth: 0 }}>{trip.note}</p>
+            {onClearTripNote && (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  onClearTripNote()
+                }}
+                title="메모 삭제"
+                style={{
+                  flexShrink: 0,
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  border: '1px solid rgba(239,68,68,0.25)',
+                  background: 'rgba(239,68,68,0.06)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <Trash2 size={11} color="#ef4444" />
+              </button>
+            )}
+          </div>
         )}
 
         {/* Bottom: 부가정보 + 연필 */}
@@ -9354,6 +9411,14 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
             expenseTotal={expenseTotal}
             onCountryChange={onUpdateCountry}
             onSaveTitle={onUpdateTitle}
+            onClearTripNote={
+              trip.note?.trim()
+                ? () => {
+                    if (!window.confirm('이 여행 카드의 짧은 메모를 삭제할까요?')) return
+                    void updateTrip(trip.id, { note: '' })
+                  }
+                : undefined
+            }
           />
         </div>
       </div>
@@ -9565,6 +9630,14 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
                         expenseTotal={expenseTotal}
                         onCountryChange={flag => updateTrip(trip.id, { countryFlag: flag })}
                         onSaveTitle={title => updateTrip(trip.id, { title })}
+                        onClearTripNote={
+                          trip.note?.trim()
+                            ? () => {
+                                if (!window.confirm('이 여행 카드의 짧은 메모를 삭제할까요?')) return
+                                void updateTrip(trip.id, { note: '' })
+                              }
+                            : undefined
+                        }
                       />
                     </div>
                   </div>
@@ -9785,7 +9858,58 @@ function TravelPage({ onToast }: { onToast?: (msg: string) => void }) {
                       {currentTrip?.title ?? '여행'}
                     </h1>
                   </div>
-                  {currentTrip?.note && <p style={{ margin: '8px 0 0', fontSize: 15, fontWeight: 500, color: 'rgba(255,255,255,0.75)', lineHeight: 1.5, textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>{currentTrip.note}</p>}
+                  {currentTrip && (
+                    <div style={{ marginTop: 10, width: '100%', maxWidth: 'min(100%, 560px)' }}>
+                      <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>한 줄 메모 · 목록 카드에 표시</p>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                        <textarea
+                          value={tripNoteDraft}
+                          onChange={e => setTripNoteDraft(e.target.value)}
+                          onBlur={() => saveTripNoteFromDraft()}
+                          placeholder="예: 도톤보리 · 교토 당일치기"
+                          rows={2}
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            minHeight: 52,
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: '1px solid rgba(255,255,255,0.22)',
+                            background: 'rgba(255,255,255,0.08)',
+                            color: 'rgba(255,255,255,0.92)',
+                            fontSize: 14,
+                            fontWeight: 500,
+                            lineHeight: 1.5,
+                            outline: 'none',
+                            resize: 'vertical',
+                            boxSizing: 'border-box',
+                            textShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => clearTripCardNote()}
+                          disabled={!tripNoteDraft.trim() && !(currentTrip.note ?? '').trim()}
+                          title="메모 삭제"
+                          style={{
+                            flexShrink: 0,
+                            width: 36,
+                            height: 36,
+                            borderRadius: 10,
+                            border: '1px solid rgba(239,68,68,0.35)',
+                            background: 'rgba(239,68,68,0.12)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: (!tripNoteDraft.trim() && !(currentTrip.note ?? '').trim()) ? 'default' : 'pointer',
+                            opacity: (!tripNoteDraft.trim() && !(currentTrip.note ?? '').trim()) ? 0.35 : 1,
+                          }}
+                        >
+                          <Trash2 size={15} color="#fca5a5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {currentTrip && (
                     <p style={{ margin: '6px 0 0', fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.55)', lineHeight: 1.5, textShadow: '0 1px 3px rgba(0,0,0,0.25)' }}>
                       {fmtTripDateShort(currentTrip.startDate, currentTrip.endDate)}
