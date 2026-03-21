@@ -46,7 +46,7 @@ function previewValue(value: unknown, max = 120): string {
 }
 
 /**
- * 정상 활성 행(보관함)의 Fragment 스토어를 불러옴.
+ * 정상 활성 행(보관함)의 Fragment 스토어를 불러옴 (복구·영구삭제 시 전체 스토어 기준).
  * DB `kvGet(FRAGMENT_KEY)` + 로컬 병합 — 행의 is_deleted 컬럼이 아니라 JSON 안 entries를 쓴다.
  */
 async function fetchFragmentVault(): Promise<FragmentStore> {
@@ -57,28 +57,71 @@ async function fetchFragmentVault(): Promise<FragmentStore> {
   return mergeFragmentStores(local, remote)
 }
 
+/** JSON/직렬화 이슈 대비 */
+function entryIsTrashed(e: FragmentEntry): boolean {
+  if (e.is_deleted === true) return true
+  const v = (e as unknown as Record<string, unknown>).is_deleted
+  return v === 'true' || v === 1 || v === '1'
+}
+
+/** 로컬·원격 각각에서 is_deleted 인 항목을 합침 (한쪽만 최신이어도 휴지통에 표시) */
+function collectTrashedFragmentEntries(
+  local: FragmentStore,
+  remote: FragmentStore | null,
+): FragmentEntry[] {
+  const localT = local.entries.filter(entryIsTrashed)
+  const remoteT = (remote?.entries ?? []).filter(entryIsTrashed)
+  const byId = new Map<string, FragmentEntry>()
+  for (const e of [...localT, ...remoteT]) {
+    const prev = byId.get(e.id)
+    if (!prev || e.updatedAt.localeCompare(prev.updatedAt) > 0) byId.set(e.id, e)
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+async function fetchLocalAndRemoteFragment(): Promise<{ local: FragmentStore; remote: FragmentStore | null }> {
+  const local = loadFragmentStore()
+  if (!isSupabaseReady) return { local, remote: null }
+  const remote = await kvGet<FragmentStore>(FRAGMENT_KEY)
+  if (!remote || !Array.isArray(remote.entries)) return { local, remote: null }
+  return { local, remote }
+}
+
 export function TrashPage() {
   const isMobile = useIsNarrow()
   const [rows, setRows] = useState<KvTrashRow[]>([])
-  const [fragTrash, setFragTrash] = useState<FragmentEntry[]>([])
+  /** 휴지통에 둘 Fragment 노트 (로컬·원격 합집합으로 계산) */
+  const [trashEntries, setTrashEntries] = useState<FragmentEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [busyKey, setBusyKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      // 1) 먼저 정상 보관함(creative_os_fragment_v1) fetch
-      const vault = await fetchFragmentVault()
-      // 2) entries 안에서 is_deleted === true 만 휴지통 목록
-      setFragTrash(vault.entries.filter(e => e.is_deleted === true))
+      // 1) 보관함 키: 로컬 + 서버 각각 로드 (병합만으로는 휴지통 플래그가 덮일 수 있음)
+      const { local, remote } = await fetchLocalAndRemoteFragment()
+      const trashed = collectTrashedFragmentEntries(local, remote)
+      setTrashEntries(trashed)
 
-      // 3) 행 단위 휴지통(기타 키) — Fragment 보관함 키는 제외(노트는 위에서만 다룸)
+      if (import.meta.env.DEV) {
+        console.log('휴지통 데이터:', trashed)
+        console.log('[TrashPage] 휴지통 디버그', {
+          localEntryCount: local.entries.length,
+          remoteEntryCount: remote?.entries?.length ?? 0,
+          localTrashedCount: local.entries.filter(entryIsTrashed).length,
+          remoteTrashedCount: (remote?.entries ?? []).filter(entryIsTrashed).length,
+        })
+      }
+
+      // 2) 행 단위 휴지통(기타 키) — Fragment 보관함 키는 제외
       let kvRows: KvTrashRow[] = []
       if (isSupabaseReady) {
         const raw = await kvGetTrash()
         kvRows = raw.filter(r => r.key !== FRAGMENT_KEY)
       }
       setRows(kvRows)
+    } catch (e) {
+      console.error('[TrashPage] load 실패:', e)
     } finally {
       setLoading(false)
     }
@@ -144,7 +187,7 @@ export function TrashPage() {
     }
   }
 
-  const hasAny = rows.length > 0 || fragTrash.length > 0
+  const hasAny = rows.length > 0 || trashEntries.length > 0
 
   return (
     <div style={{ maxWidth: '900px', margin: '0 auto', padding: isMobile ? '16px 12px' : '28px 24px' }}>
@@ -177,13 +220,13 @@ export function TrashPage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-          {fragTrash.length > 0 && (
+          {trashEntries.length > 0 && (
             <section>
               <h2 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#37352F' }}>
                 노트 조각 (Fragment 보관함)
               </h2>
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {fragTrash.map(entry => {
+                {trashEntries.map(entry => {
                   const b = busyKey === `frag:${entry.id}`
                   const meta = FRAGMENT_KIND_META[entry.kind]
                   return (
