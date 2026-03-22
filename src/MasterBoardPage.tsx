@@ -1,7 +1,7 @@
 /**
  * MasterBoard — 창작 OS 통합 대시보드
  */
-import { useState, useEffect, useMemo, type CSSProperties } from 'react'
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { isSupabaseReady } from './lib/supabase'
 import {
@@ -17,16 +17,7 @@ import {
 import { loadLedgerStore, ledgerDayExpenseTotal } from './accountLedgerData'
 import { loadEvolutionStore, evolutionProgress } from './evolutionData'
 import { loadFragmentStore } from './fragmentData'
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth < 768)
-    window.addEventListener('resize', fn)
-    return () => window.removeEventListener('resize', fn)
-  }, [])
-  return m
-}
+import { useIsMobile } from './hooks/useIsMobile'
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10)
@@ -75,6 +66,7 @@ export function MasterBoardPage({
 }: MasterBoardPageProps) {
   const isMobile = useIsMobile()
   const ymd = todayYmd()
+  const rootRef = useRef<HTMLDivElement | null>(null)
 
   const [trips, setTrips] = useState<TravelTripRow[]>([])
   const [topCause, setTopCause] = useState<{ title: string; count: number } | null>(null)
@@ -162,7 +154,7 @@ export function MasterBoardPage({
   }
 
   return (
-    <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '18px 14px 40px' : '28px 40px 48px', minHeight: 'calc(100vh - 52px)' }}>
+    <div ref={rootRef} style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '18px 14px 40px' : '28px 40px 48px', minHeight: 'calc(100vh - 52px)' }}>
       <header style={{ marginBottom: 24 }}>
         <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: '#6366f1', letterSpacing: '0.16em', textTransform: 'uppercase' }}>MasterBoard</p>
         <h1 style={{ margin: '8px 0 6px', fontSize: isMobile ? 24 : 28, fontWeight: 900, color: '#37352F' }}>오늘의 창작 OS</h1>

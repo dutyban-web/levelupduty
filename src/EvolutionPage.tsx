@@ -15,16 +15,7 @@ import {
   type EvolutionCategory,
   type EvolutionItem,
 } from './evolutionData'
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth < 768)
-    window.addEventListener('resize', fn)
-    return () => window.removeEventListener('resize', fn)
-  }, [])
-  return m
-}
+import { useIsMobile } from './hooks/useIsMobile'
 
 const CATEGORIES: EvolutionCategory[] = ['action', 'react', 'routine', 'habit']
 

@@ -18,16 +18,7 @@ import {
   type LedgerEntry,
   type LedgerFlow,
 } from './accountLedgerData'
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth < 768)
-    window.addEventListener('resize', fn)
-    return () => window.removeEventListener('resize', fn)
-  }, [])
-  return m
-}
+import { useIsMobile } from './hooks/useIsMobile'
 
 function pad2(n: number) {
   return String(n).padStart(2, '0')

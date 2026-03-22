@@ -15,6 +15,8 @@ import {
   type RpgQuestRow,
   type RpgSkillRow,
 } from './levelupRpgProfile'
+import { PersonLinkPicker } from './PersonLinkPicker'
+import { LEVELUP_RPG_ENTITY_ID, PERSON_ENTITY } from './personEntityTypes'
 
 const C = {
   bg: '#F8F8F6',
@@ -693,6 +695,23 @@ export function LevelupRpgPage({
               ))}
             </div>
           </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            padding: '12px 14px',
+            borderRadius: C.radius,
+            background: C.card,
+            border: `1px solid ${C.line}`,
+            boxShadow: C.shadow,
+            maxWidth: 420,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, color: C.purple, marginBottom: 8 }}>통합 인물 DB</div>
+          <PersonLinkPicker entityType={PERSON_ENTITY.LEVELUP_RPG} entityId={LEVELUP_RPG_ENTITY_ID} compact />
         </div>
 
         <p style={{ marginTop: 20, textAlign: 'center', fontSize: 11, color: C.hint, lineHeight: 1.6 }}>

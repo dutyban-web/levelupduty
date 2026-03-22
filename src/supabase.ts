@@ -1,4 +1,5 @@
 import { createClient, type Session, type PostgrestError } from '@supabase/supabase-js'
+import { SOLUTION_BOOK_TITLE } from './solutionBookPhrases'
 
 export type { Session }
 
@@ -39,6 +40,246 @@ export function onAuthStateChange(callback: (session: Session | null) => void): 
     callback(session)
   })
   return () => subscription.unsubscribe()
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  unified_people + person_entity_links — 통합 인물 DB (다른 모듈 삭제 시 링크 정리용 포함)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface UnifiedPersonRow {
+  id: string
+  user_id: string
+  display_name: string
+  sort_order: number
+  note: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonEntityLinkRow {
+  id: string
+  user_id: string
+  person_id: string
+  entity_type: string
+  entity_id: string
+  role: string | null
+  created_at: string
+}
+
+function parseUnifiedPerson(r: Record<string, unknown>): UnifiedPersonRow {
+  const meta = r.metadata
+  return {
+    id: String(r.id ?? ''),
+    user_id: String(r.user_id ?? ''),
+    display_name: String(r.display_name ?? ''),
+    sort_order: Number(r.sort_order ?? 0),
+    note: r.note != null && String(r.note).trim() !== '' ? String(r.note) : null,
+    metadata: typeof meta === 'object' && meta !== null && !Array.isArray(meta) ? (meta as Record<string, unknown>) : {},
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
+}
+
+async function _peopleUserId(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.user?.id) return session.user.id
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id ?? null
+}
+
+/** 엔티티 삭제 시 연결된 인물 링크 제거 (외부에서도 사용 가능) */
+export async function deletePersonEntityLinksForEntity(entityType: string, entityId: string): Promise<void> {
+  if (!supabase) return
+  const uid = await _peopleUserId()
+  if (!uid) return
+  try {
+    const { error } = await supabase
+      .from('person_entity_links')
+      .delete()
+      .eq('user_id', uid)
+      .eq('entity_type', entityType)
+      .eq('entity_id', entityId)
+    if (error) console.error('[Supabase] deletePersonEntityLinksForEntity:', error.message)
+  } catch (e) {
+    console.error('[Supabase] deletePersonEntityLinksForEntity 예외:', e)
+  }
+}
+
+export async function fetchUnifiedPeople(): Promise<UnifiedPersonRow[]> {
+  if (!supabase) return []
+  const uid = await _peopleUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('unified_people')
+      .select('id, user_id, display_name, sort_order, note, metadata, created_at, updated_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('updated_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchUnifiedPeople 실패:', error.message)
+      return []
+    }
+    return data.map(r => parseUnifiedPerson(r as Record<string, unknown>))
+  } catch (e) {
+    console.error('[Supabase] fetchUnifiedPeople 예외:', e)
+    return []
+  }
+}
+
+export async function insertUnifiedPerson(displayName = '이름 없음'): Promise<UnifiedPersonRow | null> {
+  if (!supabase) return null
+  const uid = await _peopleUserId()
+  if (!uid) return null
+  const { count } = await supabase.from('unified_people').select('*', { count: 'exact', head: true }).eq('user_id', uid)
+  const sortOrder = count ?? 0
+  const { data, error } = await supabase
+    .from('unified_people')
+    .insert({
+      user_id: uid,
+      display_name: displayName.trim() || '이름 없음',
+      sort_order: sortOrder,
+      note: null,
+      metadata: {},
+    })
+    .select('id, user_id, display_name, sort_order, note, metadata, created_at, updated_at')
+    .single()
+  if (error) {
+    console.error('[Supabase] insertUnifiedPerson 실패:', error.message)
+    return null
+  }
+  return parseUnifiedPerson(data as Record<string, unknown>)
+}
+
+export async function updateUnifiedPerson(
+  id: string,
+  patch: { display_name?: string; note?: string | null; sort_order?: number; metadata?: Record<string, unknown> },
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _peopleUserId()
+  if (!uid) return false
+  const p: Record<string, unknown> = {}
+  if (patch.display_name !== undefined) p.display_name = patch.display_name
+  if (patch.note !== undefined) p.note = patch.note
+  if (patch.sort_order !== undefined) p.sort_order = patch.sort_order
+  if (patch.metadata !== undefined) p.metadata = patch.metadata
+  if (Object.keys(p).length === 0) return true
+  p.updated_at = new Date().toISOString()
+  const { error } = await supabase.from('unified_people').update(p).eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] updateUnifiedPerson 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteUnifiedPerson(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _peopleUserId()
+  if (!uid) return false
+  const { error } = await supabase.from('unified_people').delete().eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] deleteUnifiedPerson 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function fetchPersonIdsForEntity(entityType: string, entityId: string): Promise<string[]> {
+  if (!supabase) return []
+  const uid = await _peopleUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('person_entity_links')
+      .select('person_id')
+      .eq('user_id', uid)
+      .eq('entity_type', entityType)
+      .eq('entity_id', entityId)
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchPersonIdsForEntity 실패:', error.message)
+      return []
+    }
+    return data.map(r => String((r as { person_id: string }).person_id))
+  } catch (e) {
+    console.error('[Supabase] fetchPersonIdsForEntity 예외:', e)
+    return []
+  }
+}
+
+export async function replacePersonLinksForEntity(
+  entityType: string,
+  entityId: string,
+  personIds: string[],
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _peopleUserId()
+  if (!uid) return false
+  const unique = Array.from(new Set(personIds.filter(Boolean)))
+  try {
+    const { error: delErr } = await supabase
+      .from('person_entity_links')
+      .delete()
+      .eq('user_id', uid)
+      .eq('entity_type', entityType)
+      .eq('entity_id', entityId)
+    if (delErr) {
+      console.error('[Supabase] replacePersonLinks 삭제 실패:', delErr.message)
+      return false
+    }
+    if (unique.length === 0) return true
+    const rows = unique.map(person_id => ({
+      user_id: uid,
+      person_id,
+      entity_type: entityType,
+      entity_id: entityId,
+      role: null as string | null,
+    }))
+    const { error: insErr } = await supabase.from('person_entity_links').insert(rows)
+    if (insErr) {
+      console.error('[Supabase] replacePersonLinks 삽입 실패:', insErr.message)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error('[Supabase] replacePersonLinksForEntity 예외:', e)
+    return false
+  }
+}
+
+export async function fetchPersonEntityLinksForPerson(personId: string): Promise<PersonEntityLinkRow[]> {
+  if (!supabase) return []
+  const uid = await _peopleUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('person_entity_links')
+      .select('id, user_id, person_id, entity_type, entity_id, role, created_at')
+      .eq('user_id', uid)
+      .eq('person_id', personId)
+      .order('created_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchPersonEntityLinksForPerson 실패:', error.message)
+      return []
+    }
+    return data.map(r => {
+      const x = r as Record<string, unknown>
+      return {
+        id: String(x.id ?? ''),
+        user_id: String(x.user_id ?? ''),
+        person_id: String(x.person_id ?? ''),
+        entity_type: String(x.entity_type ?? ''),
+        entity_id: String(x.entity_id ?? ''),
+        role: x.role != null ? String(x.role) : null,
+        created_at: String(x.created_at ?? ''),
+      }
+    })
+  } catch (e) {
+    console.error('[Supabase] fetchPersonEntityLinksForPerson 예외:', e)
+    return []
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -653,6 +894,7 @@ export async function restoreUserQuestRow(id: string): Promise<boolean> {
 /** 휴지통에서 영구 삭제 */
 export async function permanentDeleteUserQuestRow(id: string): Promise<void> {
   if (!supabase) return
+  await deletePersonEntityLinksForEntity('user_quest', id)
   const { error } = await supabase.from('quests').delete().eq('id', id)
   if (error) console.error('[Supabase] permanentDeleteUserQuestRow 실패:', error.message)
 }
@@ -1286,6 +1528,22 @@ export async function insertFortuneEvent(question: string, drawnCards: DrawnCard
   return calendarEventToFortuneRow(row)
 }
 
+/** 점괘용: 해결의 책 한 줄 답 저장 (calendar_events fortune, 아카이브·캘린더와 동일 파이프라인) */
+export async function insertSolutionBookEvent(phrase: string, eventDate?: string): Promise<ReadingLogRow | null> {
+  const date = eventDate ?? new Date().toISOString().slice(0, 10)
+  const content: Record<string, unknown> = {
+    source: 'solution_book',
+    question: SOLUTION_BOOK_TITLE,
+    solution_phrase: phrase,
+    drawn_cards: [{ emoji: '📖', name_ko: phrase }],
+    notes: null,
+    fortune_type: SOLUTION_BOOK_TITLE,
+  }
+  const row = await insertCalendarEvent('fortune', date, SOLUTION_BOOK_TITLE, content)
+  if (!row) return null
+  return calendarEventToFortuneRow(row)
+}
+
 /** 점괘용: 운세 피드백 저장 (calendar_events에 저장, daily_logs에도 동기화) */
 export async function insertFortuneFeedback(fortuneFeedback: string, recordDate: string): Promise<CalendarEventRow | null> {
   const content = { source: 'feedback', fortune_feedback: fortuneFeedback }
@@ -1307,7 +1565,16 @@ export async function updateFortuneEvent(id: string, patch: { question?: string;
     if (patch.accuracy_score !== undefined) c.accuracy_score = patch.accuracy_score
     if (patch.related_people !== undefined) c.related_people = patch.related_people?.trim() || null
     const eventDate = patch.created_at ? patch.created_at.slice(0, 10) : existing.event_date
-    const title = (c.drawn_cards as unknown[])?.length ? `[점괘] ${(c.drawn_cards as { name_ko: string }[]).map(x => x.name_ko).join(', ')}` : String(c.question || '[점괘]')
+    const drawnList = ((c.drawn_cards as unknown[]) ?? []) as { name_ko: string }[]
+    let title: string
+    if (c.source === 'solution_book') {
+      const phrase = drawnList[0]?.name_ko ?? String(c.solution_phrase ?? c.question ?? SOLUTION_BOOK_TITLE)
+      title = phrase.length > 80 ? `${SOLUTION_BOOK_TITLE} — ${phrase.slice(0, 77)}…` : `${SOLUTION_BOOK_TITLE} — ${phrase}`
+    } else if (drawnList.length > 0) {
+      title = `[점괘] ${drawnList.map(x => x.name_ko).join(', ')}`
+    } else {
+      title = String(c.question || '[점괘]')
+    }
     const updated = await updateCalendarEvent(id, { event_date: eventDate, title, content: c })
     return updated ? calendarEventToFortuneRow(updated) : null
   }
@@ -1326,6 +1593,7 @@ export async function updateFortuneEvent(id: string, patch: { question?: string;
 
 /** 점괘용: 점괘 기록 삭제 (calendar_events + reading_logs 둘 다 시도, 마이그레이션 전 데이터 처리) */
 export async function deleteFortuneEvent(id: string): Promise<boolean> {
+  await deletePersonEntityLinksForEntity('reading_log', id)
   const fromCal = await deleteCalendarEvent(id)
   const fromLegacy = await deleteReadingLog(id)
   return fromCal || fromLegacy
@@ -2474,9 +2742,136 @@ export async function deleteManualDocument(id: string): Promise<boolean> {
   if (!supabase) return false
   const uid = await _manualUserId()
   if (!uid) return false
+  await deletePersonEntityLinksForEntity('manual_document', id)
   const { error } = await supabase.from('manual_documents').delete().eq('id', id).eq('user_id', uid)
   if (error) {
     console.error('[Supabase] deleteManualDocument 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  manual_sites — Manual 링크·북마크 (RLS: 본인만)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface ManualSiteRow {
+  id: string
+  user_id: string
+  title: string
+  url: string
+  note: string | null
+  category: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+function parseManualSiteRow(r: Record<string, unknown>): ManualSiteRow {
+  return {
+    id: String(r.id ?? ''),
+    user_id: String(r.user_id ?? ''),
+    title: String(r.title ?? ''),
+    url: String(r.url ?? ''),
+    note: r.note != null && r.note !== '' ? String(r.note) : null,
+    category: String(r.category ?? ''),
+    sort_order: Number(r.sort_order ?? 0),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
+}
+
+export async function fetchManualSites(): Promise<ManualSiteRow[]> {
+  if (!supabase) return []
+  const uid = await _manualUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('manual_sites')
+      .select('id, user_id, title, url, note, category, sort_order, created_at, updated_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('updated_at', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManualSites 실패:', error.message)
+      return []
+    }
+    return data.map(r => parseManualSiteRow(r as Record<string, unknown>))
+  } catch (e) {
+    console.error('[Supabase] fetchManualSites 예외:', e)
+    return []
+  }
+}
+
+export async function insertManualSite(
+  payload: { title?: string; url?: string; note?: string | null; category?: string } = {},
+): Promise<ManualSiteRow | null> {
+  if (!supabase) return null
+  const uid = await _manualUserId()
+  if (!uid) {
+    console.error('[Supabase] insertManualSite: 로그인 필요')
+    return null
+  }
+  const { count } = await supabase
+    .from('manual_sites')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', uid)
+  const sortOrder = count ?? 0
+  const { data, error } = await supabase
+    .from('manual_sites')
+    .insert({
+      user_id: uid,
+      title: (payload.title ?? '새 링크').trim() || '새 링크',
+      url: (payload.url ?? 'https://').trim() || 'https://',
+      note: payload.note != null && String(payload.note).trim() !== '' ? String(payload.note).trim() : null,
+      category: (payload.category ?? '').trim(),
+      sort_order: sortOrder,
+    })
+    .select('id, user_id, title, url, note, category, sort_order, created_at, updated_at')
+    .single()
+  if (error) {
+    console.error('[Supabase] insertManualSite 실패:', error.message)
+    return null
+  }
+  return parseManualSiteRow(data as Record<string, unknown>)
+}
+
+export async function updateManualSite(
+  id: string,
+  patch: {
+    title?: string
+    url?: string
+    note?: string | null
+    category?: string
+    sort_order?: number
+  },
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const p: Record<string, unknown> = {}
+  if (patch.title !== undefined) p.title = patch.title
+  if (patch.url !== undefined) p.url = patch.url
+  if (patch.note !== undefined) p.note = patch.note
+  if (patch.category !== undefined) p.category = patch.category
+  if (patch.sort_order !== undefined) p.sort_order = patch.sort_order
+  if (Object.keys(p).length === 0) return true
+  p.updated_at = new Date().toISOString()
+  const { error } = await supabase.from('manual_sites').update(p).eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] updateManualSite 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteManualSite(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const { error } = await supabase.from('manual_sites').delete().eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] deleteManualSite 실패:', error.message)
     return false
   }
   return true

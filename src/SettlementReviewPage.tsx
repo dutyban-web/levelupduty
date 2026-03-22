@@ -17,6 +17,7 @@ import {
   upsertEntry,
   toYMD,
 } from './settlementData'
+import { useIsMobile } from './hooks/useIsMobile'
 
 const KIND_ORDER: { id: SettlementKind; label: string; hint: string }[] = [
   { id: 'daily', label: '일일', hint: '매일' },
@@ -27,16 +28,6 @@ const KIND_ORDER: { id: SettlementKind; label: string; hint: string }[] = [
   { id: 'daeun', label: '대운', hint: '사주·장기' },
   { id: 'topic', label: '주제별', hint: '자유 주제' },
 ]
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth < 768)
-    window.addEventListener('resize', fn)
-    return () => window.removeEventListener('resize', fn)
-  }, [])
-  return m
-}
 
 const inp: import('react').CSSProperties = {
   width: '100%',

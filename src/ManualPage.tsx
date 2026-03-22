@@ -2,7 +2,7 @@
  * Manual — 책장 목록 (문서 클릭 시 /manual/:id 상세)
  */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   DndContext,
   closestCorners,
@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { FileText, GripVertical, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { ManualDocumentDetail } from './ManualDocumentDetail'
+import { ManualSitesPanel } from './ManualSitesPanel'
 import {
   supabase,
   fetchManualDocuments,
@@ -250,7 +251,9 @@ export function ManualPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const pathParts = useMemo(() => location.pathname.replace(/^\//, '').split('/').filter(Boolean), [location.pathname])
-  const routeDocId = pathParts[0] === 'manual' && pathParts[1] ? pathParts[1] : null
+  const isSitesRoute = pathParts[0] === 'manual' && pathParts[1] === 'sites'
+  const routeDocId =
+    pathParts[0] === 'manual' && pathParts[1] && pathParts[1] !== 'sites' ? pathParts[1] : null
 
   const [docs, setDocs] = useState<ManualDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -267,11 +270,12 @@ export function ManualPage() {
     return list
   }, [])
 
-  /** 목록 URL일 때만 목록 로드 (상세 ↔ 목록 전환 시에도 훅 순서 유지) */
+  /** 문서 목록 URL일 때만 책장 로드 (사이트 탭·문서 상세에서는 생략) */
   useEffect(() => {
     if (routeDocId) return
+    if (isSitesRoute) return
     void reload()
-  }, [routeDocId, reload])
+  }, [routeDocId, isSitesRoute, reload])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -410,20 +414,56 @@ export function ManualPage() {
             Manual
           </h1>
           <p className="mt-2 text-sm text-slate-600 leading-relaxed max-w-2xl">
-            매뉴얼·체크리스트·업무 문서를 한곳에서 관리합니다. 책을 열면 본문을 노션처럼 편집하고, 탐색기에서{' '}
-            <strong className="text-violet-700">사진·동영상·파일을 드래그</strong>해 넣을 수 있습니다.
+            {isSitesRoute ? (
+              <>
+                북마크, 지인 SNS, 유튜브 영상 등 자주 여는 링크를 정리합니다. 구분(예: SNS, 유튜브)으로 묶어 두면 찾기 쉽습니다.
+              </>
+            ) : (
+              <>
+                매뉴얼·체크리스트·업무 문서를 한곳에서 관리합니다. 책을 열면 본문을 노션처럼 편집하고, 탐색기에서{' '}
+                <strong className="text-violet-700">사진·동영상·파일을 드래그</strong>해 넣을 수 있습니다.
+              </>
+            )}
           </p>
+          <nav className="mt-4 flex flex-wrap gap-2" aria-label="Manual 하위 메뉴">
+            <Link
+              to="/manual"
+              className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-bold transition-colors ${
+                !isSitesRoute
+                  ? 'bg-violet-600 text-white shadow-sm'
+                  : 'border border-violet-200 bg-white text-violet-800 hover:bg-violet-50'
+              }`}
+            >
+              문서
+            </Link>
+            <Link
+              to="/manual/sites"
+              className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-bold transition-colors ${
+                isSitesRoute
+                  ? 'bg-teal-600 text-white shadow-sm'
+                  : 'border border-teal-200 bg-white text-teal-900 hover:bg-teal-50'
+              }`}
+            >
+              사이트 목록
+            </Link>
+          </nav>
         </div>
-        <button
-          type="button"
-          onClick={addDoc}
-          className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-violet-700"
-        >
-          <Plus className="w-4 h-4" />
-          새 문서
-        </button>
+        {!isSitesRoute && (
+          <button
+            type="button"
+            onClick={addDoc}
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 text-white px-4 py-2.5 text-sm font-bold hover:bg-violet-700"
+          >
+            <Plus className="w-4 h-4" />
+            새 문서
+          </button>
+        )}
       </header>
 
+      {isSitesRoute ? (
+        <ManualSitesPanel />
+      ) : (
+        <>
       <div className="mb-4 rounded-2xl border border-violet-200/80 bg-violet-50/95 px-3 py-3 shadow-sm sm:px-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-3 sm:gap-y-2">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
@@ -546,6 +586,8 @@ export function ManualPage() {
             </ul>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   )
