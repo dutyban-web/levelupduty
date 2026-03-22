@@ -1,13 +1,16 @@
 /**
  * 단일 매뉴얼 문서 보기·편집 — 제목·본문 우선, 메타데이터는 좌측 슬라이드 패널
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Menu, Paperclip, Plus, StickyNote, Trash2, Upload, X } from 'lucide-react'
-import { manualCoverHueFromId } from './manualCoverHue'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, ChevronLeft, ChevronRight, Menu, Paperclip, Plus, StickyNote, Trash2, Upload, X } from 'lucide-react'
+import { ManualBook3D } from './ManualBook3D'
+import { effectiveManualCoverHue, hueFromCategory } from './manualCoverHue'
 import { ManualDocEditor, parseAttachments } from './ManualEditor'
 import {
   uploadImageToMedia,
   fetchManualDocumentById,
+  fetchManualDocuments,
   updateManualDocument,
   deleteManualDocument,
   type ManualAttachment,
@@ -15,6 +18,8 @@ import {
 } from './supabase'
 import { PersonLinkPicker } from './PersonLinkPicker'
 import { PERSON_ENTITY } from './personEntityTypes'
+import { UnifiedHalfStarRating } from './UnifiedHalfStarRating'
+import { UnifiedFavoriteToggle } from './UnifiedFavoriteToggle'
 
 function fmtWhen(s: string | null | undefined): string {
   if (!s) return '—'
@@ -25,16 +30,28 @@ function fmtWhen(s: string | null | undefined): string {
   }
 }
 
+/** 문서 하단 책장 — 목록 화면과 유사한 질감 */
+const MANUAL_SHELF_BG: CSSProperties = {
+  backgroundColor: '#5c4a3f',
+  backgroundImage:
+    'repeating-linear-gradient(to bottom, #5c4a3f 0px, #5c4a3f 168px, #3d322b 168px, #3d322b 172px, #5c4a3f 172px)',
+}
+
 export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack: () => void }) {
+  const navigate = useNavigate()
   const [doc, setDoc] = useState<ManualDocumentRow | null>(null)
   const [loading, setLoading] = useState(true)
+  const [sameCategoryDocs, setSameCategoryDocs] = useState<ManualDocumentRow[]>([])
   const [infoOpen, setInfoOpen] = useState(false)
   const [memoOpen, setMemoOpen] = useState(false)
+  /** 같은 카테고리 책장 — 본문 아래 문서 흐름(스크롤 끝에서 확인) */
+  const [shelfDrawerOpen, setShelfDrawerOpen] = useState(true)
   const [tagInput, setTagInput] = useState('')
   const titleDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tagsDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const notesDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attachInputRef = useRef<HTMLInputElement>(null)
+  const categoryAtFocusRef = useRef<string | null>(null)
 
   /** URL의 docId가 바뀔 때마다 이전 문서 상태를 비우고 다시 불러옴 (SPA 전환 시 stale 화면 방지) */
   useEffect(() => {
@@ -43,6 +60,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
     setLoading(true)
     setInfoOpen(false)
     setMemoOpen(false)
+    setShelfDrawerOpen(true)
     setTagInput('')
 
     void (async () => {
@@ -72,10 +90,32 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
       if (e.key !== 'Escape') return
       if (infoOpen) setInfoOpen(false)
       else if (memoOpen) setMemoOpen(false)
+      else if (shelfDrawerOpen) setShelfDrawerOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [infoOpen, memoOpen])
+  }, [infoOpen, memoOpen, shelfDrawerOpen])
+
+  /** 같은 카테고리 문서만 가로 책장 — 카테고리 비어 있으면 표시 안 함 */
+  useEffect(() => {
+    const cat = doc?.category?.trim()
+    if (!cat) {
+      setSameCategoryDocs([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const all = await fetchManualDocuments()
+      if (cancelled) return
+      const same = all
+        .filter(d => (d.category ?? '').trim() === cat)
+        .sort((a, b) => a.sort_order - b.sort_order)
+      setSameCategoryDocs(same)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [doc?.id, doc?.category])
 
   const attachments = useMemo(() => (doc ? parseAttachments(doc.attachments) : []), [doc])
 
@@ -190,7 +230,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
           <div className="flex-1" />
           <div className="h-9 w-9 shrink-0 animate-pulse rounded-md bg-slate-100" />
         </header>
-        <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-4 sm:px-6">
+        <main className="mx-auto w-full max-w-[57.6rem] px-4 pb-24 pt-4 sm:px-6">
           <div className="mb-6 flex items-center gap-2 text-sm text-slate-400">
             <span
               className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-slate-200 border-t-violet-500"
@@ -249,14 +289,24 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
               id="manual-category"
               type="text"
               value={doc.category}
+              onFocus={() => {
+                categoryAtFocusRef.current = doc.category
+              }}
               onChange={e => {
                 const v = e.target.value
                 setDoc(d => (d ? { ...d, category: v } : null))
               }}
               onBlur={() => {
                 const c = doc.category.trim()
-                setDoc(d => (d ? { ...d, category: c } : null))
-                void updateManualDocument(doc.id, { category: c })
+                const prev = (categoryAtFocusRef.current ?? '').trim()
+                if (c !== prev) {
+                  const nextHue = c ? hueFromCategory(c) : null
+                  setDoc(d => (d ? { ...d, category: c, cover_hue: nextHue } : null))
+                  void updateManualDocument(doc.id, { category: c, cover_hue: nextHue })
+                } else {
+                  setDoc(d => (d ? { ...d, category: c } : null))
+                  void updateManualDocument(doc.id, { category: c })
+                }
               }}
               placeholder="예: 업무, 학습, 참고…"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
@@ -271,7 +321,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
               <div
                 className="h-7 w-7 shrink-0 rounded-md border border-slate-200 shadow-inner"
                 style={{
-                  backgroundColor: `hsl(${doc.cover_hue ?? manualCoverHueFromId(doc.id)} 34% 44%)`,
+                  backgroundColor: `hsl(${effectiveManualCoverHue(doc)} 34% 44%)`,
                 }}
                 title="미리보기"
               />
@@ -280,7 +330,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
                 type="range"
                 min={0}
                 max={360}
-                value={doc.cover_hue ?? manualCoverHueFromId(doc.id)}
+                value={effectiveManualCoverHue(doc)}
                 onChange={e => {
                   const v = Math.round(Number(e.target.value))
                   setDoc(d => (d ? { ...d, cover_hue: v } : null))
@@ -302,7 +352,9 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
                 자동
               </button>
             </div>
-            <p className="mt-1.5 m-0 text-[10px] text-slate-400">슬라이더로 지정하거나 자동은 문서마다 id 기반 색입니다.</p>
+            <p className="mt-1.5 m-0 text-[10px] text-slate-400">
+              카테고리가 있으면 같은 이름끼리 같은 기본색이며, 슬라이더로 덮어쓸 수 있습니다. 자동은 카테고리 기본(없으면 문서 id 기반)으로 돌아갑니다.
+            </p>
           </div>
           <div>
             <p className="m-0 mb-1 text-[11px] font-bold text-slate-500">수정일</p>
@@ -352,6 +404,39 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
               onBlur={() => void updateManualDocument(doc.id, { completion_rate: doc.completion_rate })}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
+          </div>
+          <div>
+            <p className="m-0 mb-1 text-[11px] font-bold text-slate-500">레이팅 (통합 레이팅과 동일)</p>
+            <p className="mt-0 mb-2 text-[10px] leading-relaxed text-slate-400">
+              마스터 보드 → 데이터 창고 → <strong className="font-semibold text-slate-500">통합 레이팅</strong>과 같은
+              척도입니다. 별 왼쪽·오른쪽으로 0.5점 단위, 최대 5점. 0은 미설정입니다.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <UnifiedHalfStarRating
+                value={doc.rating}
+                onChange={v => {
+                  setDoc(d => (d ? { ...d, rating: v } : null))
+                  void updateManualDocument(doc.id, { rating: v })
+                }}
+                starSize={26}
+                ariaLabel="문서 레이팅"
+              />
+              <span
+                className={`text-sm font-extrabold ${doc.rating > 0 ? 'text-amber-700' : 'text-slate-400'}`}
+              >
+                {doc.rating > 0 ? `${doc.rating} / 5` : '— / 5'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDoc(d => (d ? { ...d, rating: 0 } : null))
+                void updateManualDocument(doc.id, { rating: 0 })
+              }}
+              className="mt-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
+            >
+              레이팅 초기화
+            </button>
           </div>
           <div className="mt-4">
             <p className="m-0 mb-2 text-[11px] font-bold text-slate-500">통합 인물 DB</p>
@@ -521,6 +606,13 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
         >
           <ArrowLeft className="h-[18px] w-[18px]" strokeWidth={1.75} />
         </button>
+        <UnifiedFavoriteToggle
+          kind="manual"
+          refId={doc.id}
+          title={doc.title?.trim() || '제목 없음'}
+          subtitle={doc.category?.trim() ?? ''}
+          href={`/manual/${doc.id}`}
+        />
         <div className="min-w-0 flex-1" />
         <button
           type="button"
@@ -556,25 +648,128 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-          <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-2 sm:px-6">
-            <label className="sr-only" htmlFor="manual-detail-title">
-              제목
-            </label>
-            <input
-              id="manual-detail-title"
-              value={doc.title}
-              onChange={e => {
-                const v = e.target.value
-                setDoc(d => (d ? { ...d, title: v } : null))
-                scheduleTitle(v)
-              }}
-              className="mb-1 w-full border-0 border-b border-transparent bg-transparent px-0 py-2 text-3xl font-bold tracking-tight text-slate-900 placeholder:text-slate-300 focus:border-slate-200 focus:outline-none focus:ring-0 sm:text-[2rem] sm:leading-tight"
-              placeholder="제목 없음"
-            />
-            <div className="mt-3 sm:mt-4">
-              <ManualDocEditor doc={doc} onPersistBlocks={onPersistBlocks} />
-            </div>
-          </main>
+          <div
+            className={
+              doc.category?.trim() && sameCategoryDocs.length > 0
+                ? 'flex min-h-full min-w-0 flex-col'
+                : 'contents'
+            }
+          >
+            <main
+              className={`mx-auto w-full max-w-[57.6rem] shrink-0 px-4 pt-2 sm:px-6 ${
+                doc.category?.trim() && sameCategoryDocs.length > 0 ? 'pb-6' : 'pb-24'
+              }`}
+            >
+              <label className="sr-only" htmlFor="manual-detail-title">
+                제목
+              </label>
+              <input
+                id="manual-detail-title"
+                value={doc.title}
+                onChange={e => {
+                  const v = e.target.value
+                  setDoc(d => (d ? { ...d, title: v } : null))
+                  scheduleTitle(v)
+                }}
+                className="mb-1 w-full border-0 border-b border-transparent bg-transparent px-0 py-2 text-3xl font-bold tracking-tight text-slate-900 placeholder:text-slate-300 focus:border-slate-200 focus:outline-none focus:ring-0 sm:text-[2rem] sm:leading-tight"
+                placeholder="제목 없음"
+              />
+              <div className="mt-3 sm:mt-4">
+                <ManualDocEditor doc={doc} onPersistBlocks={onPersistBlocks} />
+              </div>
+            </main>
+
+            {doc.category?.trim() && sameCategoryDocs.length > 0 && (
+              <div
+                id="manual-same-category-shelf"
+                className="mt-auto shrink-0 border-t border-slate-100/90 bg-white pb-3 pt-5 sm:pb-4 sm:pt-6"
+              >
+              {!shelfDrawerOpen && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 border-t border-[#2c221c] px-3 py-1.5 text-left shadow-[0_4px_18px_rgba(0,0,0,0.12)] transition hover:brightness-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#4d3d34] sm:gap-2.5 sm:px-4"
+                  style={MANUAL_SHELF_BG}
+                  onClick={() => setShelfDrawerOpen(true)}
+                  aria-expanded={false}
+                  aria-controls="manual-same-category-shelf-panel"
+                  title="같은 카테고리 책장 열기"
+                >
+                  <ChevronRight className="h-4 w-4 shrink-0 text-amber-100/90" strokeWidth={2.5} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold tracking-wide text-amber-100/95">
+                    같은 카테고리 · {doc.category.trim()}
+                  </span>
+                </button>
+              )}
+              {shelfDrawerOpen && (
+                <section
+                  id="manual-same-category-shelf-panel"
+                  className="flex max-h-[min(42vh,300px)] flex-col overflow-hidden rounded-xl border border-[#2c221c] shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
+                  style={MANUAL_SHELF_BG}
+                  aria-hidden={false}
+                  aria-label="같은 카테고리 문서"
+                >
+                  <div className="flex shrink-0 items-center gap-2 border-b border-black/25 px-3 py-1.5 sm:gap-2.5 sm:px-4">
+                    <button
+                      type="button"
+                      onClick={() => setShelfDrawerOpen(false)}
+                      className="shrink-0 rounded-md p-1.5 text-amber-100/90 hover:bg-black/20 hover:text-amber-50"
+                      aria-label="책장 접기"
+                      title="책장 접기"
+                    >
+                      <ChevronLeft className="h-4 w-4 text-amber-100/90" strokeWidth={2.5} aria-hidden />
+                    </button>
+                    <p className="m-0 min-w-0 flex-1 truncate pl-0.5 text-left text-[11px] font-extrabold tracking-wide text-amber-100/95">
+                      같은 카테고리 · {doc.category.trim()}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setShelfDrawerOpen(false)}
+                      className="shrink-0 rounded-md p-1.5 text-amber-100/85 hover:bg-black/20 hover:text-amber-50"
+                      aria-label="책장 닫기"
+                    >
+                      <X className="h-4 w-4" strokeWidth={2.25} />
+                    </button>
+                  </div>
+                  <div className="min-h-0 overflow-x-auto overflow-y-hidden overscroll-x-contain py-2 [-webkit-overflow-scrolling:touch]">
+                    <ul className="m-0 flex w-max list-none flex-nowrap items-stretch gap-5 px-3 pb-1 sm:gap-6 sm:px-4">
+                      {sameCategoryDocs.map(d => {
+                        const hue = effectiveManualCoverHue(d)
+                        const title = d.title?.trim() || '제목 없음'
+                        const chipBg = `hsl(${hue} 34% 40%)`
+                        const isCurrent = d.id === docId
+                        return (
+                          <li key={d.id} className="relative flex w-[104px] shrink-0 flex-col">
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/manual/${d.id}`)}
+                              className="flex h-full min-h-0 w-full flex-col items-stretch gap-0 rounded-lg text-left transition-[transform,box-shadow] duration-200 ease-out hover:scale-[1.03] hover:shadow-[0_10px_24px_rgba(0,0,0,0.38)] focus-visible:scale-[1.03] focus-visible:shadow-[0_10px_24px_rgba(0,0,0,0.38)] focus-visible:outline-none"
+                            >
+                              <div className="flex h-[100px] w-full shrink-0 items-end justify-center pb-0.5">
+                                <div
+                                  className={`origin-top scale-[0.82] rounded-md ${isCurrent ? 'ring-2 ring-amber-300 ring-offset-0' : ''}`}
+                                >
+                                  <ManualBook3D hue={hue} />
+                                </div>
+                              </div>
+                              <div
+                                className="mx-auto mt-1.5 flex h-[2.5rem] w-full max-w-[100px] items-start justify-center overflow-hidden rounded px-0.5 py-0.5 text-center text-[10px] font-bold leading-snug text-white"
+                                style={{ backgroundColor: chipBg }}
+                                title={title}
+                              >
+                                <span className="line-clamp-2 w-full break-words">{title}</span>
+                              </div>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                  <div className="h-px shrink-0 border-t border-black/30 bg-black/15" aria-hidden />
+                </section>
+              )}
+              </div>
+            )}
+          </div>
         </div>
 
         <aside

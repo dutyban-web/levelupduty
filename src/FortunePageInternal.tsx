@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
-import { ChevronRight, ChevronLeft, MoreVertical, Plus, X, List, Trash2, Pencil } from 'lucide-react'
+import { CalendarDays, ChevronRight, ChevronLeft, MoreVertical, Plus, X, List, Trash2, Pencil } from 'lucide-react'
 import { Solar } from 'lunar-javascript'
 import { useIsMobile } from './hooks/useIsMobile'
 import {
@@ -292,6 +292,129 @@ function toDatetimeLocal(iso: string): string {
   const h = String(d.getHours()).padStart(2, '0')
   const min = String(d.getMinutes()).padStart(2, '0')
   return `${y}-${m}-${day}T${h}:${min}`
+}
+
+/** 아카이브 표: 짧은 표기 YYYY/MM/DD HH:mm (로컬 24시간) */
+function formatFortuneArchiveDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}/${m}/${day} ${h}:${min}`
+}
+
+/** 아카이브 표 입력 → ISO (로컬 날짜·시간으로 해석) */
+function parseFortuneArchiveDateTimeInput(s: string): string | null {
+  const t = s.trim()
+  if (!t) return null
+  const m = t.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})[\sT](\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const h = Number(m[4])
+  const min = Number(m[5])
+  if (Number.isNaN(y) || h < 0 || h > 23 || min < 0 || min > 59) return null
+  const dt = new Date(y, mo - 1, d, h, min, 0, 0)
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null
+  return dt.toISOString()
+}
+
+function openNativeDatetimePicker(el: HTMLInputElement | null) {
+  if (!el) return
+  try {
+    const anyEl = el as HTMLInputElement & { showPicker?: () => Promise<void> }
+    if (typeof anyEl.showPicker === 'function') {
+      void anyEl.showPicker()
+    } else {
+      el.click()
+    }
+  } catch {
+    el.click()
+  }
+}
+
+function FortuneArchiveDateCell({
+  log,
+  isSolutionBook,
+  cellInp,
+  onPatch,
+}: {
+  log: ReadingLogRow
+  isSolutionBook: boolean
+  cellInp: React.CSSProperties
+  onPatch: (id: string, patch: Parameters<typeof updateFortuneEvent>[1]) => void | Promise<void>
+}) {
+  const [draft, setDraft] = useState(() => formatFortuneArchiveDateTime(log.created_at))
+  const pickerRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    setDraft(formatFortuneArchiveDateTime(log.created_at))
+  }, [log.id, log.created_at])
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, width: '100%' }}
+      onClick={e => e.stopPropagation()}
+    >
+      <input
+        type="text"
+        className="fortune-log-datetime-input"
+        inputMode="numeric"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder="YYYY/MM/DD HH:mm"
+        title="YYYY/MM/DD HH:mm (24시간) — 직접 입력 또는 오른쪽 달력"
+        onBlur={() => {
+          const iso = parseFortuneArchiveDateTimeInput(draft)
+          if (iso === null) {
+            setDraft(formatFortuneArchiveDateTime(log.created_at))
+            return
+          }
+          if (iso !== log.created_at) void onPatch(log.id, { created_at: iso })
+        }}
+        style={{
+          ...cellInp,
+          flex: 1,
+          fontSize: 11,
+          minWidth: 0,
+          color: isSolutionBook ? '#5c3d3a' : '#787774',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      />
+      <button
+        type="button"
+        title="달력에서 날짜·시간 선택"
+        aria-label="달력에서 날짜·시간 선택"
+        className="shrink-0 rounded p-0.5 text-slate-500 transition-colors hover:bg-violet-100 hover:text-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70"
+        onClick={e => {
+          e.preventDefault()
+          e.stopPropagation()
+          openNativeDatetimePicker(pickerRef.current)
+        }}
+      >
+        <CalendarDays className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+      </button>
+      <input
+        ref={pickerRef}
+        type="datetime-local"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        value={toDatetimeLocal(log.created_at)}
+        onChange={e => {
+          const v = e.target.value
+          if (!v) return
+          const iso = new Date(v).toISOString()
+          setDraft(formatFortuneArchiveDateTime(iso))
+          if (iso !== log.created_at) void onPatch(log.id, { created_at: iso })
+        }}
+      />
+    </div>
+  )
 }
 
 /** 아카이브·편집: 질문 종류 (운세 카테고리) — 해결의 책 전용 라벨은 점괘 종류로 분리 */
@@ -876,10 +999,10 @@ function FortuneRecordsSheet({ readingLogs, decks, onDeleteLog, onPatchLog }: {
       <div style={{ overflowX: 'auto', maxHeight: isMobile ? '400px' : '500px', overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
           <colgroup>
-            <col style={{ width: '10%' }} />
+            <col style={{ width: '11%' }} />
             <col style={{ width: '8%' }} />
             <col style={{ width: '7%' }} />
-            <col style={{ width: '28%' }} />
+            <col style={{ width: '27%' }} />
             <col style={{ width: '18%' }} />
             <col style={{ width: '5%' }} />
             <col style={{ width: '6%' }} />
@@ -917,19 +1040,8 @@ function FortuneRecordsSheet({ readingLogs, decks, onDeleteLog, onPatchLog }: {
                     onMouseEnter={e => { e.currentTarget.style.backgroundColor = isSolutionBook ? 'rgba(74, 20, 18, 0.1)' : 'rgba(124,58,237,0.04)' }}
                     onMouseLeave={e => { e.currentTarget.style.backgroundColor = isSolutionBook ? 'rgba(74, 20, 18, 0.05)' : 'transparent' }}
                   >
-                    <td style={{ padding: '8px 4px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
-                      <input
-                        type="datetime-local"
-                        defaultValue={toDatetimeLocal(log.created_at)}
-                        key={`${log.id}-dt-${log.created_at}`}
-                        style={{ ...cellInp, fontSize: 10, minWidth: 0, maxWidth: '100%', color: isSolutionBook ? '#5c3d3a' : '#787774' }}
-                        onBlur={e => {
-                          const v = e.target.value
-                          if (!v) return
-                          const iso = new Date(v).toISOString()
-                          if (iso !== log.created_at) void onPatchLog(log.id, { created_at: iso })
-                        }}
-                      />
+                    <td style={{ padding: '8px 4px', verticalAlign: 'top', minWidth: 0 }} onClick={e => e.stopPropagation()}>
+                      <FortuneArchiveDateCell log={log} isSolutionBook={isSolutionBook} cellInp={cellInp} onPatch={onPatchLog} />
                     </td>
                     <td style={{ padding: '8px 6px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
                       <input
@@ -1512,6 +1624,7 @@ function FortuneSpreadView({
   const [shuffledDeck, setShuffledDeck] = useState<TarotCardDisplay[]>(() => shuffleArray(cards))
   const [flippedCards, setFlippedCards] = useState<TarotCardDisplay[]>([])
   const [cardSize, setCardSize] = useState(80)
+  const [autoDrawCount, setAutoDrawCount] = useState('3')
 
   useEffect(() => {
     setShuffledDeck(shuffleArray(cards))
@@ -1521,6 +1634,22 @@ function FortuneSpreadView({
   function reshuffleDeck() {
     setShuffledDeck(shuffleArray(cards))
     setFlippedCards([])
+  }
+
+  /** 덱에서 서로 다른 카드를 n장 무작위로 고른 뒤, 뽑는 순서도 무작위로 섞어 뒤집음 */
+  function handleAutoDraw() {
+    const max = shuffledDeck.length
+    if (max === 0) return
+    let n = parseInt(autoDrawCount.trim(), 10)
+    if (!Number.isFinite(n)) n = 1
+    n = Math.max(1, Math.min(n, max))
+    const pool = [...shuffledDeck]
+    const picked: TarotCardDisplay[] = []
+    for (let i = 0; i < n; i++) {
+      const r = Math.floor(Math.random() * pool.length)
+      picked.push(pool.splice(r, 1)[0]!)
+    }
+    setFlippedCards(shuffleArray(picked))
   }
 
   function toggleCard(id: string) {
@@ -1619,9 +1748,65 @@ function FortuneSpreadView({
             💾 점괘 기록하기
           </button>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
           <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: '#7C3AED' }}>🃏 {cards.length}장 — 카드를 클릭해 뒤집어 보세요</p>
           <button onClick={reshuffleDeck} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(124,58,237,0.3)', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>다시 섞기</button>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+            marginBottom: '16px',
+            padding: '12px 14px',
+            borderRadius: '12px',
+            backgroundColor: 'rgba(124,58,237,0.08)',
+            border: '1px solid rgba(124,58,237,0.15)',
+          }}
+        >
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#5B21B6' }}>자동 뽑기</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#37352F', fontWeight: 600 }}>
+            <span style={{ color: '#787774' }}>장수</span>
+            <input
+              type="number"
+              min={1}
+              max={cards.length}
+              value={autoDrawCount}
+              onChange={e => setAutoDrawCount(e.target.value)}
+              style={{
+                width: '56px',
+                padding: '6px 8px',
+                borderRadius: '8px',
+                border: '1px solid rgba(0,0,0,0.1)',
+                fontSize: '13px',
+                fontWeight: 700,
+                color: '#37352F',
+                textAlign: 'center',
+              }}
+            />
+          </label>
+          <span style={{ fontSize: '11px', color: '#9B9A97' }}>(최대 {cards.length}장)</span>
+          <button
+            type="button"
+            onClick={handleAutoDraw}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              backgroundColor: '#7C3AED',
+              color: '#fff',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(124,58,237,0.35)',
+            }}
+          >
+            ✨ 무작위로 뽑기
+          </button>
+          <span style={{ fontSize: '11px', color: '#787774', flex: '1 1 200px' }}>
+            카드와 뽑는 순서 모두 무작위입니다. 기존에 뒤집힌 카드는 덮어씁니다.
+          </span>
         </div>
         {/* 카드 크기 조절 슬라이더 */}
         <div className="flex flex-col gap-2 mb-4">

@@ -210,3 +210,15 @@ input, textarea, select {
   font-size: 12px;
   color: #37352F;
 }
+
+/* 점괘 아카이브: 날짜 입력 — 클릭·포커스 시 편집 가능함을 표시 (cellInp outline:none 덮어씀) */
+.fortune-log-datetime-input {
+  cursor: text;
+}
+.fortune-log-datetime-input:hover {
+  background: rgba(124, 58, 237, 0.07) !important;
+}
+.fortune-log-datetime-input:focus {
+  outline: 2px solid rgba(124, 58, 237, 0.45) !important;
+  outline-offset: 1px;
+}

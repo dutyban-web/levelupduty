@@ -26,8 +26,17 @@ import {
 } from './supabase'
 import { blockNoteToPlainPreview, RichEditor } from './RichEditor'
 import { loadSettlementStore, type SettlementEntry } from './settlementData'
-import { loadQuantumFlowStore, canReadLetter, type QuantumLetter } from './quantumFlowData'
+import {
+  loadQuantumFlowStore,
+  canReadLetter,
+  hasLetterArrived,
+  normalizeOpenTime,
+  type QuantumLetter,
+} from './quantumFlowData'
 import { UnifiedPeoplePage } from './UnifiedPeoplePage'
+import UnifiedOverallRatingPage from './UnifiedOverallRatingPage'
+import UnifiedFavoritesPage from './UnifiedFavoritesPage'
+import { UnifiedTagSourcesPage } from './UnifiedTagSourcesPage'
 import { PomodoroWeeklyCalendar } from './PomodoroWeeklyCalendar'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
@@ -269,7 +278,7 @@ export function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests
           id: `qf-${q.id}`,
           date: q.openDate,
           type: 'quantum',
-          title: `[시공] ${q.title}`,
+          title: `[시공] ${q.title} · ${normalizeOpenTime(q.openTime)}`,
           meta: q,
         })
       }
@@ -336,6 +345,39 @@ export function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests
       <div style={{ marginBottom: '24px' }}>
         <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>📅 통합 캘린더</h1>
         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세, 결산, 시공편지 도착일을 한눈에 확인하세요</p>
+        {(() => {
+          const now = new Date()
+          const today = toYMD(now)
+          const arrivals = quantumStore.letters.filter(
+            l => !l.is_deleted && l.lockUntilOpen && hasLetterArrived(l, now) && l.openDate === today,
+          )
+          if (arrivals.length === 0) return null
+          return (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '12px 14px',
+                borderRadius: 12,
+                background: 'rgba(34,211,238,0.08)',
+                border: '1px solid rgba(34,211,238,0.35)',
+              }}
+            >
+              <p style={{ margin: '0 0 8px', fontSize: 12, fontWeight: 800, color: '#0e7490', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span aria-hidden>🔔</span> 오늘 도착한 시공편지
+              </p>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#37352F', listStyle: 'disc' }}>
+                {arrivals.map(a => (
+                  <li key={a.id} style={{ marginBottom: 4 }}>
+                    <Link to="/quantum" style={{ color: '#0891b2', fontWeight: 600, textDecoration: 'none' }}>
+                      {a.title}
+                    </Link>
+                    <span style={{ marginLeft: 8, fontSize: 11, color: '#787774' }}>{normalizeOpenTime(a.openTime)} 도착</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })()}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile || calendarUIMode === 'week' ? '1fr' : '1fr 280px', gap: '24px', alignItems: 'start' }}>
@@ -546,11 +588,11 @@ export function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests
                   <p style={{ margin: '0 0 8px', fontSize: '11px', fontWeight: 700, color: '#0891b2', letterSpacing: '0.05em' }}>시공편지 (Quantum)</p>
                   <ul style={{ margin: 0, paddingLeft: '18px', listStyle: 'none' }}>
                     {dayQuantum.map(q => {
-                      const readable = canReadLetter(q, todayStr)
+                      const readable = canReadLetter(q, new Date())
                       return (
                         <li key={q.id} style={{ marginBottom: '8px', fontSize: '13px', color: '#37352F' }}>
                           <Link to="/quantum" style={{ color: '#0891b2', fontWeight: 600, textDecoration: 'none' }} title="Quantum에서 열기">
-                            {q.title}
+                            {q.title} · {normalizeOpenTime(q.openTime)}
                           </Link>
                           {q.lockUntilOpen && !readable && (
                             <span style={{ marginLeft: '8px', fontSize: '11px', color: '#787774' }}>🔒 도착일 전 잠금</span>
@@ -675,7 +717,7 @@ export function BeautifulLifeSection({
   )
 }
 
-/** Master Board 맨 아래 — 통합 캘린더 · 통합 인물 DB (데이터 창고). HashRouter 호환: `?warehouse=calendar` | `people` */
+/** Master Board 맨 아래 — 통합 캘린더 · 통합 인물 DB · 통합 레이팅 · 원본(통합 태그) · 통합 즐겨찾기. HashRouter: `?warehouse=` | `people` | `rating` | `sources` | `favorites` */
 export function MasterBoardWarehouseSection({
   userQuests,
   calendarRefreshKey,
@@ -687,20 +729,32 @@ export function MasterBoardWarehouseSection({
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const tabParam = searchParams.get('warehouse')
-  const tab = tabParam === 'people' ? 'people' : 'calendar'
+  const tab: 'calendar' | 'people' | 'rating' | 'sources' | 'favorites' =
+    tabParam === 'people'
+      ? 'people'
+      : tabParam === 'sources'
+        ? 'sources'
+        : tabParam === 'rating'
+          ? 'rating'
+          : tabParam === 'favorites'
+            ? 'favorites'
+            : 'calendar'
 
   useEffect(() => {
     const w = searchParams.get('warehouse')
-    if (w !== 'calendar' && w !== 'people') return
+    if (!w || (w !== 'people' && w !== 'sources' && w !== 'rating' && w !== 'favorites')) return
     requestAnimationFrame(() => {
       document.getElementById('data-warehouse')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [location.pathname, searchParams])
 
-  function setTab(next: 'calendar' | 'people') {
+  function setTab(next: 'calendar' | 'people' | 'rating' | 'sources' | 'favorites') {
     const nextParams = new URLSearchParams(searchParams)
     if (next === 'calendar') nextParams.delete('warehouse')
-    else nextParams.set('warehouse', 'people')
+    else if (next === 'people') nextParams.set('warehouse', 'people')
+    else if (next === 'rating') nextParams.set('warehouse', 'rating')
+    else if (next === 'favorites') nextParams.set('warehouse', 'favorites')
+    else nextParams.set('warehouse', 'sources')
     setSearchParams(nextParams, { replace: true })
   }
 
@@ -722,9 +776,10 @@ export function MasterBoardWarehouseSection({
     >
       <div style={{ marginBottom: 20 }}>
         <p style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', color: '#9B9A97' }}>데이터 창고</p>
-        <h2 style={{ margin: '6px 0 4px', fontSize: 18, fontWeight: 800, color: '#37352F' }}>통합 캘린더 · 통합 인물 DB</h2>
+        <h2 style={{ margin: '6px 0 4px', fontSize: 18, fontWeight: 800, color: '#37352F' }}>통합 캘린더 · 인물 DB · 레이팅 · 원본 · 즐겨찾기</h2>
         <p style={{ margin: 0, fontSize: 13, color: '#787774', lineHeight: 1.5 }}>
-          퀘스트·저널·운세·결산·시공편지까지 한눈에. 인물은 DB에서 관리합니다.
+          퀘스트·저널·운세·결산·시공편지까지 한눈에. 인물은 DB에서 연결하고, 레이팅·원본·각 화면에서 별표로 넣은
+          즐겨찾기를 한곳에서 카드로 모아 봅니다.
         </p>
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -742,11 +797,38 @@ export function MasterBoardWarehouseSection({
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'people' ? 600 : 500,
           color: tab === 'people' ? '#4F46E5' : '#787774',
         }}>통합 인물 DB</button>
+        <button type="button" onClick={() => setTab('rating')} style={{
+          padding: '8px 16px', borderRadius: '8px',
+          border: tab === 'rating' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+          background: tab === 'rating' ? 'rgba(99,102,241,0.1)' : 'transparent',
+          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'rating' ? 600 : 500,
+          color: tab === 'rating' ? '#4F46E5' : '#787774',
+        }}>통합 레이팅</button>
+        <button type="button" onClick={() => setTab('sources')} title="전역 태그 색인" style={{
+          padding: '8px 16px', borderRadius: '8px',
+          border: tab === 'sources' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+          background: tab === 'sources' ? 'rgba(99,102,241,0.1)' : 'transparent',
+          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'sources' ? 600 : 500,
+          color: tab === 'sources' ? '#4F46E5' : '#787774',
+        }}>원본</button>
+        <button type="button" onClick={() => setTab('favorites')} title="별표로 모은 항목" style={{
+          padding: '8px 16px', borderRadius: '8px',
+          border: tab === 'favorites' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+          background: tab === 'favorites' ? 'rgba(99,102,241,0.1)' : 'transparent',
+          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'favorites' ? 600 : 500,
+          color: tab === 'favorites' ? '#4F46E5' : '#787774',
+        }}>통합 즐겨찾기</button>
       </div>
       {tab === 'calendar' ? (
         <UnifiedCalendar userQuests={userQuests} refreshTrigger={calendarRefreshKey} />
-      ) : (
+      ) : tab === 'people' ? (
         <UnifiedPeoplePage />
+      ) : tab === 'rating' ? (
+        <UnifiedOverallRatingPage />
+      ) : tab === 'favorites' ? (
+        <UnifiedFavoritesPage refreshKey={calendarRefreshKey} />
+      ) : (
+        <UnifiedTagSourcesPage refreshKey={calendarRefreshKey} />
       )}
     </section>
   )

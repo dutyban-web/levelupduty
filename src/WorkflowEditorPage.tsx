@@ -28,6 +28,13 @@ import {
   softDeleteWorkflow,
   type WorkflowRow,
 } from './supabase'
+import {
+  getLocalWorkflow,
+  updateLocalWorkflow,
+  deleteLocalWorkflow,
+  isLocalWorkflowRow,
+} from './workflowLocalData'
+import { UnifiedFavoriteToggle } from './UnifiedFavoriteToggle'
 
 export const WORKFLOW_NODE_TYPE = 'workflowStep' as const
 
@@ -140,7 +147,7 @@ function WorkflowEditorInner({
     let cancelled = false
     ;(async () => {
       setLoadError(null)
-      const w = await fetchWorkflowById(workflowId)
+      const w = (await fetchWorkflowById(workflowId)) ?? getLocalWorkflow(workflowId)
       if (cancelled) return
       if (!w) {
         setLoadError('순서도를 찾을 수 없거나 권한이 없습니다.')
@@ -184,11 +191,28 @@ function WorkflowEditorInner({
     if (!row) return
     setSaving(true)
     try {
+      const nodesPayload = sanitizeNodes(nodes)
+      const edgesPayload = sanitizeEdges(edges)
+      if (isLocalWorkflowRow(row)) {
+        const ok = updateLocalWorkflow(row.id, {
+          title: title.trim() || '제목 없음',
+          description: description.trim() || null,
+          nodes: nodesPayload,
+          edges: edgesPayload,
+        })
+        if (ok) {
+          const next = getLocalWorkflow(row.id)
+          if (next) setRow(next)
+        } else {
+          window.alert('저장에 실패했습니다.')
+        }
+        return
+      }
       const ok = await updateWorkflow(row.id, {
         title: title.trim() || '제목 없음',
         description: description.trim() || null,
-        nodes: sanitizeNodes(nodes),
-        edges: sanitizeEdges(edges),
+        nodes: nodesPayload,
+        edges: edgesPayload,
       })
       if (!ok) {
         window.alert('저장에 실패했습니다. Supabase 연결·로그인을 확인하세요.')
@@ -201,6 +225,11 @@ function WorkflowEditorInner({
   const handleDeleteWorkflow = useCallback(async () => {
     if (!row) return
     if (!confirm('이 순서도를 삭제할까요?')) return
+    if (isLocalWorkflowRow(row)) {
+      if (deleteLocalWorkflow(row.id)) onBack()
+      else window.alert('삭제에 실패했습니다.')
+      return
+    }
     const ok = await softDeleteWorkflow(row.id)
     if (ok) onBack()
     else window.alert('삭제에 실패했습니다.')
@@ -243,6 +272,14 @@ function WorkflowEditorInner({
           <ArrowLeft className="w-4 h-4" />
           뒤로
         </button>
+        <UnifiedFavoriteToggle
+          kind="workflow"
+          refId={row.id}
+          title={title.trim() || row.title?.trim() || '순서도'}
+          subtitle={(description || row.description || '').trim().slice(0, 80) || '작업 순서도'}
+          href={`/value/workflow/${row.id}`}
+          syncVersion={title.length + description.length}
+        />
         <input
           value={title}
           onChange={e => setTitle(e.target.value)}

@@ -64,7 +64,17 @@ export function mergeNetworkStores(local: NetworkStore, remote: NetworkStore | n
 
 export function mergeQuantumFlowStores(local: QuantumFlowStore, remote: QuantumFlowStore | null): QuantumFlowStore {
   if (!remote || !Array.isArray(remote.letters)) return local
-  return { letters: mergeRecordsByUpdatedAt(local.letters, remote.letters) }
+  const letters = mergeRecordsByUpdatedAt(local.letters, remote.letters)
+  const timeboxes = mergeRecordsByUpdatedAt(local.timeboxes ?? [], remote.timeboxes ?? [])
+  return {
+    ...local,
+    ...remote,
+    letters,
+    timeboxes,
+    vaultPwHashToFuture: remote.vaultPwHashToFuture ?? local.vaultPwHashToFuture,
+    vaultPwHashToPast: remote.vaultPwHashToPast ?? local.vaultPwHashToPast,
+    vaultPwHashTimebox: remote.vaultPwHashTimebox ?? local.vaultPwHashTimebox,
+  }
 }
 
 export function mergeEvolutionStores(local: EvolutionStore, remote: EvolutionStore | null): EvolutionStore {

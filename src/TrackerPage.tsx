@@ -23,6 +23,7 @@ import {
   type TimeCommandment,
   type WeekFeedback,
 } from './trackerData'
+import { CircularDayTracker } from './CircularDayTracker'
 import { getWeekRangeMonday } from './PomodoroWeeklyCalendar'
 import { listPomodoroLogsInRange } from './pomodoroLogData'
 import { Clock, Target, BarChart3, BookOpen, Plus, Trash2, Settings, ChevronDown } from 'lucide-react'
@@ -36,6 +37,29 @@ const END_HOUR = 24
 const PX_PER_HOUR = 44
 const SPAN_MIN = (END_HOUR - START_HOUR) * 60
 const COL_HEIGHT = (END_HOUR - START_HOUR) * PX_PER_HOUR
+/** 그리드에 맞춘 절대 분 (0:00 기준) */
+const START_MIN = START_HOUR * 60
+const END_MIN = END_HOUR * 60
+
+function parseHmToMinutes(s: string): number {
+  const [h, m] = s.split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+function minutesToHm(total: number): string {
+  const h = Math.floor(total / 60) % 24
+  const m = Math.round(total % 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function clampBlockRange(startMin: number, durationMin: number): { start: number; dur: number } {
+  let d = Math.max(5, Math.round(durationMin))
+  let s = Math.round(startMin)
+  s = Math.max(START_MIN, Math.min(s, END_MIN - d))
+  d = Math.min(d, END_MIN - s)
+  d = Math.max(5, d)
+  return { start: s, dur: d }
+}
 
 const card: React.CSSProperties = {
   background: '#fff',
@@ -108,11 +132,11 @@ export function TrackerPage() {
 
   const pomodoroLogs = useMemo(() => listPomodoroLogsInRange(start, end), [start, end])
 
-  const openEntry = (type: 'plan' | 'actual', date?: string) => {
+  const openEntry = (type: 'plan' | 'actual', opts?: { date?: string; startTime?: string; duration?: number }) => {
     setEntryType(type)
-    setEntryDate(date ?? toYMD(new Date()))
-    setEntryStart('09:00')
-    setEntryDuration(30)
+    setEntryDate(opts?.date ?? toYMD(new Date()))
+    setEntryStart(opts?.startTime ?? '09:00')
+    setEntryDuration(opts?.duration ?? 30)
     setEntryCatId(bundle.categories[0]?.id ?? '')
     setEntryTag(bundle.categories[0]?.tags[0] ?? '')
     setEntryMemo('')
@@ -140,6 +164,16 @@ export function TrackerPage() {
     if (!window.confirm('이 기록을 삭제할까요?')) return
     commit(b => ({ ...b, logs: b.logs.filter(l => l.id !== id) }))
   }
+
+  const patchLog = useCallback(
+    (id: string, patch: Partial<Pick<TrackerLog, 'startTime' | 'duration'>>) => {
+      commit(b => ({
+        ...b,
+        logs: b.logs.map(l => (l.id === id ? { ...l, ...patch } : l)),
+      }))
+    },
+    [commit],
+  )
 
   const selectedCat = useMemo(() => bundle.categories.find(c => c.id === entryCatId), [bundle.categories, entryCatId])
 
@@ -280,6 +314,7 @@ export function TrackerPage() {
           onSetWeekAnchor={setWeekAnchor}
           onOpenEntry={openEntry}
           onRemoveLog={removeLog}
+          onPatchLog={patchLog}
           currentFeedback={currentFeedback}
           onSaveFeedback={saveFeedback}
           onPromote={promoteToCommandment}
@@ -395,7 +430,7 @@ export function TrackerPage() {
 
 function CalendarTab({
   bundle, weekAnchor, start, end, days, weekLogs, pomodoroLogs, timeboxOn, setTimeboxOn,
-  catMap, hours, onShiftWeek, onSetWeekAnchor, onOpenEntry, onRemoveLog,
+  catMap, hours, onShiftWeek, onSetWeekAnchor, onOpenEntry, onRemoveLog, onPatchLog,
   currentFeedback, onSaveFeedback, onPromote,
 }: {
   bundle: TrackerBundle
@@ -411,12 +446,44 @@ function CalendarTab({
   hours: number[]
   onShiftWeek: (d: number) => void
   onSetWeekAnchor: (d: Date) => void
-  onOpenEntry: (t: 'plan' | 'actual', date?: string) => void
+  onOpenEntry: (t: 'plan' | 'actual', opts?: { date?: string; startTime?: string; duration?: number }) => void
   onRemoveLog: (id: string) => void
+  onPatchLog: (id: string, patch: Partial<Pick<TrackerLog, 'startTime' | 'duration'>>) => void
   currentFeedback: WeekFeedback
   onSaveFeedback: (field: 'regret' | 'improve', val: string) => void
   onPromote: (text: string, source: 'regret' | 'improve') => void
 }) {
+  const [ringDate, setRingDate] = useState(() => toYMD(new Date()))
+  const ringDayLogs = useMemo(() => logsForDate(bundle.logs, ringDate), [bundle.logs, ringDate])
+
+  /** 우클릭으로 일정 추가 (위클리 그리드) */
+  const [schedMenu, setSchedMenu] = useState<null | {
+    x: number
+    y: number
+    date: string
+    startTime: string
+    preset?: 'plan' | 'actual'
+  }>(null)
+
+  useEffect(() => {
+    if (!schedMenu) return
+    const close = () => setSchedMenu(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [schedMenu])
+
+  const handleGridContextMenu = (e: React.MouseEvent, dk: string, preset?: 'plan' | 'actual') => {
+    e.preventDefault()
+    const el = e.currentTarget as HTMLElement
+    const rect = el.getBoundingClientRect()
+    const relY = e.clientY - rect.top
+    const rawMin = START_MIN + (relY / COL_HEIGHT) * SPAN_MIN
+    const rounded = Math.round(rawMin / 5) * 5
+    const clamped = Math.max(START_MIN, Math.min(END_MIN - 15, rounded))
+    const startTime = minutesToHm(clamped)
+    setSchedMenu({ x: e.clientX, y: e.clientY, date: dk, startTime, preset })
+  }
+
   return (
     <>
       {/* Controls */}
@@ -446,6 +513,41 @@ function CalendarTab({
           </button>
         </div>
       </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#787774' }}>원형 뷰 날짜 (주간 그리드와 동일 데이터)</span>
+        {days.map(d => {
+          const dk = toYMD(d)
+          const sel = dk === ringDate
+          return (
+            <button
+              key={`ring-${dk}`}
+              type="button"
+              onClick={() => setRingDate(dk)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                border: sel ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.1)',
+                background: sel ? 'rgba(99,102,241,0.12)' : '#fff',
+                fontSize: 11,
+                fontWeight: 700,
+                color: sel ? '#4f46e5' : '#37352F',
+                cursor: 'pointer',
+              }}
+            >
+              {d.getMonth() + 1}/{d.getDate()}
+            </button>
+          )
+        })}
+      </div>
+
+      <CircularDayTracker
+        dateYmd={ringDate}
+        onDateYmdChange={setRingDate}
+        dayLogs={ringDayLogs}
+        catMap={catMap}
+        onAddSchedule={(type, opts) => onOpenEntry(type, { date: ringDate, startTime: opts.startTime, duration: opts.duration ?? 60 })}
+      />
 
       {/* Weekly Grid */}
       <div style={{ overflowX: 'auto', borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)', background: '#FAFAF8', marginBottom: 24 }}>
@@ -519,17 +621,34 @@ function CalendarTab({
                 {timeboxOn ? (
                   <>
                     {/* Plan half */}
-                    <div style={{ position: 'relative', borderRight: '1px dashed rgba(245,158,11,0.3)' }}>
+                    <div
+                      style={{ position: 'relative', borderRight: '1px dashed rgba(245,158,11,0.3)' }}
+                      onContextMenu={e => handleGridContextMenu(e, dk, 'plan')}
+                    >
                       {renderHourLines(hours)}
                       {plans.map(log => (
-                        <LogBlock key={log.id} log={log} cat={catMap.get(log.categoryId)} isPlan onRemove={() => onRemoveLog(log.id)} />
+                        <LogBlock
+                          key={log.id}
+                          log={log}
+                          cat={catMap.get(log.categoryId)}
+                          isPlan
+                          onRemove={() => onRemoveLog(log.id)}
+                          onPatch={patch => onPatchLog(log.id, patch)}
+                        />
                       ))}
                     </div>
                     {/* Actual half */}
-                    <div style={{ position: 'relative' }}>
+                    <div style={{ position: 'relative' }} onContextMenu={e => handleGridContextMenu(e, dk, 'actual')}>
                       {renderHourLines(hours)}
                       {actuals.map(log => (
-                        <LogBlock key={log.id} log={log} cat={catMap.get(log.categoryId)} isPlan={false} onRemove={() => onRemoveLog(log.id)} />
+                        <LogBlock
+                          key={log.id}
+                          log={log}
+                          cat={catMap.get(log.categoryId)}
+                          isPlan={false}
+                          onRemove={() => onRemoveLog(log.id)}
+                          onPatch={patch => onPatchLog(log.id, patch)}
+                        />
                       ))}
                       {pomos.map(p => {
                         const [h, m] = p.startTimeLocal.split(':').map(Number)
@@ -565,10 +684,17 @@ function CalendarTab({
                   </>
                 ) : (
                   /* No timebox — single column */
-                  <div style={{ position: 'relative', height: '100%' }}>
+                  <div style={{ position: 'relative', height: '100%' }} onContextMenu={e => handleGridContextMenu(e, dk)}>
                     {renderHourLines(hours)}
                     {actuals.map(log => (
-                      <LogBlock key={log.id} log={log} cat={catMap.get(log.categoryId)} isPlan={false} onRemove={() => onRemoveLog(log.id)} />
+                      <LogBlock
+                        key={log.id}
+                        log={log}
+                        cat={catMap.get(log.categoryId)}
+                        isPlan={false}
+                        onRemove={() => onRemoveLog(log.id)}
+                        onPatch={patch => onPatchLog(log.id, patch)}
+                      />
                     ))}
                     {pomos.map(p => {
                       const [h, m] = p.startTimeLocal.split(':').map(Number)
@@ -649,6 +775,79 @@ function CalendarTab({
           </div>
         </div>
       </section>
+
+      {schedMenu && (
+        <div
+          role="menu"
+          style={{
+            position: 'fixed',
+            left: Math.min(schedMenu.x, typeof window !== 'undefined' ? window.innerWidth - 200 : schedMenu.x),
+            top: Math.min(schedMenu.y, typeof window !== 'undefined' ? window.innerHeight - 120 : schedMenu.y),
+            zIndex: 10050,
+            minWidth: 168,
+            borderRadius: 10,
+            border: '1px solid rgba(0,0,0,0.1)',
+            background: '#fff',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            padding: 6,
+          }}
+          onClick={ev => ev.stopPropagation()}
+          onMouseDown={ev => ev.stopPropagation()}
+        >
+          <p style={{ margin: '0 0 6px', padding: '4px 8px', fontSize: 10, fontWeight: 800, color: '#787774' }}>
+            {schedMenu.startTime} 시작
+          </p>
+          {(schedMenu.preset === undefined || schedMenu.preset === 'plan') && (
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 10px',
+                border: 'none',
+                borderRadius: 8,
+                background: 'rgba(245,158,11,0.12)',
+                color: '#b45309',
+                fontWeight: 800,
+                fontSize: 13,
+                cursor: 'pointer',
+                marginBottom: 4,
+              }}
+              onClick={() => {
+                onOpenEntry('plan', { date: schedMenu.date, startTime: schedMenu.startTime, duration: 60 })
+                setSchedMenu(null)
+              }}
+            >
+              계획(Plan) 추가
+            </button>
+          )}
+          {(schedMenu.preset === undefined || schedMenu.preset === 'actual') && (
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 10px',
+                border: 'none',
+                borderRadius: 8,
+                background: 'rgba(99,102,241,0.12)',
+                color: '#4338ca',
+                fontWeight: 800,
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                onOpenEntry('actual', { date: schedMenu.date, startTime: schedMenu.startTime, duration: 60 })
+                setSchedMenu(null)
+              }}
+            >
+              실제(Actual) 추가
+            </button>
+          )}
+        </div>
+      )}
     </>
   )
 }
@@ -676,17 +875,79 @@ function renderHourLines(hours: number[]) {
   ))
 }
 
-function LogBlock({ log, cat, isPlan, onRemove }: { log: TrackerLog; cat?: TrackerCategory; isPlan: boolean; onRemove: () => void }) {
-  const [h, m] = log.startTime.split(':').map(Number)
-  const startMin = (h || 0) * 60 + (m || 0)
+function LogBlock({
+  log,
+  cat,
+  isPlan,
+  onRemove,
+  onPatch,
+}: {
+  log: TrackerLog
+  cat?: TrackerCategory
+  isPlan: boolean
+  onRemove: () => void
+  onPatch: (patch: Partial<Pick<TrackerLog, 'startTime' | 'duration'>>) => void
+}) {
+  const [hover, setHover] = useState(false)
+  const [resizing, setResizing] = useState(false)
+
+  const startMin = parseHmToMinutes(log.startTime)
   const rel = startMin - START_HOUR * 60
   const top = Math.max(0, (rel / SPAN_MIN) * COL_HEIGHT)
   const height = Math.max(16, (log.duration / SPAN_MIN) * COL_HEIGHT)
   const color = cat?.color ?? '#6366f1'
+  const showHandles = hover || resizing
+
+  const beginResize = (edge: 'top' | 'bottom') => (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setResizing(true)
+    const startY = e.clientY
+    const origStart = parseHmToMinutes(log.startTime)
+    const origDur = log.duration
+
+    const onMove = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY
+      const deltaMin = (dy / COL_HEIGHT) * SPAN_MIN
+      if (edge === 'bottom') {
+        let nd = Math.round(origDur + deltaMin)
+        nd = Math.max(5, nd)
+        if (origStart + nd > END_MIN) nd = END_MIN - origStart
+        nd = Math.max(5, nd)
+        onPatch({ duration: nd })
+      } else {
+        const c = clampBlockRange(origStart + deltaMin, origDur - deltaMin)
+        onPatch({ startTime: minutesToHm(c.start), duration: c.dur })
+      }
+    }
+
+    const onUp = () => {
+      setResizing(false)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const handleBar: React.CSSProperties = {
+    position: 'absolute',
+    left: 4,
+    right: 4,
+    height: 7,
+    borderRadius: 4,
+    background: 'rgba(255,255,255,0.96)',
+    boxShadow: '0 0 0 1px rgba(0,0,0,0.18)',
+    zIndex: 4,
+    cursor: 'ns-resize',
+    touchAction: 'none',
+  }
 
   return (
     <div
-      title={`${isPlan ? '[Plan]' : '[Actual]'} ${cat?.label ?? ''} · ${log.tag} · ${log.duration}분${log.memo ? `\n${log.memo}` : ''}`}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={`${isPlan ? '[Plan]' : '[Actual]'} ${cat?.label ?? ''} · ${log.tag} · ${log.duration}분 — 위·아래 핸들로 길이 조절${log.memo ? `\n${log.memo}` : ''}`}
       style={{
         position: 'absolute',
         left: 2,
@@ -699,37 +960,69 @@ function LogBlock({ log, cat, isPlan, onRemove }: { log: TrackerLog; cat?: Track
           : `linear-gradient(180deg, ${color}dd, ${color}bb)`,
         border: isPlan ? `1.5px dashed ${color}88` : 'none',
         color: isPlan ? color : '#fff',
-        fontSize: 9,
-        fontWeight: 700,
-        padding: '2px 4px',
-        overflow: 'hidden',
+        fontSize: 13,
+        fontWeight: 800,
+        padding: '8px 6px 8px',
+        overflow: 'visible',
         boxShadow: isPlan ? 'none' : `0 1px 4px ${color}40`,
         cursor: 'default',
+        zIndex: 2,
       }}
     >
-      <span style={{ lineHeight: 1.2 }}>{log.tag || cat?.label}</span>
-      <span style={{ fontSize: 8, opacity: 0.8 }}> {log.duration}분</span>
+      {showHandles && (
+        <div
+          role="separator"
+          aria-label="시작 시각 조절"
+          style={{ ...handleBar, top: -4 }}
+          onPointerDown={beginResize('top')}
+        />
+      )}
+      <div
+        style={{
+          textAlign: 'right',
+          paddingRight: 22,
+          lineHeight: 1.25,
+          position: 'relative',
+          zIndex: 1,
+        }}
+      >
+        <span>{log.tag || cat?.label}</span>
+        <span style={{ fontSize: 11, opacity: 0.9, fontWeight: 700 }}> {log.duration}분</span>
+      </div>
       <button
         type="button"
-        onClick={e => { e.stopPropagation(); onRemove() }}
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => {
+          e.stopPropagation()
+          onRemove()
+        }}
         style={{
           position: 'absolute',
-          top: 1,
-          right: 1,
+          top: 5,
+          right: 2,
           width: 14,
           height: 14,
           border: 'none',
           borderRadius: 3,
-          background: 'rgba(0,0,0,0.15)',
+          background: 'rgba(0,0,0,0.2)',
           color: '#fff',
           fontSize: 10,
           cursor: 'pointer',
           lineHeight: 1,
           padding: 0,
+          zIndex: 5,
         }}
       >
         ×
       </button>
+      {showHandles && (
+        <div
+          role="separator"
+          aria-label="소요 시간(종료) 조절"
+          style={{ ...handleBar, bottom: -4 }}
+          onPointerDown={beginResize('bottom')}
+        />
+      )}
     </div>
   )
 }

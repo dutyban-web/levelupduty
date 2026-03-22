@@ -6,13 +6,22 @@
  *  · 활성 데이터: is_deleted IS DISTINCT FROM true (false 또는 null)
  *  · 휴지통: is_deleted = true (복구 시 false, 영구 삭제 시 DELETE)
  * └─────────────────────────────────────────────────────────────────────┘
+ *
+ *  createClient는 반드시 이 파일 최상단에서 초기화한다. ../supabase.ts 가
+ *  unifiedOverallRatingData 등을 통해 이 모듈을 먼저 로드할 수 있으므로,
+ *  여기서 ../supabase 를 import 하면 순환 참조로 supabase TDZ 오류가 난다.
  */
 
-import { RealtimeChannel } from '@supabase/supabase-js'
-import { supabase } from '../supabase'
+import { createClient, type RealtimeChannel } from '@supabase/supabase-js'
 import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from '../syncIndicatorBus'
 
-export { supabase }
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+
+export const supabase = (supabaseUrl && supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null
+
 export const isSupabaseReady = Boolean(supabase)
 
 export type KvSyncMeta = {

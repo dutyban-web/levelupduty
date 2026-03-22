@@ -32,6 +32,7 @@ import {
 import { ManifestationPage } from './Manifestation'
 import { TrackerPage } from './TrackerPage'
 import { ReviewPage } from './ReviewPageInternal'
+import { QuestAdventureJournal } from './QuestAdventureJournal'
 import { SETTLEMENT_KEY } from './settlementData'
 import { QuantumFlowPage } from './QuantumFlowPage'
 import { AccountLedgerPage } from './AccountLedgerPage'
@@ -111,17 +112,17 @@ const GNB_ROW_ITEMS: GnbRowItem[] = [
   { kind: 'link', id: 'manual', label: 'Manu', emoji: '📖' },
   { kind: 'sep' },
   { kind: 'link', id: 'life', label: 'Life', emoji: '📅' },
-  { kind: 'link', id: 'tracker', label: 'Track', emoji: '⏱️' },
-  { kind: 'link', id: 'goals', label: 'Goals', emoji: '🎯' },
-  { kind: 'link', id: 'evolution', label: 'Evol', emoji: '🧬' },
   { kind: 'link', id: 'fortune', label: 'Fortu', emoji: '🔮' },
+  { kind: 'link', id: 'goals', label: 'Goals', emoji: '🎯' },
+  { kind: 'link', id: 'tracker', label: 'Track', emoji: '⏱️' },
   { kind: 'link', id: 'manifestation', label: 'Manif', emoji: '✨' },
+  { kind: 'link', id: 'evolution', label: 'Evol', emoji: '🧬' },
   { kind: 'sep' },
   { kind: 'link', id: 'act', label: 'Act', emoji: '🎭' },
   { kind: 'sep' },
+  { kind: 'link', id: 'value', label: 'Value', emoji: '💎' },
   { kind: 'link', id: 'levelup', label: 'Level', emoji: '⬆️' },
   { kind: 'link', id: 'project', label: 'Project', emoji: '📁' },
-  { kind: 'link', id: 'value', label: 'Value', emoji: '💎' },
   { kind: 'link', id: 'quest', label: 'Quest', emoji: '⚡', to: '/' },
   { kind: 'sep' },
   { kind: 'link', id: 'review', label: 'Review', emoji: '📓' },
@@ -271,15 +272,15 @@ function MobileBottomNav({ active }: { active: PageId }) {
     { id: 'master-board', emoji: '📋', label: 'Board' },
     { id: 'manual', emoji: '📖', label: 'Manu' },
     { id: 'life', emoji: '📅', label: 'Life' },
-    { id: 'tracker', emoji: '⏱️', label: 'Track' },
-    { id: 'goals', emoji: '🎯', label: 'Goals' },
-    { id: 'evolution', emoji: '🧬', label: 'Evol' },
     { id: 'fortune', emoji: '🔮', label: 'Fortu' },
+    { id: 'goals', emoji: '🎯', label: 'Goals' },
+    { id: 'tracker', emoji: '⏱️', label: 'Track' },
     { id: 'manifestation', emoji: '✨', label: 'Manif' },
+    { id: 'evolution', emoji: '🧬', label: 'Evol' },
     { id: 'act', emoji: '🎭', label: 'Act' },
+    { id: 'value', emoji: '💎', label: 'Value' },
     { id: 'levelup', emoji: '⬆️', label: 'Level' },
     { id: 'project', emoji: '📁', label: 'Proj' },
-    { id: 'value', emoji: '💎', label: 'Value' },
     { id: 'quest', emoji: '⚡', label: 'Quest' },
     { id: 'review', emoji: '📓', label: 'Review' },
     { id: 'quantum', emoji: '✦', label: 'Quant' },
@@ -2372,6 +2373,8 @@ export default function App() {
   // ── 페이지 라우팅 (React Router + HashRouter) ──
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const questView = searchParams.get('questView') === 'journal' ? 'journal' : 'board'
   const pathSeg = location.pathname.replace(/^\//, '').split('/')[0] || ''
   const pathPage = pathSeg === '' ? 'quest' : pathSeg
   const activePage = (PAGE_IDS.includes(pathPage as PageId) ? pathPage : 'quest') as PageId
@@ -2395,6 +2398,10 @@ export default function App() {
       identity: '/act',
       journal: '/life?tab=journal',
       calendar: '/master-board?warehouse=calendar',
+      tags: '/master-board?warehouse=sources',
+      sources: '/master-board?warehouse=sources',
+      rating: '/master-board?warehouse=rating',
+      favorites: '/master-board?warehouse=favorites',
       dashboard: '/',
       library: '/quest',
       worlds: '/quest',
@@ -3948,10 +3955,110 @@ export default function App() {
           {activePage === 'network' && <NetworkPage />}
           {activePage === 'quest' && (
             <div style={{ maxWidth: '1800px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  marginBottom: 18,
+                }}
+                role="tablist"
+                aria-label="Quest 하위 메뉴"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={questView === 'board'}
+                  onClick={() => {
+                    setSearchParams(prev => {
+                      const n = new URLSearchParams(prev)
+                      n.delete('questView')
+                      return n
+                    }, { replace: true })
+                  }}
+                  style={{
+                    padding: '10px 18px',
+                    borderRadius: 12,
+                    border: questView === 'board' ? '2px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
+                    background: questView === 'board' ? 'rgba(99,102,241,0.1)' : '#FFFFFF',
+                    color: questView === 'board' ? '#4F46E5' : '#787774',
+                    fontSize: 13,
+                    fontWeight: questView === 'board' ? 800 : 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  퀘스트 보드
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={questView === 'journal'}
+                  onClick={() => {
+                    setSearchParams(prev => {
+                      const n = new URLSearchParams(prev)
+                      n.set('questView', 'journal')
+                      return n
+                    }, { replace: true })
+                  }}
+                  style={{
+                    padding: '10px 18px',
+                    borderRadius: 12,
+                    border: questView === 'journal' ? '2px solid #7C3AED' : '1px solid rgba(0,0,0,0.08)',
+                    background: questView === 'journal' ? 'rgba(124,58,237,0.1)' : '#FFFFFF',
+                    color: questView === 'journal' ? '#6d28d9' : '#787774',
+                    fontSize: 13,
+                    fontWeight: questView === 'journal' ? 800 : 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  모험일지
+                </button>
+              </div>
               <div style={{ display: 'flex', gap: isMobile ? 0 : 20, alignItems: 'flex-start', width: '100%' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
 
+            {questView === 'journal' ? (
+              <QuestAdventureJournal />
+            ) : (
             <>
+            {/* ── 현재 태세 (우디르) — Quest 상단 */}
+            <div style={{
+              backgroundColor: '#FFFFFF',
+              border: '1px solid rgba(0,0,0,0.06)',
+              borderRadius: '16px',
+              padding: '16px 20px',
+              marginBottom: '16px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              flexWrap: 'wrap',
+            }}>
+              <span style={{ fontSize: '24px' }}>🎭</span>
+              <div>
+                {activeIdentityId ? (
+                  (() => {
+                    const active = identities.find(i => i.id === activeIdentityId)
+                    return active ? (
+                      <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
+                        현재 <strong style={{ color: '#7C3AED' }}>[우디르]</strong> 작가님은 <strong style={{ color: '#6366f1' }}>'{active.name}'</strong> 태세입니다.
+                      </p>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요</p>
+                    )
+                  })()
+                ) : (
+                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Act 메뉴에서 정체성을 선택하세요</p>
+                )}
+              </div>
+              {activeIdentityId && identities.find(i => i.id === activeIdentityId) ? (
+                <button onClick={async () => { const ok = await updateActiveIdentity(null); if (ok) setActiveIdentityId(null) }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 종료</button>
+              ) : (
+                <button onClick={() => setActivePage('act')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
+              )}
+            </div>
+
             {/* Area · Real Projects — 접기 (기본 접힘, 퀘스트가 첫 화면 중심) */}
             <div style={{
               backgroundColor: '#FFFFFF',
@@ -3990,8 +4097,14 @@ export default function App() {
               </button>
               {questAreaProjectExpanded && (
                 <div style={{ padding: '0 18px 18px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', paddingTop: '16px' }}>
-                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px' }}>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) minmax(0, 2fr)',
+                    gap: '16px',
+                    paddingTop: '16px',
+                    alignItems: 'start',
+                  }}>
+                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px', minWidth: 0 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                         <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
                           <span style={{ marginRight: '6px' }}>🌐</span>Area
@@ -4059,7 +4172,7 @@ export default function App() {
                         >+</button>
                       </div>
                     </div>
-                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px' }}>
+                    <div style={{ backgroundColor: '#F9F9F8', borderRadius: '12px', padding: '16px', minWidth: 0 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                         <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
                           <span style={{ marginRight: '6px' }}>📁</span>Real Projects
@@ -4072,11 +4185,19 @@ export default function App() {
                       {projects.length === 0 ? (
                         <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 프로젝트 없음</p>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '14px' }}>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(232px, 1fr))',
+                            gap: '8px',
+                            marginBottom: '14px',
+                            alignContent: 'start',
+                          }}
+                        >
                           {projects.map(p => {
                             const parentArea = p.area_id ? areas.find(a => a.id === p.area_id) : null
                             return (
-                              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)' }}>
+                              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#F4F4F2', border: '1px solid rgba(0,0,0,0.04)', minWidth: 0 }}>
                                 {editingProjectId === p.id ? (
                                   <>
                                     <input autoFocus value={editingProjectName}
@@ -4140,43 +4261,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* ── 현재 태세 (우디르) ── */}
-            <div style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid rgba(0,0,0,0.06)',
-              borderRadius: '16px',
-              padding: '16px 20px',
-              marginBottom: '20px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              flexWrap: 'wrap',
-            }}>
-              <span style={{ fontSize: '24px' }}>🎭</span>
-              <div>
-                {activeIdentityId ? (
-                  (() => {
-                    const active = identities.find(i => i.id === activeIdentityId)
-                    return active ? (
-                      <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
-                        현재 <strong style={{ color: '#7C3AED' }}>[우디르]</strong> 작가님은 <strong style={{ color: '#6366f1' }}>'{active.name}'</strong> 태세입니다.
-                      </p>
-                    ) : (
-                      <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요</p>
-                    )
-                  })()
-                ) : (
-                  <p style={{ margin: 0, fontSize: '14px', color: '#9B9A97' }}>태세를 선택해주세요 — Act 메뉴에서 정체성을 선택하세요</p>
-                )}
-              </div>
-              {activeIdentityId && identities.find(i => i.id === activeIdentityId) ? (
-                <button onClick={async () => { const ok = await updateActiveIdentity(null); if (ok) setActiveIdentityId(null) }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)', color: '#ef4444', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 종료</button>
-              ) : (
-                <button onClick={() => setActivePage('act')} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #7C3AED', backgroundColor: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>태세 선택하기</button>
               )}
             </div>
 
@@ -4499,6 +4583,7 @@ export default function App() {
               onEditTotalXp={handleEditTotalXp}
             />
             </>
+            )}
 
                 </div>
                 {!isMobile && (

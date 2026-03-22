@@ -698,8 +698,11 @@ function InspirationCloud({
     ev.preventDefault()
     draggingRef.current = id
     const p = posRef.current.get(id)
-    if (p) {
-      dragOffRef.current = { x: ev.clientX - p.x, y: ev.clientY - p.y }
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (p && rect) {
+      const localX = ev.clientX - rect.left
+      const localY = ev.clientY - rect.top
+      dragOffRef.current = { x: localX - p.x, y: localY - p.y }
     }
     const el = ev.currentTarget as HTMLElement
     el.setPointerCapture(ev.pointerId)

@@ -13,6 +13,7 @@ import {
   type UnifiedPersonRow,
 } from './supabase'
 import { personEntityTypeLabel } from './personEntityTypes'
+import { UnifiedFavoriteToggle } from './UnifiedFavoriteToggle'
 
 export function UnifiedPeoplePage() {
   const [rows, setRows] = useState<UnifiedPersonRow[]>([])
@@ -149,7 +150,14 @@ export function UnifiedPeoplePage() {
                     />
                   </label>
                 </div>
-                <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col">
+                <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-end">
+                  <UnifiedFavoriteToggle
+                    kind="network_person"
+                    refId={r.id}
+                    title={r.display_name?.trim() || '이름 없음'}
+                    subtitle="통합 인물 DB"
+                    href="/master-board?warehouse=people"
+                  />
                   <button
                     type="button"
                     onClick={() => void toggleExpand(r.id)}

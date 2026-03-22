@@ -30,6 +30,7 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { WorkflowEditorPage } from './WorkflowEditorPage'
+import { UnifiedFavoriteToggle } from './UnifiedFavoriteToggle'
 import {
   fetchWorkflows,
   insertWorkflow,
@@ -37,6 +38,11 @@ import {
   supabase,
   type WorkflowRow,
 } from './supabase'
+import {
+  loadLocalWorkflows,
+  insertLocalWorkflow,
+  deleteLocalWorkflow,
+} from './workflowLocalData'
 
 const STRATEGIC_LABEL: Record<StrategicValueLevel, { ko: string; className: string }> = {
   high: { ko: '상', className: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
@@ -85,16 +91,20 @@ export function ValuePage() {
 
   const [workflows, setWorkflows] = useState<WorkflowRow[]>([])
   const [workflowsLoading, setWorkflowsLoading] = useState(false)
-  /** Area·Projects 접기와 같이 기본 접힘 */
-  const [workflowSectionExpanded, setWorkflowSectionExpanded] = useState(false)
+  /** 순서도 만들기·목록이 바로 보이도록 기본 펼침 */
+  const [workflowSectionExpanded, setWorkflowSectionExpanded] = useState(true)
 
   useEffect(() => {
     if (workflowIdFromRoute) return
     let cancelled = false
     ;(async () => {
       setWorkflowsLoading(true)
-      const list = await fetchWorkflows()
-      if (!cancelled) setWorkflows(list)
+      const remote = await fetchWorkflows()
+      const local = loadLocalWorkflows()
+      const merged = [...remote, ...local].sort((a, b) =>
+        (b.updated_at || '').localeCompare(a.updated_at || ''),
+      )
+      if (!cancelled) setWorkflows(merged)
       if (!cancelled) setWorkflowsLoading(false)
     })()
     return () => {
@@ -110,24 +120,39 @@ export function ValuePage() {
   )
 
   const createWorkflow = useCallback(async () => {
-    if (!supabase) {
-      window.alert('Supabase가 연결되지 않았습니다. .env 설정을 확인하세요.')
-      return
+    if (supabase) {
+      const row = await insertWorkflow('새 작업 순서도', '', [], [])
+      if (row) {
+        setWorkflows(prev => {
+          const rest = prev.filter(w => w.id !== row.id)
+          return [row, ...rest].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+        })
+        openWorkflow(row.id)
+        return
+      }
     }
-    const row = await insertWorkflow('새 작업 순서도', '', [], [])
-    if (!row) {
-      window.alert('순서도를 만들 수 없습니다. 로그인 상태를 확인하세요.')
-      return
-    }
-    openWorkflow(row.id)
+    const localRow = insertLocalWorkflow('새 작업 순서도', '', [], [])
+    setWorkflows(prev =>
+      [localRow, ...prev.filter(w => w.id !== localRow.id)].sort((a, b) =>
+        (b.updated_at || '').localeCompare(a.updated_at || ''),
+      ),
+    )
+    openWorkflow(localRow.id)
   }, [openWorkflow])
 
   const removeWorkflow = useCallback(
     async (id: string) => {
       if (!confirm('이 순서도를 삭제할까요?')) return
-      const ok = await softDeleteWorkflow(id)
-      if (ok) setWorkflows(prev => prev.filter(w => w.id !== id))
-      else window.alert('삭제에 실패했습니다.')
+      const okRemote = await softDeleteWorkflow(id)
+      if (okRemote) {
+        setWorkflows(prev => prev.filter(w => w.id !== id))
+        return
+      }
+      if (deleteLocalWorkflow(id)) {
+        setWorkflows(prev => prev.filter(w => w.id !== id))
+        return
+      }
+      window.alert('삭제에 실패했습니다. (Supabase 로그인 또는 로컬 데이터를 확인하세요.)')
     },
     [],
   )
@@ -286,7 +311,7 @@ export function ValuePage() {
         {workflowSectionExpanded && (
           <div className="px-4 sm:px-5 pb-5 pt-0 border-t border-slate-100">
             <p className="text-xs text-slate-500 mt-3 mb-3 leading-relaxed">
-              작업 흐름을 <strong className="text-violet-700">순서도</strong>로 시각화합니다. 노드를 배치하고 연결하면 Supabase에 저장됩니다.
+              작업 흐름을 <strong className="text-violet-700">순서도</strong>로 시각화합니다. 로그인 시 Supabase에 저장되고, 미연결 시에는 이 브라우저에만 저장됩니다.
             </p>
             <div className="flex flex-wrap justify-end gap-2 mb-4">
               <button
@@ -322,18 +347,27 @@ export function ValuePage() {
                     className="rounded-2xl border-2 border-slate-200/90 bg-white p-5 shadow-sm hover:shadow-md hover:border-violet-300 cursor-pointer text-left transition-all flex flex-col gap-3 min-h-[140px]"
                   >
                     <div className="flex justify-between gap-2 items-start">
-                      <h2 className="text-lg font-black text-slate-900 m-0 leading-snug">{w.title}</h2>
-                      <button
-                        type="button"
-                        onClick={e => {
-                          e.stopPropagation()
-                          removeWorkflow(w.id)
-                        }}
-                        className="p-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50 shrink-0"
-                        title="삭제"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <h2 className="text-lg font-black text-slate-900 m-0 leading-snug min-w-0 flex-1">{w.title}</h2>
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        <UnifiedFavoriteToggle
+                          kind="workflow"
+                          refId={w.id}
+                          title={w.title?.trim() || '순서도'}
+                          subtitle={(w.description ?? '').trim().slice(0, 80) || '작업 순서도'}
+                          href={`/value/workflow/${w.id}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation()
+                            removeWorkflow(w.id)
+                          }}
+                          className="p-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50"
+                          title="삭제"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                     <p className="text-sm text-slate-600 m-0 line-clamp-4 flex-1">
                       {(w.description ?? '').trim() || '설명이 없습니다. 카드를 열어 편집하세요.'}

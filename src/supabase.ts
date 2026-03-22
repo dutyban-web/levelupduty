@@ -1,14 +1,10 @@
-import { createClient, type Session, type PostgrestError } from '@supabase/supabase-js'
+import { type Session, type PostgrestError } from '@supabase/supabase-js'
+import { supabase, isSupabaseReady } from './lib/supabase'
 import { SOLUTION_BOOK_TITLE } from './solutionBookPhrases'
+import { clampUnifiedOverallRating } from './unifiedOverallRatingData'
 
 export type { Session }
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
-
-export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : null
+export { supabase, isSupabaseReady }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  AUTH
@@ -2606,6 +2602,8 @@ export interface ManualDocumentRow {
   cover_hue: number | null
   /** 우측 패널 메모·요약 */
   notes: string
+  /** 통합 레이팅과 동일 스케일 (0=미설정, 0.5~5) */
+  rating: number
   created_at: string
   updated_at: string
 }
@@ -2636,6 +2634,16 @@ function parseManualRow(r: Record<string, unknown>): ManualDocumentRow {
     last_viewed_at: r.last_viewed_at != null ? String(r.last_viewed_at) : null,
     cover_hue,
     notes: typeof r.notes === 'string' ? r.notes : String(r.notes ?? ''),
+    rating: (() => {
+      const raw =
+        typeof r.rating === 'number'
+          ? r.rating
+          : typeof r.rating === 'string'
+            ? parseFloat(r.rating)
+            : Number(r.rating ?? 0)
+      const n = Number.isFinite(raw) ? raw : 0
+      return clampUnifiedOverallRating(n)
+    })(),
     created_at: String(r.created_at ?? ''),
     updated_at: String(r.updated_at ?? ''),
   }
@@ -2665,7 +2673,7 @@ export async function fetchManualDocuments(): Promise<ManualDocumentRow[]> {
     const { data, error } = await supabase
       .from('manual_documents')
       .select(
-        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, rating, created_at, updated_at',
       )
       .eq('user_id', uid)
       .order('sort_order', { ascending: true })
@@ -2689,7 +2697,7 @@ export async function fetchManualDocumentById(id: string): Promise<ManualDocumen
     const { data, error } = await supabase
       .from('manual_documents')
       .select(
-        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, rating, created_at, updated_at',
       )
       .eq('id', id)
       .eq('user_id', uid)
@@ -2732,9 +2740,10 @@ export async function insertManualDocument(title = '새 문서'): Promise<Manual
       last_viewed_at: null,
       cover_hue: null,
       notes: '',
+      rating: 0,
     })
     .select(
-      'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
+      'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, rating, created_at, updated_at',
     )
     .single()
   if (error) {
@@ -2758,6 +2767,7 @@ export async function updateManualDocument(
     last_viewed_at?: string | null
     cover_hue?: number | null
     notes?: string
+    rating?: number
   },
 ): Promise<boolean> {
   if (!supabase) return false
@@ -2775,6 +2785,7 @@ export async function updateManualDocument(
   if (patch.last_viewed_at !== undefined) payload.last_viewed_at = patch.last_viewed_at
   if (patch.cover_hue !== undefined) payload.cover_hue = patch.cover_hue
   if (patch.notes !== undefined) payload.notes = patch.notes
+  if (patch.rating !== undefined) payload.rating = clampUnifiedOverallRating(patch.rating)
   if (Object.keys(payload).length === 0) return true
   const bumpsUpdated =
     patch.title !== undefined ||
@@ -2786,7 +2797,8 @@ export async function updateManualDocument(
     patch.importance_score !== undefined ||
     patch.completion_rate !== undefined ||
     patch.cover_hue !== undefined ||
-    patch.notes !== undefined
+    patch.notes !== undefined ||
+    patch.rating !== undefined
   if (bumpsUpdated) payload.updated_at = new Date().toISOString()
   const { error } = await supabase.from('manual_documents').update(payload).eq('id', id).eq('user_id', uid)
   if (error) {

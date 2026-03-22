@@ -11,6 +11,7 @@ import { MANIFEST_NOTE_BUNDLE_KEY } from './manifestNoteUtils'
 import { MANIFEST_STUDIO_BUNDLE_KEY } from './manifestationStudioData'
 import { TRACKER_BUNDLE_KEY } from './trackerData'
 import { BOARD_EMOTIONAL_LENS_KEY } from './boardEmotionalLensData'
+import { ADVENTURE_JOURNAL_KEY } from './adventureJournalData'
 
 export const GOALS_KV_KEY = 'creative-os-life-goals-v1'
 export const MANIFEST_LOCAL_KEY = 'manifestation_local_v1'
@@ -34,6 +35,7 @@ export const ALL_KV_SYNC_KEYS: string[] = [
   POMODORO_LOG_KEY,
   TRACKER_BUNDLE_KEY,
   BOARD_EMOTIONAL_LENS_KEY,
+  ADVENTURE_JOURNAL_KEY,
 ]
 
 function parseStoredValueForMigration(key: string, raw: string): unknown {
@@ -44,6 +46,9 @@ function parseStoredValueForMigration(key: string, raw: string): unknown {
     if (key === ACT_ROLE_REF_KEY || key === ACT_MASTER_KEY) return { text: raw }
     if (key === BOARD_EMOTIONAL_LENS_KEY) {
       return { past_pain: '', past_joy: '', present_pain: '', present_joy: '' }
+    }
+    if (key === ADVENTURE_JOURNAL_KEY) {
+      return { blocks: [] }
     }
     return raw
   }
