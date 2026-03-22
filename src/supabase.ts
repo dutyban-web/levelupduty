@@ -2291,8 +2291,36 @@ export interface ManualDocumentRow {
   sort_order: number
   blocks: unknown
   attachments: unknown
+  category: string
+  tags: string[]
+  importance_score: number
+  completion_rate: number
+  last_viewed_at: string | null
   created_at: string
   updated_at: string
+}
+
+function parseManualRow(r: Record<string, unknown>): ManualDocumentRow {
+  const tagsRaw = r.tags
+  const tags: string[] = Array.isArray(tagsRaw) ? tagsRaw.map(t => String(t)) : []
+  const cr = r.completion_rate
+  const completion_rate =
+    typeof cr === 'number' ? cr : typeof cr === 'string' ? parseFloat(cr) || 0 : Number(cr ?? 0)
+  return {
+    id: String(r.id),
+    user_id: String(r.user_id),
+    title: String(r.title ?? ''),
+    sort_order: Number(r.sort_order ?? 0),
+    blocks: r.blocks,
+    attachments: r.attachments,
+    category: typeof r.category === 'string' ? r.category : String(r.category ?? ''),
+    tags,
+    importance_score: Math.max(0, Math.min(100, Number(r.importance_score ?? 0))),
+    completion_rate: Math.max(0, Math.min(100, completion_rate)),
+    last_viewed_at: r.last_viewed_at != null ? String(r.last_viewed_at) : null,
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
 }
 
 export type ManualAttachment = {
@@ -2318,7 +2346,9 @@ export async function fetchManualDocuments(): Promise<ManualDocumentRow[]> {
   try {
     const { data, error } = await supabase
       .from('manual_documents')
-      .select('id, user_id, title, sort_order, blocks, attachments, created_at, updated_at')
+      .select(
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+      )
       .eq('user_id', uid)
       .order('sort_order', { ascending: true })
       .order('updated_at', { ascending: false })
@@ -2326,19 +2356,34 @@ export async function fetchManualDocuments(): Promise<ManualDocumentRow[]> {
       if (error) console.error('[Supabase] fetchManualDocuments 실패:', error.message)
       return []
     }
-    return data.map(r => ({
-      id: String(r.id),
-      user_id: String(r.user_id),
-      title: String(r.title ?? ''),
-      sort_order: Number(r.sort_order ?? 0),
-      blocks: r.blocks,
-      attachments: r.attachments,
-      created_at: String(r.created_at ?? ''),
-      updated_at: String(r.updated_at ?? ''),
-    }))
+    return data.map(r => parseManualRow(r as Record<string, unknown>))
   } catch (e) {
     console.error('[Supabase] fetchManualDocuments 예외:', e)
     return []
+  }
+}
+
+export async function fetchManualDocumentById(id: string): Promise<ManualDocumentRow | null> {
+  if (!supabase) return null
+  const uid = await _manualUserId()
+  if (!uid) return null
+  try {
+    const { data, error } = await supabase
+      .from('manual_documents')
+      .select(
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+      )
+      .eq('id', id)
+      .eq('user_id', uid)
+      .maybeSingle()
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManualDocumentById 실패:', error.message)
+      return null
+    }
+    return parseManualRow(data as Record<string, unknown>)
+  } catch (e) {
+    console.error('[Supabase] fetchManualDocumentById 예외:', e)
+    return null
   }
 }
 
@@ -2362,24 +2407,21 @@ export async function insertManualDocument(title = '새 문서'): Promise<Manual
       sort_order: sortOrder,
       blocks: [],
       attachments: [],
+      category: '',
+      tags: [],
+      importance_score: 0,
+      completion_rate: 0,
+      last_viewed_at: null,
     })
-    .select('id, user_id, title, sort_order, blocks, attachments, created_at, updated_at')
+    .select(
+      'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+    )
     .single()
   if (error) {
     console.error('[Supabase] insertManualDocument 실패:', error.message)
     return null
   }
-  const r = data as Record<string, unknown>
-  return {
-    id: String(r.id),
-    user_id: String(r.user_id),
-    title: String(r.title ?? ''),
-    sort_order: Number(r.sort_order ?? 0),
-    blocks: r.blocks,
-    attachments: r.attachments,
-    created_at: String(r.created_at ?? ''),
-    updated_at: String(r.updated_at ?? ''),
-  }
+  return parseManualRow(data as Record<string, unknown>)
 }
 
 export async function updateManualDocument(
@@ -2389,6 +2431,11 @@ export async function updateManualDocument(
     blocks?: unknown
     attachments?: unknown
     sort_order?: number
+    category?: string
+    tags?: string[]
+    importance_score?: number
+    completion_rate?: number
+    last_viewed_at?: string | null
   },
 ): Promise<boolean> {
   if (!supabase) return false
@@ -2399,8 +2446,22 @@ export async function updateManualDocument(
   if (patch.blocks !== undefined) payload.blocks = patch.blocks
   if (patch.attachments !== undefined) payload.attachments = patch.attachments
   if (patch.sort_order !== undefined) payload.sort_order = patch.sort_order
+  if (patch.category !== undefined) payload.category = patch.category
+  if (patch.tags !== undefined) payload.tags = patch.tags
+  if (patch.importance_score !== undefined) payload.importance_score = patch.importance_score
+  if (patch.completion_rate !== undefined) payload.completion_rate = patch.completion_rate
+  if (patch.last_viewed_at !== undefined) payload.last_viewed_at = patch.last_viewed_at
   if (Object.keys(payload).length === 0) return true
-  payload.updated_at = new Date().toISOString()
+  const bumpsUpdated =
+    patch.title !== undefined ||
+    patch.blocks !== undefined ||
+    patch.attachments !== undefined ||
+    patch.sort_order !== undefined ||
+    patch.category !== undefined ||
+    patch.tags !== undefined ||
+    patch.importance_score !== undefined ||
+    patch.completion_rate !== undefined
+  if (bumpsUpdated) payload.updated_at = new Date().toISOString()
   const { error } = await supabase.from('manual_documents').update(payload).eq('id', id).eq('user_id', uid)
   if (error) {
     console.error('[Supabase] updateManualDocument 실패:', error.message)
