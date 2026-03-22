@@ -142,7 +142,7 @@ export function QuantumFlowPage({ onSaved }: { onSaved?: () => void }) {
             도착일에는 통합 캘린더에 표시되며, 잠금을 켜면 그날이 오기 전엔 편지를 열 수 없습니다.
           </p>
           <Link
-            to="/life"
+            to="/master-board?warehouse=calendar"
             style={{
               display: 'inline-block',
               marginTop: 14,
@@ -347,7 +347,7 @@ export function QuantumFlowPage({ onSaved }: { onSaved?: () => void }) {
               <Calendar value={calDate} onChange={v => v && setCalDate(v as Date)} locale="ko-KR" tileContent={calTile} />
             </div>
             <p style={{ margin: '12px 0 0', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-              도착일에 맞춰 청록·보라 점이 찍힙니다. <Link to="/life" style={{ color: '#67e8f9' }}>통합 캘린더</Link>에서도 같은 날짜를 확인할 수 있어요.
+              도착일에 맞춰 청록·보라 점이 찍힙니다. <Link to="/master-board?warehouse=calendar" style={{ color: '#67e8f9' }}>통합 캘린더</Link>에서도 같은 날짜를 확인할 수 있어요.
             </p>
           </div>
         </div>

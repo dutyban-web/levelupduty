@@ -31,15 +31,10 @@ import {
   deleteManualDocument,
   type ManualDocumentRow,
 } from './supabase'
+import { manualCoverHueFromId } from './manualCoverHue'
 
 type SortKey = 'sort_order' | 'updated_at' | 'created_at' | 'importance_score' | 'completion_rate' | 'last_viewed_at'
 type SortDir = 'asc' | 'desc'
-
-function coverHueFromId(id: string): number {
-  let h = 0
-  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i) * (i + 1)) % 360
-  return h
-}
 
 const BOOK_GAP_PX = 6
 
@@ -108,8 +103,9 @@ function StaticManualBook({
   onOpen: () => void
   onDelete: () => void
 }) {
-  const hue = coverHueFromId(doc.id)
+  const hue = doc.cover_hue ?? manualCoverHueFromId(doc.id)
   const title = doc.title?.trim() || '제목 없음'
+  const chipBg = `hsl(${hue} 34% 40%)`
   return (
     <li className="group relative flex min-w-0 list-none flex-col items-stretch rounded-md px-0.5 py-0.5 hover:bg-black/5">
       <div className="flex items-start justify-end gap-0.5">
@@ -126,12 +122,12 @@ function StaticManualBook({
         </button>
       </div>
       <button type="button" onClick={onOpen} className="flex w-full min-w-0 flex-col items-center gap-1 pb-1.5 pt-0 text-left">
-        <div className="transition-transform duration-200 group-hover:scale-[1.02]">
+        <div className="origin-top scale-[0.88] transition-transform duration-200 group-hover:scale-[0.90]">
           <ManualBook3D hue={hue} />
         </div>
         <div
-          className="mx-auto w-full max-w-[88px] truncate rounded px-0.5 py-0.5 text-center text-[10px] font-bold leading-tight text-white"
-          style={{ backgroundColor: '#4A828E' }}
+          className="mx-auto line-clamp-3 min-h-[2.6em] w-full max-w-[100px] break-words rounded px-0.5 py-0.5 text-center text-[10px] font-bold leading-snug text-white"
+          style={{ backgroundColor: chipBg }}
           title={title}
         >
           {title}
@@ -159,8 +155,9 @@ function SortableManualBook({
     touchAction: 'none',
   } as CSSProperties
 
-  const hue = coverHueFromId(doc.id)
+  const hue = doc.cover_hue ?? manualCoverHueFromId(doc.id)
   const title = doc.title?.trim() || '제목 없음'
+  const chipBg = `hsl(${hue} 34% 40%)`
 
   return (
     <li
@@ -195,12 +192,12 @@ function SortableManualBook({
           </button>
         </div>
         <button type="button" onClick={onOpen} className="flex w-full min-w-0 flex-col items-center gap-1 pb-1.5 pt-0 text-left">
-          <div className="transition-transform duration-200 group-hover:scale-[1.02]">
+          <div className="origin-top scale-[0.88] transition-transform duration-200 group-hover:scale-[0.90]">
             <ManualBook3D hue={hue} />
           </div>
           <div
-            className="mx-auto w-full max-w-[88px] truncate rounded px-0.5 py-0.5 text-center text-[10px] font-bold leading-tight text-white"
-            style={{ backgroundColor: '#4A828E' }}
+            className="mx-auto line-clamp-3 min-h-[2.6em] w-full max-w-[100px] break-words rounded px-0.5 py-0.5 text-center text-[10px] font-bold leading-snug text-white"
+            style={{ backgroundColor: chipBg }}
             title={title}
           >
             {title}

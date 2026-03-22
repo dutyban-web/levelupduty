@@ -111,7 +111,7 @@ export function SettlementReviewPage({ onSaved }: { onSaved?: () => void }) {
         <h2 style={{ margin: '6px 0 4px', fontSize: 22, fontWeight: 900, color: '#37352F' }}>결산 허브</h2>
         <p style={{ margin: 0, fontSize: 13, color: '#787774' }}>
           일·주·월·분기·년·대운·주제별로 기록합니다.{' '}
-          <Link to="/life" style={{ color: '#6366f1', fontWeight: 700 }}>통합 캘린더</Link>
+          <Link to="/master-board?warehouse=calendar" style={{ color: '#6366f1', fontWeight: 700 }}>통합 캘린더</Link>
           (Beautiful Life)에 결산 일자가 표시됩니다.
         </p>
       </div>

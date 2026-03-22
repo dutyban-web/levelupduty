@@ -1,6 +1,6 @@
-﻿import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import type { CSSProperties } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useIsMobile } from './hooks/useIsMobile'
 import { kvSet } from './lib/supabase'
 import {
@@ -629,20 +629,17 @@ export function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests
   )
 }
 
-/** Beautiful Life · 통합 캘린더 ↔ 저널 캘린더 탭 (`?tab=journal` + `note` 딥링크) */
+/** Beautiful Life — 저널 캘린더만 (`?tab=journal` + `note` 딥링크). 통합 캘린더·인물 DB는 Master Board 하단 창고. */
 export function BeautifulLifeSection({
-  userQuests,
   onOpenNote,
-  calendarRefreshKey,
   onJournalChange,
 }: {
-  userQuests: CalendarUserQuest[]
   onOpenNote: (id: string, title: string, meta?: { source?: 'calendar' }) => void
-  calendarRefreshKey: number
   onJournalChange: () => void
 }) {
   const isMobile = useIsMobile()
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const tabParam = searchParams.get('tab')
   const tab = tabParam === 'journal' ? 'journal' : tabParam === 'people' ? 'people' : 'calendar'
   const noteFromUrl = searchParams.get('note')
@@ -652,24 +649,16 @@ export function BeautifulLifeSection({
       const next = new URLSearchParams(searchParams)
       next.set('tab', 'journal')
       setSearchParams(next, { replace: true })
+      return
     }
-  }, [noteFromUrl, tab, searchParams, setSearchParams])
-
-  function setTab(next: 'calendar' | 'journal' | 'people') {
-    const nextParams = new URLSearchParams(searchParams)
-    if (next === 'calendar') {
-      nextParams.delete('tab')
-      nextParams.delete('note')
-      nextParams.delete('source')
-    } else if (next === 'journal') {
-      nextParams.set('tab', 'journal')
-    } else {
-      nextParams.set('tab', 'people')
-      nextParams.delete('note')
-      nextParams.delete('source')
+    if (tabParam === 'calendar') {
+      navigate('/master-board?warehouse=calendar', { replace: true })
+      return
     }
-    setSearchParams(nextParams, { replace: true })
-  }
+    if (tabParam === 'people') {
+      navigate('/master-board?warehouse=people', { replace: true })
+    }
+  }, [searchParams, navigate, setSearchParams, noteFromUrl, tab, tabParam])
 
   return (
     <>
@@ -679,6 +668,66 @@ export function BeautifulLifeSection({
         borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0,
       }}>
         <span style={{ fontSize: '11px', fontWeight: 800, color: '#9B9A97', marginRight: '8px', letterSpacing: '0.08em' }}>BEAUTIFUL LIFE</span>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: '#4F46E5' }}>저널 캘린더</span>
+      </div>
+      <JournalCalendarPage onOpenNote={onOpenNote} onJournalChange={onJournalChange} />
+    </>
+  )
+}
+
+/** Master Board 맨 아래 — 통합 캘린더 · 통합 인물 DB (데이터 창고). HashRouter 호환: `?warehouse=calendar` | `people` */
+export function MasterBoardWarehouseSection({
+  userQuests,
+  calendarRefreshKey,
+}: {
+  userQuests: CalendarUserQuest[]
+  calendarRefreshKey: number
+}) {
+  const isMobile = useIsMobile()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const tabParam = searchParams.get('warehouse')
+  const tab = tabParam === 'people' ? 'people' : 'calendar'
+
+  useEffect(() => {
+    const w = searchParams.get('warehouse')
+    if (w !== 'calendar' && w !== 'people') return
+    requestAnimationFrame(() => {
+      document.getElementById('data-warehouse')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [location.pathname, searchParams])
+
+  function setTab(next: 'calendar' | 'people') {
+    const nextParams = new URLSearchParams(searchParams)
+    if (next === 'calendar') nextParams.delete('warehouse')
+    else nextParams.set('warehouse', 'people')
+    setSearchParams(nextParams, { replace: true })
+  }
+
+  return (
+    <section
+      id="data-warehouse"
+      style={{
+        marginTop: 40,
+        paddingTop: 48,
+        paddingBottom: 'min(56px, 8vw)',
+        borderTop: '2px solid rgba(0,0,0,0.06)',
+        background: 'linear-gradient(180deg, rgba(250,250,249,0.95) 0%, rgba(255,255,255,0.6) 48px)',
+        maxWidth: '1600px',
+        marginLeft: 'auto',
+        marginRight: 'auto',
+        paddingLeft: isMobile ? 12 : 32,
+        paddingRight: isMobile ? 12 : 32,
+      }}
+    >
+      <div style={{ marginBottom: 20 }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', color: '#9B9A97' }}>데이터 창고</p>
+        <h2 style={{ margin: '6px 0 4px', fontSize: 18, fontWeight: 800, color: '#37352F' }}>통합 캘린더 · 통합 인물 DB</h2>
+        <p style={{ margin: 0, fontSize: 13, color: '#787774', lineHeight: 1.5 }}>
+          퀘스트·저널·운세·결산·시공편지까지 한눈에. 인물은 DB에서 관리합니다.
+        </p>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         <button type="button" onClick={() => setTab('calendar')} style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'calendar' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
@@ -686,13 +735,6 @@ export function BeautifulLifeSection({
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'calendar' ? 600 : 500,
           color: tab === 'calendar' ? '#4F46E5' : '#787774',
         }}>통합 캘린더</button>
-        <button type="button" onClick={() => setTab('journal')} style={{
-          padding: '8px 16px', borderRadius: '8px',
-          border: tab === 'journal' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
-          background: tab === 'journal' ? 'rgba(99,102,241,0.1)' : 'transparent',
-          cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'journal' ? 600 : 500,
-          color: tab === 'journal' ? '#4F46E5' : '#787774',
-        }}>저널 캘린더</button>
         <button type="button" onClick={() => setTab('people')} style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'people' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
@@ -702,16 +744,11 @@ export function BeautifulLifeSection({
         }}>통합 인물 DB</button>
       </div>
       {tab === 'calendar' ? (
-        <UnifiedCalendar
-          userQuests={userQuests}
-          refreshTrigger={calendarRefreshKey}
-        />
-      ) : tab === 'people' ? (
-        <UnifiedPeoplePage />
+        <UnifiedCalendar userQuests={userQuests} refreshTrigger={calendarRefreshKey} />
       ) : (
-        <JournalCalendarPage onOpenNote={onOpenNote} onJournalChange={onJournalChange} />
+        <UnifiedPeoplePage />
       )}
-    </>
+    </section>
   )
 }
 

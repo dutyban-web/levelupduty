@@ -6,11 +6,12 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { kvSet } from './lib/supabase'
-import type { AreaRow, ProjectRow } from './supabase'
+import type { AreaRow, ProjectRow, IdentityRow } from './supabase'
 import {
   Plus, Trash2, GripVertical, ChevronUp, ChevronDown, ExternalLink, MoreHorizontal,
-  Target, ListChecks, Flag, BookOpen, AlertTriangle, Layers,
+  Target, ListChecks, Flag, BookOpen, AlertTriangle, Layers, CalendarRange,
 } from 'lucide-react'
+import { WorkspaceDataArchiveModal, WorkspaceArchiveTrigger, type WorkspaceArchiveKind } from './WorkspaceDataArchiveModal'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -32,6 +33,10 @@ export type ProjectWorkspaceDetail = {
   northStar?: string
   deepNotes?: string
   weeklyFocus?: string
+  /** YYYY-MM-DD */
+  periodStart?: string
+  /** YYYY-MM-DD 마감 */
+  periodEnd?: string
   statusTag?: ProjectStatus
   customTags?: string[]
   checklist?: { id: string; label: string; checked: boolean }[]
@@ -90,7 +95,7 @@ export function saveProjectWorkspace(projectId: string, data: ProjectWorkspaceDe
 }
 
 type HubPrefs = {
-  sortOrder: 'manual' | 'name' | 'time' | 'status'
+  sortOrder: 'manual' | 'name' | 'time' | 'status' | 'deadline'
   sortDirection: 'asc' | 'desc'
   filterAreaId: string | '' // '' = all
   filterStatus: ProjectStatus | 'all'
@@ -141,6 +146,30 @@ function fmtHM(sec?: number): string | null {
   const m = Math.floor((sec % 3600) / 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+/** 워크스페이스 기간 한 줄 (목록 카드용) */
+export function formatProjectPeriodLine(ws: ProjectWorkspaceDetail): string | null {
+  const a = ws.periodStart?.trim()
+  const b = ws.periodEnd?.trim()
+  if (!a && !b) return null
+  if (a && b) return `${a} ~ ${b}`
+  if (a) return `${a} ~`
+  return `~ ${b}`
+}
+
+/** 마감일 기준 D-day 라벨 (한국어) */
+export function projectDeadlineLabel(endYmd?: string): string | null {
+  if (!endYmd?.trim()) return null
+  const d = new Date(endYmd.trim() + 'T12:00:00')
+  if (Number.isNaN(d.getTime())) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  d.setHours(0, 0, 0, 0)
+  const diff = Math.round((d.getTime() - today.getTime()) / 86400000)
+  if (diff < 0) return `마감 ${Math.abs(diff)}일 지남`
+  if (diff === 0) return '오늘 마감'
+  return `D-${diff}`
 }
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -220,6 +249,8 @@ function ProjectMiniCard({
   const st = ws.statusTag ?? 'active'
   const qc = questCountFor(p.id)
   const timeLabel = fmtHM(p.time_spent_sec)
+  const periodLine = formatProjectPeriodLine(ws)
+  const dday = projectDeadlineLabel(ws.periodEnd)
   return (
     <Link
       to={to}
@@ -251,6 +282,12 @@ function ProjectMiniCard({
       <span style={{ fontSize: 11, color: HUB.muted, marginTop: 8 }}>
         퀘스트 {qc}{timeLabel ? ` · ${timeLabel}` : ''}
       </span>
+      {(periodLine || dday) && (
+        <span style={{ fontSize: 10, color: dday?.includes('지남') ? '#dc2626' : (dday === '오늘 마감' ? '#d97706' : '#6366f1'), marginTop: 6, fontWeight: 600, textAlign: 'center', lineHeight: 1.35 }}>
+          {periodLine && <span style={{ display: 'block' }}>{periodLine}</span>}
+          {dday && <span style={{ display: 'block', marginTop: 2 }}>{dday}</span>}
+        </span>
+      )}
     </Link>
   )
 }
@@ -310,7 +347,9 @@ export type ProjectHubPageProps = {
   setNoteTarget: (t: NoteTarget) => void
   onToast: (msg: string) => void
   addAreaByName: (name: string) => void | Promise<void>
-  addProjectByName: (name: string, areaId: string) => void | Promise<void>
+  addProjectByName: (name: string, areaId: string) => void | Promise<void> | Promise<ProjectRow | null>
+  identities: IdentityRow[]
+  completedQuestIds: string[]
 }
 
 export function ProjectHubPage(props: ProjectHubPageProps) {
@@ -323,13 +362,17 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
     editingProjectId, setEditingProjectId, editingProjectName, setEditingProjectName, commitEditProject,
     removeProject, renameProject, moveProjectUp, moveProjectDown,
     setNoteTarget, onToast, addAreaByName, addProjectByName,
+    identities, completedQuestIds,
   } = props
 
+  const [archiveKind, setArchiveKind] = useState<WorkspaceArchiveKind | null>(null)
   const [areaModalOpen, setAreaModalOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
   const [modalAreaName, setModalAreaName] = useState('')
   const [modalProjectName, setModalProjectName] = useState('')
   const [modalProjectAreaId, setModalProjectAreaId] = useState('')
+  const [modalPeriodStart, setModalPeriodStart] = useState('')
+  const [modalPeriodEnd, setModalPeriodEnd] = useState('')
   const [areaMenuOpenId, setAreaMenuOpenId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -413,6 +456,18 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
       })
       return list
     }
+    if (prefs.sortOrder === 'deadline') {
+      list.sort((a, b) => {
+        const endA = loadWorkspace(a.id).periodEnd?.trim() ?? ''
+        const endB = loadWorkspace(b.id).periodEnd?.trim() ?? ''
+        if (!endA && !endB) return a.name.localeCompare(b.name, 'ko')
+        if (!endA) return 1
+        if (!endB) return -1
+        const cmp = endA.localeCompare(endB)
+        return prefs.sortDirection === 'asc' ? cmp : -cmp
+      })
+      return list
+    }
     return list
   }, [projects, prefs])
 
@@ -434,21 +489,25 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
     const area = currentProject.area_id ? areas.find(a => String(a.id) === String(currentProject.area_id)) : null
     const relatedQuests = userQuests.filter(q => String(q.projectId) === String(currentProject.id))
     const st = detail.statusTag ?? 'active'
+    const deadlineHint = projectDeadlineLabel(detail.periodEnd)
 
     return (
       <div style={{ maxWidth: 1600, margin: '0 auto', padding: isMobile ? '14px 12px' : '36px 48px' }}>
-        <button
-          type="button"
-          onClick={() => navigate('/project', { replace: true })}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 20, padding: '8px 14px',
-            borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', color: '#6366f1',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          <span style={{ fontSize: 16 }}>←</span>
-          목록으로
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => navigate('/project', { replace: true })}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 14px',
+              borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)', background: 'transparent', color: '#6366f1',
+              fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: 16 }}>←</span>
+            목록으로
+          </button>
+          <WorkspaceArchiveTrigger title="프로젝트 데이터 보관함 — 전체 목록" onClick={() => setArchiveKind('project')} />
+        </div>
 
         {/* Hero — Travel 스타일 다크 헤더 */}
         <div
@@ -520,6 +579,55 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
               <p style={{ margin: '10px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
                 퀘스트는 실행 단위이고, 여기는 기획·자료·장기 체크를 쌓는 워크스페이스입니다.
               </p>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  background: 'rgba(255,255,255,0.07)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                }}
+              >
+                <CalendarRange size={16} color="rgba(255,255,255,0.75)" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 11, fontWeight: 800, color: 'rgba(255,255,255,0.9)' }}>기간 · 마감</span>
+                <label style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)' }}>시작</label>
+                <input
+                  type="date"
+                  value={detail.periodStart ?? ''}
+                  onChange={e => persist({ ...detail, periodStart: e.target.value || undefined })}
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    background: 'rgba(0,0,0,0.25)',
+                    color: '#fff',
+                    fontSize: 12,
+                  }}
+                />
+                <label style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)' }}>마감</label>
+                <input
+                  type="date"
+                  value={detail.periodEnd ?? ''}
+                  onChange={e => persist({ ...detail, periodEnd: e.target.value || undefined })}
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    background: 'rgba(0,0,0,0.25)',
+                    color: '#fff',
+                    fontSize: 12,
+                  }}
+                />
+                {deadlineHint && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: deadlineHint.includes('지남') ? '#fecaca' : '#fde68a' }}>
+                    {deadlineHint}
+                  </span>
+                )}
+              </div>
             </div>
             <div style={{ textAlign: isMobile ? 'left' : 'right' }}>
               <p style={{ margin: 0, fontSize: 28, fontWeight: 800, color: '#fff' }}>{new Date().getFullYear()}</p>
@@ -862,6 +970,7 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
               <h1 style={{ margin: '6px 0 0', fontSize: 24, fontWeight: 800, color: HUB.text }}>Real Projects</h1>
               <p style={{ margin: '6px 0 0', fontSize: 13, color: HUB.muted }}>비전 축(Vision)과 장기 프로젝트를 같은 톤으로 정리했습니다</p>
             </div>
+            <WorkspaceArchiveTrigger title="퀘스트 데이터 보관함 — 전체 목록" onClick={() => setArchiveKind('quest')} />
           </div>
 
           {/* Vision Area — Area와 동일 패널 스타일 */}
@@ -869,6 +978,7 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: HUB.text }}>Vision Area</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <WorkspaceArchiveTrigger title="Vision Area 데이터 보관함 — 전체 목록" onClick={() => setArchiveKind('area')} />
                 <span style={{ fontSize: 11, color: HUB.subtle }}>{areas.length}개</span>
                 <button
                   type="button"
@@ -969,17 +1079,22 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
           <div style={{ background: HUB.panelBg, border: HUB.panelBorder, borderRadius: HUB.panelRadius, padding: '14px 16px 18px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: HUB.text }}>Real Projects</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <WorkspaceArchiveTrigger title="프로젝트 데이터 보관함 — 전체 목록" onClick={() => setArchiveKind('project')} />
               <button
                 type="button"
                 onClick={() => {
                   setModalProjectName('')
                   setModalProjectAreaId(areas[0]?.id ?? '')
+                  setModalPeriodStart('')
+                  setModalPeriodEnd('')
                   setProjectModalOpen(true)
                 }}
                 style={btnGhost}
               >
                 + New
               </button>
+              </div>
             </div>
 
             {projects.length > 0 && (
@@ -994,9 +1109,15 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
                   <option value="name">이름</option>
                   <option value="time">시간</option>
                   <option value="status">상태</option>
+                  <option value="deadline">마감일</option>
                 </select>
                 {prefs.sortOrder !== 'manual' && (
-                  <button type="button" onClick={() => setPrefs(p => ({ ...p, sortDirection: p.sortDirection === 'desc' ? 'asc' : 'desc' }))} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, cursor: 'pointer' }}>
+                  <button
+                    type="button"
+                    title={prefs.sortOrder === 'deadline' ? (prefs.sortDirection === 'asc' ? '마감 빠른 순' : '마감 늦은 순') : undefined}
+                    onClick={() => setPrefs(p => ({ ...p, sortDirection: p.sortDirection === 'desc' ? 'asc' : 'desc' }))}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 11, cursor: 'pointer' }}
+                  >
                     {prefs.sortDirection === 'desc' ? '↓' : '↑'}
                   </button>
                 )}
@@ -1134,26 +1255,48 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
           value={modalProjectName}
           onChange={e => setModalProjectName(e.target.value)}
           placeholder="프로젝트 이름"
-          style={{ ...inputBase, marginBottom: 16 }}
+          style={{ ...inputBase, marginBottom: 12 }}
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault()
               void (async () => {
-                await addProjectByName(modalProjectName, modalProjectAreaId)
+                const row = await addProjectByName(modalProjectName, modalProjectAreaId)
+                if (row && (modalPeriodStart || modalPeriodEnd)) {
+                  const cur = loadWorkspace(row.id)
+                  saveProjectWorkspace(row.id, { ...cur, periodStart: modalPeriodStart || undefined, periodEnd: modalPeriodEnd || undefined })
+                }
                 setProjectModalOpen(false)
                 setModalProjectName('')
+                setModalPeriodStart('')
+                setModalPeriodEnd('')
               })()
             }
           }}
         />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: HUB.muted, display: 'block', marginBottom: 6 }}>시작일 (선택)</label>
+            <input type="date" value={modalPeriodStart} onChange={e => setModalPeriodStart(e.target.value)} style={{ ...inputBase, padding: '8px 10px' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: HUB.muted, display: 'block', marginBottom: 6 }}>마감일 (선택)</label>
+            <input type="date" value={modalPeriodEnd} onChange={e => setModalPeriodEnd(e.target.value)} style={{ ...inputBase, padding: '8px 10px' }} />
+          </div>
+        </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" onClick={() => setProjectModalOpen(false)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.1)', background: '#fff', fontSize: 13, cursor: 'pointer' }}>취소</button>
           <button
             type="button"
             onClick={async () => {
-              await addProjectByName(modalProjectName, modalProjectAreaId)
+              const row = await addProjectByName(modalProjectName, modalProjectAreaId)
+              if (row && (modalPeriodStart || modalPeriodEnd)) {
+                const cur = loadWorkspace(row.id)
+                saveProjectWorkspace(row.id, { ...cur, periodStart: modalPeriodStart || undefined, periodEnd: modalPeriodEnd || undefined })
+              }
               setProjectModalOpen(false)
               setModalProjectName('')
+              setModalPeriodStart('')
+              setModalPeriodEnd('')
             }}
             disabled={!modalProjectName.trim() || !modalProjectAreaId}
             style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: (modalProjectName.trim() && modalProjectAreaId) ? HUB.accent : '#e5e5e5', color: '#fff', fontSize: 13, fontWeight: 700, cursor: (modalProjectName.trim() && modalProjectAreaId) ? 'pointer' : 'default' }}
@@ -1162,6 +1305,19 @@ export function ProjectHubPage(props: ProjectHubPageProps) {
           </button>
         </div>
       </HubModal>
+
+      {archiveKind != null && (
+        <WorkspaceDataArchiveModal
+          open
+          onClose={() => setArchiveKind(null)}
+          kind={archiveKind}
+          areas={areas}
+          projects={projects}
+          quests={userQuests}
+          identities={identities}
+          completedQuestIds={completedQuestIds}
+        />
+      )}
     </>
   )
 }

@@ -23,7 +23,7 @@ import {
   type FortuneCardRow,
 } from './supabase'
 import { FortuneReadingBlockNoteSection, blockNoteToPlainPreview } from './RichEditor'
-import { SolutionBookDeckCard, SolutionBookModal } from './SolutionBook'
+import { SolutionBookDeckCard, SolutionBookModal, SOLUTION_BOOK_DECK_CARD_HEIGHT_PX } from './SolutionBook'
 import { SOLUTION_BOOK_TITLE } from './solutionBookPhrases'
 import { PersonLinkPicker } from './PersonLinkPicker'
 
@@ -294,15 +294,29 @@ function toDatetimeLocal(iso: string): string {
   return `${y}-${m}-${day}T${h}:${min}`
 }
 
-const DEFAULT_FORTUNE_TYPES = ['직장운', '애정운', '재물운', '건강운', '학업운', '인간관계운', '기타', SOLUTION_BOOK_TITLE]
+/** 아카이브·편집: 질문 종류 (운세 카테고리) — 해결의 책 전용 라벨은 점괘 종류로 분리 */
+const DEFAULT_QUESTION_TYPES = ['직장운', '애정운', '재물운', '건강운', '학업운', '합격운', '인간관계운', '기타']
+
+/** 점괘 종류 고정 프리셋 + 오라클 덱 이름은 decks에서 합성 */
+const FIXED_READING_KIND_PRESETS = ['해결의 책', '사주', '점성술', '관상', '손금', '자미두수', '숙요', '인도점성술', '산통점', '주역점', '토정비결', '기타'] as const
+
+function mergeReadingKindOptions(decks: FortuneDeckRow[]): string[] {
+  const set = new Set<string>([...FIXED_READING_KIND_PRESETS])
+  for (const d of decks) {
+    const n = d.name?.trim()
+    if (n) set.add(n)
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'ko'))
+}
 
 const FORTUNE_READING_EDIT_Z = 50025
 
-function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
+function ReadingLogEditModal({ log, onClose, onSaved, onDeleted, decks }: {
   log: ReadingLogRow
   onClose: () => void
   onSaved: (updated: ReadingLogRow) => void
   onDeleted: () => void
+  decks: FortuneDeckRow[]
 }) {
   const [question, setQuestion] = useState(log.question)
   const [notes, setNotes] = useState(log.notes ?? '')
@@ -312,6 +326,8 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   const lastSyncedNotesFromLogRef = useRef<{ id: string; notes: string | null | undefined }>({ id: log.id, notes: log.notes })
   const [createdAt, setCreatedAt] = useState(toDatetimeLocal(log.created_at))
   const [fortuneType, setFortuneType] = useState(log.fortune_type ?? '')
+  const [readingKind, setReadingKind] = useState(log.reading_kind ?? '')
+  const readingKindOptions = useMemo(() => mergeReadingKindOptions(decks), [decks])
   const [fortuneScore, setFortuneScore] = useState(log.fortune_score != null ? String(log.fortune_score) : '')
   const [fortuneOutcome, setFortuneOutcome] = useState<'good' | 'bad' | ''>(log.fortune_outcome ?? '')
   const [accuracyScore, setAccuracyScore] = useState(log.accuracy_score != null ? String(log.accuracy_score) : '')
@@ -325,6 +341,7 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
     notesJsonRef.current = n
     setCreatedAt(toDatetimeLocal(log.created_at))
     setFortuneType(log.fortune_type ?? '')
+    setReadingKind(log.reading_kind ?? '')
     setFortuneScore(log.fortune_score != null ? String(log.fortune_score) : '')
     setFortuneOutcome(log.fortune_outcome ?? '')
     setAccuracyScore(log.accuracy_score != null ? String(log.accuracy_score) : '')
@@ -334,7 +351,7 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
       lastSyncedNotesFromLogRef.current = { id: log.id, notes: log.notes }
       setNotesBootstrapKey(k => k + 1)
     }
-  }, [log.id, log.question, log.notes, log.created_at, log.fortune_type, log.fortune_score, log.fortune_outcome, log.accuracy_score, log.related_people])
+  }, [log.id, log.question, log.notes, log.created_at, log.fortune_type, log.reading_kind, log.fortune_score, log.fortune_outcome, log.accuracy_score, log.related_people])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -355,6 +372,7 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
       notes: notesPayload,
       created_at: new Date(createdAt).toISOString(),
       fortune_type: fortuneType.trim() || null,
+      reading_kind: readingKind.trim() || null,
       fortune_score: fs ?? null,
       fortune_outcome: (fortuneOutcome === 'good' || fortuneOutcome === 'bad') ? fortuneOutcome : null,
       accuracy_score: acc ?? null,
@@ -560,9 +578,16 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>점괘 종류</label>
-                <input list="fortune-types" value={fortuneType} onChange={e => setFortuneType(e.target.value)} placeholder="직장운, 애정운 등" style={fieldInp} />
-                <datalist id="fortune-types">{DEFAULT_FORTUNE_TYPES.map(t => <option key={t} value={t} />)}</datalist>
+                <input list="reading-kinds" value={readingKind} onChange={e => setReadingKind(e.target.value)} placeholder="해결의 책, 덱 이름, 사주…" style={fieldInp} />
+                <datalist id="reading-kinds">{readingKindOptions.map(t => <option key={t} value={t} />)}</datalist>
               </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>질문 종류</label>
+                <input list="question-types" value={fortuneType} onChange={e => setFortuneType(e.target.value)} placeholder="직장운, 애정운 등" style={fieldInp} />
+                <datalist id="question-types">{DEFAULT_QUESTION_TYPES.map(t => <option key={t} value={t} />)}</datalist>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>운세 좋음/나쁨</label>
                 <select value={fortuneOutcome} onChange={e => setFortuneOutcome(e.target.value as 'good' | 'bad' | '')} style={{ ...fieldInp, cursor: 'pointer' }}>
@@ -571,16 +596,14 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
                   <option value="bad">나쁜 운세</option>
                 </select>
               </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>점괘 점수 (1~100)</label>
                 <input type="number" min={1} max={100} value={fortuneScore} onChange={e => setFortuneScore(e.target.value)} placeholder="점수" style={fieldInp} />
               </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>적중도 (1~100)</label>
-                <input type="number" min={1} max={100} value={accuracyScore} onChange={e => setAccuracyScore(e.target.value)} placeholder="실제로 맞았는지" style={fieldInp} />
-              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>적중도 (1~100)</label>
+              <input type="number" min={1} max={100} value={accuracyScore} onChange={e => setAccuracyScore(e.target.value)} placeholder="실제로 맞았는지" style={fieldInp} />
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>관련 인물</label>
@@ -676,19 +699,21 @@ function ReadingLogEditModal({ log, onClose, onSaved, onDeleted }: {
   )
 }
 
-function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
+function FortuneRecordsSheet({ readingLogs, decks, onDeleteLog, onPatchLog }: {
   readingLogs: ReadingLogRow[]
+  decks: FortuneDeckRow[]
   onDeleteLog: (log: ReadingLogRow) => void
-  onNavigateToDate?: (date: string) => void
+  onPatchLog: (id: string, patch: Parameters<typeof updateFortuneEvent>[1]) => Promise<void>
 }) {
   const isMobile = useIsMobile()
-  const [filterType, setFilterType] = useState<string>('')
+  const [filterQuestionType, setFilterQuestionType] = useState<string>('')
+  const [filterReadingKind, setFilterReadingKind] = useState<string>('')
   const [filterOutcome, setFilterOutcome] = useState<'good' | 'bad' | ''>('')
   const [filterMinScore, setFilterMinScore] = useState('')
   const [filterMinAccuracy, setFilterMinAccuracy] = useState('')
   const [filterYear, setFilterYear] = useState<string>('')
   const [filterMonth, setFilterMonth] = useState<string>('')
-  const [sortBy, setSortBy] = useState<'date' | 'score' | 'accuracy' | 'type'>('date')
+  const [sortBy, setSortBy] = useState<'date' | 'score' | 'accuracy' | 'questionType' | 'readingKind'>('date')
   const [sortAsc, setSortAsc] = useState(false)
   /** 필터·정렬 후 목록에서 화면에 보이는 행 수 (데이터가 많을 때 스크롤/렌더 부담 완화) */
   const [pageSize, setPageSize] = useState<'10' | '30' | '50' | '100' | 'all'>('30')
@@ -702,19 +727,31 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
     return Array.from(set).sort((a, b) => b - a)
   }, [readingLogs])
 
-  const allTypes = useMemo(() => {
-    const set = new Set<string>(DEFAULT_FORTUNE_TYPES)
+  const allQuestionTypes = useMemo(() => {
+    const set = new Set<string>(DEFAULT_QUESTION_TYPES)
     for (const r of readingLogs) {
-      if (r.fortune_type?.trim()) set.add(r.fortune_type.trim())
+      const t = r.fortune_type?.trim()
+      if (t && t !== SOLUTION_BOOK_TITLE) set.add(t)
     }
     return Array.from(set).sort()
   }, [readingLogs])
+
+  const allReadingKinds = useMemo(() => {
+    const base = mergeReadingKindOptions(decks)
+    const set = new Set<string>(base)
+    for (const r of readingLogs) {
+      const k = r.reading_kind?.trim()
+      if (k) set.add(k)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ko'))
+  }, [readingLogs, decks])
 
   const getLogDate = (r: ReadingLogRow) => r.event_date ?? r.created_at?.slice(0, 10) ?? ''
 
   const filteredAndSorted = useMemo(() => {
     let list = [...readingLogs]
-    if (filterType) list = list.filter(r => (r.fortune_type ?? '') === filterType)
+    if (filterQuestionType) list = list.filter(r => (r.fortune_type ?? '') === filterQuestionType)
+    if (filterReadingKind) list = list.filter(r => (r.reading_kind ?? '') === filterReadingKind)
     if (filterOutcome) list = list.filter(r => r.fortune_outcome === filterOutcome)
     const minScore = filterMinScore === '' ? 0 : Math.max(0, parseInt(filterMinScore, 10) || 0)
     if (minScore > 0) list = list.filter(r => (r.fortune_score ?? 0) >= minScore)
@@ -727,11 +764,12 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
       if (sortBy === 'date') return mul * ((getLogDate(a) || '9999').localeCompare(getLogDate(b) || '9999'))
       if (sortBy === 'score') return mul * ((a.fortune_score ?? 0) - (b.fortune_score ?? 0))
       if (sortBy === 'accuracy') return mul * ((a.accuracy_score ?? 0) - (b.accuracy_score ?? 0))
-      if (sortBy === 'type') return mul * ((a.fortune_type ?? '').localeCompare(b.fortune_type ?? ''))
+      if (sortBy === 'questionType') return mul * ((a.fortune_type ?? '').localeCompare(b.fortune_type ?? ''))
+      if (sortBy === 'readingKind') return mul * ((a.reading_kind ?? '').localeCompare(b.reading_kind ?? ''))
       return 0
     })
     return list
-  }, [readingLogs, filterType, filterOutcome, filterMinScore, filterMinAccuracy, filterYear, filterMonth, sortBy, sortAsc])
+  }, [readingLogs, filterQuestionType, filterReadingKind, filterOutcome, filterMinScore, filterMinAccuracy, filterYear, filterMonth, sortBy, sortAsc])
 
   const displayedRows = useMemo(() => {
     if (pageSize === 'all') return filteredAndSorted
@@ -742,9 +780,28 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
   const totalFiltered = filteredAndSorted.length
   const shownCount = displayedRows.length
 
-  const hasFilters = filterType || filterOutcome || filterMinScore || filterMinAccuracy || filterYear || filterMonth
+  const readingKindOptions = useMemo(() => mergeReadingKindOptions(decks), [decks])
+
+  /** 표 행과 같은 톤 — 테두리 없음(클릭·포커스 시 편집) */
+  const cellInp: React.CSSProperties = {
+    width: '100%',
+    maxWidth: '100%',
+    padding: '2px 2px',
+    borderRadius: 2,
+    border: 'none',
+    fontSize: 11,
+    background: 'transparent',
+    boxSizing: 'border-box',
+    outline: 'none',
+    fontFamily: 'inherit',
+    color: 'inherit',
+    boxShadow: 'none',
+  }
+
+  const hasFilters = filterQuestionType || filterReadingKind || filterOutcome || filterMinScore || filterMinAccuracy || filterYear || filterMonth
   function clearFilters() {
-    setFilterType('')
+    setFilterQuestionType('')
+    setFilterReadingKind('')
     setFilterOutcome('')
     setFilterMinScore('')
     setFilterMinAccuracy('')
@@ -759,16 +816,20 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
       </h2>
       <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#F8F8F6' }}>
         <select value={filterYear} onChange={e => setFilterYear(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="연도 필터">
-          <option value="">연도 전체</option>
+          <option value="">연도</option>
           {allYears.map(y => <option key={y} value={String(y)}>{y}년</option>)}
         </select>
         <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="월 필터">
-          <option value="">월 전체</option>
+          <option value="">월</option>
           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => <option key={m} value={String(m).padStart(2, '0')}>{m}월</option>)}
         </select>
-        <select value={filterType} onChange={e => setFilterType(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}>
-          <option value="">점괘 종류 전체</option>
-          {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
+        <select value={filterReadingKind} onChange={e => setFilterReadingKind(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="점괘종류 (해결의 책, 덱, 사주 등)">
+          <option value="">점괘종류</option>
+          {allReadingKinds.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={filterQuestionType} onChange={e => setFilterQuestionType(e.target.value)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }} title="질문종류 (직장운 등)">
+          <option value="">질문종류</option>
+          {allQuestionTypes.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select value={filterOutcome} onChange={e => setFilterOutcome(e.target.value as 'good' | 'bad' | '')} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '12px', background: '#fff' }}>
           <option value="">운세 전체</option>
@@ -786,7 +847,8 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
           <option value="date">날짜순</option>
           <option value="score">점수순</option>
           <option value="accuracy">적중도순</option>
-          <option value="type">점괘종류순</option>
+          <option value="questionType">질문종류순</option>
+          <option value="readingKind">점괘종류순</option>
         </select>
         <button onClick={() => setSortAsc(a => !a)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
           {sortAsc ? '↑ 오름차순' : '↓ 내림차순'}
@@ -812,33 +874,40 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
         </div>
       )}
       <div style={{ overflowX: 'auto', maxHeight: isMobile ? '400px' : '500px', overflowY: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '8%' }} />
+            <col style={{ width: '7%' }} />
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '5%' }} />
+            <col style={{ width: '6%' }} />
+            <col style={{ width: '5%' }} />
+            <col style={{ width: '7%' }} />
+            <col style={{ width: '6%' }} />
+          </colgroup>
           <thead style={{ position: 'sticky', top: 0, background: '#F4F4F2', zIndex: 1 }}>
             <tr>
-              <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', width: '1%', minWidth: '88px', maxWidth: '120px' }}>날짜</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '80px' }}>점괘종류</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '140px' }}>질문/타이틀</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '280px', width: '22%' }}>카드</th>
-              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '60px' }}>점수</th>
-              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '70px' }}>운세</th>
-              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '60px' }}>적중도</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', minWidth: '90px' }}>관련 인물</th>
-              <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)', width: '70px' }}>작업</th>
+              <th style={{ padding: '8px 4px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>날짜</th>
+              <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>점괘종류</th>
+              <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>질문종류</th>
+              <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>질문/타이틀</th>
+              <th style={{ padding: '8px 8px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>카드</th>
+              <th style={{ padding: '8px 4px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>점수</th>
+              <th style={{ padding: '8px 4px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>운세 내용</th>
+              <th style={{ padding: '8px 4px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>적중도</th>
+              <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>관련 인물</th>
+              <th style={{ padding: '8px 4px', textAlign: 'center', fontWeight: 700, color: '#7C3AED', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>작업</th>
             </tr>
           </thead>
           <tbody>
             {filteredAndSorted.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: '32px 16px', textAlign: 'center', color: '#9B9A97', fontSize: '13px' }}>기록이 없습니다. 위 필터를 조정해보세요.</td></tr>
+              <tr><td colSpan={10} style={{ padding: '32px 16px', textAlign: 'center', color: '#9B9A97', fontSize: '13px' }}>기록이 없습니다. 위 필터를 조정해보세요.</td></tr>
             ) : (
               displayedRows.map(log => {
-                const isSolutionBook = log.fortune_type === SOLUTION_BOOK_TITLE
-                const logDate = getLogDate(log)
-                const d = logDate ? new Date(logDate + 'T12:00:00') : new Date(log.created_at)
-                const datePart = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
-                const timeStr = new Date(log.created_at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
-                const compactDateTime = `${datePart} ${timeStr}`
+                const isSolutionBook = log.reading_kind === SOLUTION_BOOK_TITLE
                 const drawn = log.drawn_cards ?? []
-                const preview = log.question.length > 30 ? log.question.slice(0, 30) + '…' : log.question
                 return (
                   <tr key={log.id} style={{
                     borderBottom: '1px solid rgba(0,0,0,0.05)',
@@ -848,12 +917,73 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
                     onMouseEnter={e => { e.currentTarget.style.backgroundColor = isSolutionBook ? 'rgba(74, 20, 18, 0.1)' : 'rgba(124,58,237,0.04)' }}
                     onMouseLeave={e => { e.currentTarget.style.backgroundColor = isSolutionBook ? 'rgba(74, 20, 18, 0.05)' : 'transparent' }}
                   >
-                    <td style={{ padding: '10px 8px', color: isSolutionBook ? '#5c3d3a' : '#787774', whiteSpace: 'nowrap', fontSize: '11px', cursor: onNavigateToDate && logDate ? 'pointer' : 'default' }} onClick={() => onNavigateToDate?.(logDate)} title={onNavigateToDate && logDate ? '클릭 시 캘린더에서 해당 날짜 보기' : undefined}>{compactDateTime}</td>
-                    <td style={{ padding: '10px 12px', color: isSolutionBook ? '#6b2f2a' : '#37352F', fontWeight: isSolutionBook ? 700 : undefined }}>{log.fortune_type ?? '-'}</td>
-                    <td style={{ padding: '10px 12px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      <Link to={`/fortune?log=${log.id}`} style={{ color: isSolutionBook ? '#5c241f' : '#37352F', cursor: 'pointer', textDecoration: 'none', fontWeight: isSolutionBook ? 600 : undefined }} title={log.question}>{preview}</Link>
+                    <td style={{ padding: '8px 4px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        type="datetime-local"
+                        defaultValue={toDatetimeLocal(log.created_at)}
+                        key={`${log.id}-dt-${log.created_at}`}
+                        style={{ ...cellInp, fontSize: 10, minWidth: 0, maxWidth: '100%', color: isSolutionBook ? '#5c3d3a' : '#787774' }}
+                        onBlur={e => {
+                          const v = e.target.value
+                          if (!v) return
+                          const iso = new Date(v).toISOString()
+                          if (iso !== log.created_at) void onPatchLog(log.id, { created_at: iso })
+                        }}
+                      />
                     </td>
-                    <td style={{ padding: '10px 12px', minWidth: '260px' }}>
+                    <td style={{ padding: '8px 6px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        list={`reading-kinds-${log.id}`}
+                        defaultValue={log.reading_kind?.trim() ?? ''}
+                        key={`${log.id}-rk-${log.reading_kind ?? ''}`}
+                        placeholder="점괘 종류"
+                        style={{ ...cellInp, fontSize: 11, color: isSolutionBook ? '#6b2f2a' : '#37352F', fontWeight: isSolutionBook ? 700 : undefined }}
+                        onBlur={e => {
+                          const v = e.target.value.trim()
+                          const next = v || null
+                          if ((log.reading_kind ?? '') !== (next ?? '')) void onPatchLog(log.id, { reading_kind: next })
+                        }}
+                      />
+                      <datalist id={`reading-kinds-${log.id}`}>{readingKindOptions.map(t => <option key={t} value={t} />)}</datalist>
+                    </td>
+                    <td style={{ padding: '8px 6px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        list={`question-types-${log.id}`}
+                        defaultValue={log.fortune_type?.trim() ?? ''}
+                        key={`${log.id}-ft-${log.fortune_type ?? ''}`}
+                        placeholder="질문 종류"
+                        style={{ ...cellInp, fontSize: 11 }}
+                        onBlur={e => {
+                          const v = e.target.value.trim()
+                          const next = v || null
+                          if ((log.fortune_type ?? '') !== (next ?? '')) void onPatchLog(log.id, { fortune_type: next })
+                        }}
+                      />
+                      <datalist id={`question-types-${log.id}`}>{DEFAULT_QUESTION_TYPES.map(t => <option key={t} value={t} />)}</datalist>
+                    </td>
+                    <td style={{ padding: '8px 10px', verticalAlign: 'top', minWidth: 0 }}>
+                      <Link
+                        to={`/fortune?log=${log.id}`}
+                        title={log.question}
+                        style={{
+                          color: isSolutionBook ? '#5c241f' : '#37352F',
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                          fontWeight: isSolutionBook ? 600 : undefined,
+                          lineHeight: 1.55,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word',
+                          minWidth: 0,
+                        }}
+                      >
+                        {log.question}
+                      </Link>
+                    </td>
+                    <td style={{ padding: '8px 8px', verticalAlign: 'top', minWidth: 0 }}>
                       {drawn.length > 0 ? (
                         isSolutionBook ? (
                           <span
@@ -883,15 +1013,81 @@ function FortuneRecordsSheet({ readingLogs, onDeleteLog, onNavigateToDate }: {
                         )
                       ) : '-'}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center', color: '#37352F' }}>{log.fortune_score != null ? log.fortune_score : '-'}</td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                      {log.fortune_outcome === 'good' ? <span style={{ color: '#22c55e', fontWeight: 600 }}>좋음</span> : log.fortune_outcome === 'bad' ? <span style={{ color: '#ef4444', fontWeight: 600 }}>나쁨</span> : '-'}
+                    <td style={{ padding: '8px 4px', textAlign: 'center', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        defaultValue={log.fortune_score != null ? String(log.fortune_score) : ''}
+                        key={`${log.id}-fs-${log.fortune_score ?? 'x'}`}
+                        placeholder="—"
+                        style={{ ...cellInp, fontSize: 12, textAlign: 'center', width: 40, maxWidth: 48, padding: '2px 0' }}
+                        onBlur={e => {
+                          const raw = e.target.value.trim()
+                          if (raw === '') {
+                            if (log.fortune_score != null) void onPatchLog(log.id, { fortune_score: null })
+                            return
+                          }
+                          const parsed = parseInt(raw, 10)
+                          if (Number.isNaN(parsed)) return
+                          const n = Math.min(100, Math.max(1, parsed))
+                          if (n !== log.fortune_score) void onPatchLog(log.id, { fortune_score: n })
+                        }}
+                      />
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center', color: '#37352F' }}>{log.accuracy_score != null ? log.accuracy_score : '-'}</td>
-                    <td style={{ padding: '10px 12px', color: '#37352F', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={log.related_people ?? ''}>{log.related_people ?? '-'}</td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                    <td style={{ padding: '8px 4px', textAlign: 'center', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <select
+                        value={log.fortune_outcome ?? ''}
+                        style={{ ...cellInp, cursor: 'pointer', padding: '1px 0', fontSize: 11 }}
+                        onChange={e => {
+                          const v = e.target.value as '' | 'good' | 'bad'
+                          const next = v === 'good' || v === 'bad' ? v : null
+                          void onPatchLog(log.id, { fortune_outcome: next })
+                        }}
+                      >
+                        <option value="">—</option>
+                        <option value="good">좋음</option>
+                        <option value="bad">나쁨</option>
+                      </select>
+                    </td>
+                    <td style={{ padding: '8px 4px', textAlign: 'center', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        defaultValue={log.accuracy_score != null ? String(log.accuracy_score) : ''}
+                        key={`${log.id}-as-${log.accuracy_score ?? 'x'}`}
+                        placeholder="—"
+                        style={{ ...cellInp, textAlign: 'center', width: 40, maxWidth: 48, padding: '2px 0' }}
+                        onBlur={e => {
+                          const raw = e.target.value.trim()
+                          if (raw === '') {
+                            if (log.accuracy_score != null) void onPatchLog(log.id, { accuracy_score: null })
+                            return
+                          }
+                          const parsed = parseInt(raw, 10)
+                          if (Number.isNaN(parsed)) return
+                          const n = Math.min(100, Math.max(1, parsed))
+                          if (n !== log.accuracy_score) void onPatchLog(log.id, { accuracy_score: n })
+                        }}
+                      />
+                    </td>
+                    <td style={{ padding: '8px 6px', verticalAlign: 'top' }} onClick={e => e.stopPropagation()}>
+                      <input
+                        defaultValue={log.related_people ?? ''}
+                        key={`${log.id}-rp-${log.related_people ?? ''}`}
+                        placeholder="관련 인물"
+                        style={{ ...cellInp, fontSize: 10 }}
+                        onBlur={e => {
+                          const v = e.target.value.trim()
+                          const next = v || null
+                          if ((log.related_people ?? '') !== (next ?? '')) void onPatchLog(log.id, { related_people: next })
+                        }}
+                      />
+                    </td>
+                    <td style={{ padding: '8px 4px', textAlign: 'center', verticalAlign: 'top' }}>
                       <Link to={`/fortune?log=${log.id}`} style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)', color: '#7C3AED', cursor: 'pointer', fontSize: '10px', marginRight: '4px', textDecoration: 'none', display: 'inline-block' }} title="수정">✏️</Link>
-                      <button onClick={() => onDeleteLog(log)} title="삭제" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: '10px' }}>🗑️</button>
+                      <button type="button" onClick={() => onDeleteLog(log)} title="삭제" style={{ padding: '4px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: '10px' }}>🗑️</button>
                     </td>
                   </tr>
                 )
@@ -949,6 +1145,8 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
   }, [decksMenuOpen])
 
   const displayDecks = decks.length > 0 ? decks : [FALLBACK_DECK]
+  /** 덱 카드·[+ 덱 추가] 공통 가로(추가 덱도 동일) */
+  const oracleDeckCardW = isMobile ? 100 : 120
 
   const todaySolar = Solar.fromDate(new Date())
   const lunar = todaySolar.getLunar()
@@ -975,6 +1173,15 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
       onReadingSaved?.()
     }
   }
+
+  const handlePatchReadingLog = useCallback(async (id: string, patch: Parameters<typeof updateFortuneEvent>[1]) => {
+    const updated = await updateFortuneEvent(id, patch)
+    if (updated) {
+      setReadingLogs(prev => prev.map(r => (r.id === id ? updated : r)))
+      setDetailLog(d => (d?.id === id ? updated : d))
+      onReadingSaved?.()
+    }
+  }, [onReadingSaved])
 
   async function saveFortuneFeedback() {
     const text = fortuneFeedback.trim()
@@ -1105,7 +1312,7 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', borderRadius: '12px', backgroundColor: '#FFFFFF', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
           <textarea value={fortuneFeedback} onChange={e => setFortuneFeedback(e.target.value)}
-            placeholder="운세 피드백 (Fortune Journal)..."
+            placeholder="운세 내용…"
             style={{ flex: 1, minHeight: '48px', maxHeight: '64px', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.08)', backgroundColor: '#F8F8F6', fontSize: '12px', color: '#37352F', lineHeight: 1.5, resize: 'none', outline: 'none' }}
           />
           <button onClick={saveFortuneFeedback} disabled={savingFeedback || !fortuneFeedback.trim()} style={{ padding: '10px 16px', borderRadius: '8px', border: 'none', backgroundColor: savedFeedback ? '#34d399' : '#6366f1', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: savingFeedback ? 'default' : 'pointer', opacity: savingFeedback ? 0.7 : 1, flexShrink: 0 }}>{savingFeedback ? '저장 중…' : savedFeedback ? '저장됨 ✓' : '저장'}</button>
@@ -1148,16 +1355,23 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
                   }
             }
           />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: 800, color: '#37352F' }}>나의 오라클 덱</h2>
-            <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '8px', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h2 style={{ margin: 0, fontSize: '12px', fontWeight: 800, color: '#37352F' }}>나의 오라클 덱</h2>
+            <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', flexWrap: isMobile ? 'wrap' : 'nowrap', alignItems: 'stretch' }}>
           {displayDecks.map(d => (
             <div
               key={d.id}
               style={{
                 position: 'relative',
                 flexShrink: 0,
-                width: isMobile ? '140px' : '160px',
+                width: `${oracleDeckCardW}px`,
+                minWidth: `${oracleDeckCardW}px`,
+                height: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+                minHeight: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+                maxHeight: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexDirection: 'column',
                 borderRadius: '12px',
                 overflow: 'hidden',
                 border: '1px solid rgba(124,58,237,0.2)',
@@ -1170,7 +1384,7 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
             >
               <div
                 onClick={() => onSelectDeck(d)}
-                style={{ padding: '12px', minHeight: '100px' }}
+                style={{ padding: '12px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}
               >
                 {d.id !== '__fallback__' && (
                   <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 2 }}>
@@ -1189,14 +1403,14 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
                   </div>
                 )}
                 {d.cover_image_url ? (
-                  <div style={{ width: '100%', aspectRatio: '4/3', borderRadius: '8px', overflow: 'hidden', marginBottom: '8px', background: 'rgba(0,0,0,0.06)' }}>
+                  <div style={{ width: '100%', flex: '1 1 0', minHeight: '72px', borderRadius: '8px', overflow: 'hidden', marginBottom: '8px', background: 'rgba(0,0,0,0.06)' }}>
                     <img src={d.cover_image_url} alt={d.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
                   </div>
                 ) : (
-                  <div style={{ width: '100%', aspectRatio: '4/3', borderRadius: '8px', marginBottom: '8px', background: 'linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(99,102,241,0.1) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>🃏</div>
+                  <div style={{ width: '100%', flex: '1 1 0', minHeight: '72px', borderRadius: '8px', marginBottom: '8px', background: 'linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(99,102,241,0.1) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>🃏</div>
                 )}
-                <h3 style={{ margin: '0 0 2px', fontSize: '13px', fontWeight: 800, color: '#37352F' }}>{d.name}</h3>
-                {d.description && <p style={{ margin: 0, fontSize: '10px', color: '#787774', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{d.description}</p>}
+                <h3 style={{ margin: '0 0 2px', fontSize: '13px', fontWeight: 800, color: '#37352F', flexShrink: 0 }}>{d.name}</h3>
+                {d.description && <p style={{ margin: 0, fontSize: '10px', color: '#787774', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', flexShrink: 0 }}>{d.description}</p>}
                 <ChevronRight size={14} color="#7C3AED" style={{ position: 'absolute', bottom: '12px', right: '12px' }} />
               </div>
             </div>
@@ -1220,8 +1434,12 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
               fontSize: '12px',
               fontWeight: 700,
               cursor: 'pointer',
-              minWidth: isMobile ? '100px' : '120px',
-              minHeight: '100px',
+              width: `${oracleDeckCardW}px`,
+              minWidth: `${oracleDeckCardW}px`,
+              height: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+              minHeight: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+              maxHeight: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+              boxSizing: 'border-box',
               transition: 'all 0.2s',
             }}
             onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(124,58,237,0.08)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.6)' }}
@@ -1237,8 +1455,9 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
 
       <FortuneRecordsSheet
         readingLogs={readingLogs}
+        decks={decks}
         onDeleteLog={handleDeleteReading}
-        onNavigateToDate={date => setSelectedCalendarDate(date)}
+        onPatchLog={handlePatchReadingLog}
       />
 
       {deckFormState && (
@@ -1261,6 +1480,7 @@ function FortuneHub({ decks, onSelectDeck, onDecksChange, onReadingSaved }: {
       {detailLog && (
         <ReadingLogEditModal
           log={detailLog}
+          decks={decks}
           onClose={() => { setDetailLog(null); navigate('/fortune', { replace: true }) }}
           onSaved={updated => { setReadingLogs(prev => prev.map(r => r.id === updated.id ? updated : r)); setDetailLog(updated); fetchFortuneEvents().then(setReadingLogs) }}
           onDeleted={() => { setReadingLogs(prev => prev.filter(r => r.id !== detailLog.id)); setDetailLog(null); onReadingSaved?.() }}
@@ -1325,7 +1545,7 @@ function FortuneSpreadView({
       return
     }
     const drawnCards = flippedCards.map(c => ({ emoji: c.emoji, name_ko: c.name_ko, name_en: c.name_en }))
-    const row = await insertFortuneEvent(question, drawnCards)
+    const row = await insertFortuneEvent(question, drawnCards, { deckId: deck.id, deckName: deck.name })
     if (row) {
       setFlippedCards([])
       onReadingSaved?.()

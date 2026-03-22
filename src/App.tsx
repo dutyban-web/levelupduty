@@ -54,6 +54,7 @@ import { TravelPage } from './TravelPageInternal'
 import { FortunePage } from './FortunePageInternal'
 import { SajuBigeupSection, SAJU_KEY } from './SajuBigeupPage'
 import { ProjectHubPage, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY } from './ProjectHubPage'
+import { WorkspaceDataArchiveModal, WorkspaceArchiveTrigger, type WorkspaceArchiveKind } from './WorkspaceDataArchiveModal'
 import { loadStatus, recordFocusSession } from './utils/storage'
 import { appendPomodoroLog } from './pomodoroLogData'
 import { RichEditor } from './RichEditor'
@@ -2364,6 +2365,7 @@ export default function App() {
   const [selectedProjects, setSelectedProjects] = useState<string[]>([])
   const [selectedQuests, setSelectedQuests] = useState<string[]>([])
   const [focusOpen, setFocusOpen] = useState(false)
+  const [workspaceArchiveKind, setWorkspaceArchiveKind] = useState<WorkspaceArchiveKind | null>(null)
   const [isZenMode, setIsZenMode] = useState(false)
   const [noteTarget, setNoteTarget] = useState<NoteTarget | null>(null)
 
@@ -2392,7 +2394,7 @@ export default function App() {
     const legacy: Record<string, string> = {
       identity: '/act',
       journal: '/life?tab=journal',
-      calendar: '/life',
+      calendar: '/master-board?warehouse=calendar',
       dashboard: '/',
       library: '/quest',
       worlds: '/quest',
@@ -2978,13 +2980,16 @@ export default function App() {
   }
   async function addProjectByName(name: string, areaId: string) {
     const n = name.trim()
-    if (!n) { fireToast('프로젝트 이름을 입력해주세요'); return }
-    if (!areaId) { fireToast('Vision Area를 선택해주세요'); return }
+    if (!n) { fireToast('프로젝트 이름을 입력해주세요'); return null }
+    if (!areaId) { fireToast('Vision Area를 선택해주세요'); return null }
     const row = await insertProject(n, areaId)
     if (row) {
       setProjects(prev => [...prev, row])
       fireToast('프로젝트가 추가되었습니다')
-    } else fireToast('프로젝트 생성 실패')
+      return row
+    }
+    fireToast('프로젝트 생성 실패')
+    return null
   }
 
   async function commitEditProject(id: string) {
@@ -3426,6 +3431,19 @@ export default function App() {
         {/* ── Toast ── */}
         <Toast msg={toastMsg} visible={toastVisible} />
 
+        {workspaceArchiveKind != null && (
+          <WorkspaceDataArchiveModal
+            open
+            onClose={() => setWorkspaceArchiveKind(null)}
+            kind={workspaceArchiveKind}
+            areas={areas}
+            projects={projects}
+            quests={userQuests}
+            identities={identities}
+            completedQuestIds={completedQuests}
+          />
+        )}
+
         {/* ── 레벨업 연출 ── */}
         {levelUpAnim && (
           <LevelUpScreen level={levelUpNewLv} onDone={() => setLevelUpAnim(false)} />
@@ -3802,9 +3820,7 @@ export default function App() {
         <div style={{ paddingBottom: isMobile ? '70px' : 0 }}>
           {activePage === 'life' && (
             <BeautifulLifeSection
-              userQuests={userQuests}
               onOpenNote={(id, title, meta) => setNoteTarget({ table: meta?.source === 'calendar' ? 'calendar_journal' : 'journals', id, title })}
-              calendarRefreshKey={calendarRefreshKey}
               onJournalChange={() => setCalendarRefreshKey(k => k + 1)}
             />
           )}
@@ -3848,6 +3864,8 @@ export default function App() {
                 identities={identities}
                 activeIdentityId={activeIdentityId}
                 openQuestCount={userQuests.filter(q => q.status !== 'done').length}
+                userQuests={userQuests}
+                calendarRefreshKey={calendarRefreshKey}
               />
             )
           })()}
@@ -3911,6 +3929,8 @@ export default function App() {
               onToast={fireToast}
               addAreaByName={addAreaByName}
               addProjectByName={addProjectByName}
+              identities={identities}
+              completedQuestIds={completedQuests}
             />
           )}
           {activePage === 'review' && (
@@ -3976,7 +3996,10 @@ export default function App() {
                         <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
                           <span style={{ marginRight: '6px' }}>🌐</span>Area
                         </h2>
-                        <span style={{ fontSize: '10px', color: '#9B9A97' }}>{areas.length}개</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <WorkspaceArchiveTrigger title="Vision Area 데이터 보관함 — 전체 목록" onClick={() => setWorkspaceArchiveKind('area')} />
+                          <span style={{ fontSize: '10px', color: '#9B9A97' }}>{areas.length}개</span>
+                        </div>
                       </div>
                       {areas.length === 0 ? (
                         <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 Vision Area 없음</p>
@@ -4041,7 +4064,10 @@ export default function App() {
                         <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#37352F' }}>
                           <span style={{ marginRight: '6px' }}>📁</span>Real Projects
                         </h2>
-                        <span style={{ fontSize: '10px', color: '#9B9A97' }}>{projects.length}개</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <WorkspaceArchiveTrigger title="프로젝트 데이터 보관함 — 전체 목록" onClick={() => setWorkspaceArchiveKind('project')} />
+                          <span style={{ fontSize: '10px', color: '#9B9A97' }}>{projects.length}개</span>
+                        </div>
                       </div>
                       {projects.length === 0 ? (
                         <p style={{ fontSize: '12px', color: '#AEAAA4', margin: '0 0 14px', textAlign: 'center', padding: '12px 0' }}>아직 프로젝트 없음</p>
@@ -4174,6 +4200,7 @@ export default function App() {
                   </p>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <WorkspaceArchiveTrigger title="퀘스트 데이터 보관함 — 전체 목록" onClick={() => setWorkspaceArchiveKind('quest')} />
                   {selectedQuests.length > 0 && (
                     <span style={{ fontSize: '10px', fontWeight: 700, color: '#7C3AED', backgroundColor: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', padding: '4px 12px', borderRadius: '999px' }}>
                       {selectedQuests.length}개 선택

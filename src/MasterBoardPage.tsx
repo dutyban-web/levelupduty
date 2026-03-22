@@ -18,6 +18,7 @@ import { loadLedgerStore, ledgerDayExpenseTotal } from './accountLedgerData'
 import { loadEvolutionStore, evolutionProgress } from './evolutionData'
 import { loadFragmentStore } from './fragmentData'
 import { useIsMobile } from './hooks/useIsMobile'
+import { MasterBoardWarehouseSection, type CalendarUserQuest } from './CalendarLifeSection'
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10)
@@ -48,6 +49,8 @@ export type MasterBoardPageProps = {
   identities: IdentityRow[]
   activeIdentityId: string | null
   openQuestCount: number
+  userQuests: CalendarUserQuest[]
+  calendarRefreshKey: number
 }
 
 export function MasterBoardPage({
@@ -63,6 +66,8 @@ export function MasterBoardPage({
   identities,
   activeIdentityId,
   openQuestCount,
+  userQuests,
+  calendarRefreshKey,
 }: MasterBoardPageProps) {
   const isMobile = useIsMobile()
   const ymd = todayYmd()
@@ -154,10 +159,11 @@ export function MasterBoardPage({
   }
 
   return (
+    <>
     <div ref={rootRef} style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '18px 14px 40px' : '28px 40px 48px', minHeight: 'calc(100vh - 52px)' }}>
       <header style={{ marginBottom: 24 }}>
         <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: '#6366f1', letterSpacing: '0.16em', textTransform: 'uppercase' }}>MasterBoard</p>
-        <h1 style={{ margin: '8px 0 6px', fontSize: isMobile ? 24 : 28, fontWeight: 900, color: '#37352F' }}>오늘의 창작 OS</h1>
+        <h1 style={{ margin: '8px 0 6px', fontSize: isMobile ? 24 : 28, fontWeight: 900, color: '#37352F' }}>대시보드</h1>
         <p style={{ margin: 0, fontSize: 13, color: '#787774', lineHeight: 1.6, maxWidth: 640 }}>
           레벨·몰입·가계·여행·빙의·인과·운세를 한눈에 봅니다. 카드를 눌러 해당 메뉴로 이동할 수 있습니다.
         </p>
@@ -298,11 +304,12 @@ export function MasterBoardPage({
           </div>
         </Link>
 
-        {/* Life */}
+        {/* Life — 저널 (통합 DB는 아래 창고) */}
         <Link to="/life" style={{ textDecoration: 'none', color: 'inherit' }}>
           <div style={{ ...cardStyle, borderLeft: '4px solid #0ea5e9' }}>
-            <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#9B9A97' }}>캘린더</p>
-            <p style={{ margin: '12px 0 0', fontSize: 15, fontWeight: 800, color: '#37352F' }}>통합 캘린더 · 저널</p>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#9B9A97' }}>Life</p>
+            <p style={{ margin: '12px 0 0', fontSize: 15, fontWeight: 800, color: '#37352F' }}>저널 캘린더</p>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#787774' }}>통합 캘린더·인물 DB는 이 페이지 맨 아래 창고</p>
             <p style={{ margin: '6px 0 0', fontSize: 12, color: '#6366f1', fontWeight: 700 }}>Life →</p>
           </div>
         </Link>
@@ -312,5 +319,7 @@ export function MasterBoardPage({
         일부 수치는 Supabase 연결 시 갱신됩니다. 가계부·Evolution·Fragment는 로컬 저장 기준입니다.
       </p>
     </div>
+    <MasterBoardWarehouseSection userQuests={userQuests} calendarRefreshKey={calendarRefreshKey} />
+    </>
   )
 }

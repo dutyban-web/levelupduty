@@ -92,7 +92,7 @@ export function PersonLinkPicker({ entityType, entityId, compact }: Props) {
       <div className={compact ? '' : 'rounded-lg border border-dashed border-violet-200 bg-violet-50/50 px-3 py-2'}>
         <p className="m-0 text-[11px] leading-relaxed text-slate-600">
           등록된 인물이 없습니다.{' '}
-          <Link to="/life?tab=people" className="font-bold text-violet-700 underline underline-offset-2">
+          <Link to="/master-board?warehouse=people" className="font-bold text-violet-700 underline underline-offset-2">
             Life → 통합 인물 DB
           </Link>
           에서 추가하세요.
@@ -128,7 +128,7 @@ export function PersonLinkPicker({ entityType, entityId, compact }: Props) {
       <div className="min-w-0">
         {body}
         <p className="mt-1.5 m-0 text-[10px] text-slate-400">
-          <Link to="/life?tab=people" className="text-violet-600 underline">
+          <Link to="/master-board?warehouse=people" className="text-violet-600 underline">
             인물 관리
           </Link>
         </p>
@@ -142,7 +142,7 @@ export function PersonLinkPicker({ entityType, entityId, compact }: Props) {
       {body}
       <p className="mt-2 m-0 text-[10px] leading-relaxed text-slate-500">
         체크하면 이 항목과 인물이 연결됩니다.{' '}
-        <Link to="/life?tab=people" className="font-semibold text-violet-700 underline">
+        <Link to="/master-board?warehouse=people" className="font-semibold text-violet-700 underline">
           인물 추가·편집
         </Link>
       </p>

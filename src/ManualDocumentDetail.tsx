@@ -2,7 +2,8 @@
  * 단일 매뉴얼 문서 보기·편집 — 제목·본문 우선, 메타데이터는 좌측 슬라이드 패널
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Menu, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
+import { ArrowLeft, Menu, Paperclip, Plus, StickyNote, Trash2, Upload, X } from 'lucide-react'
+import { manualCoverHueFromId } from './manualCoverHue'
 import { ManualDocEditor, parseAttachments } from './ManualEditor'
 import {
   uploadImageToMedia,
@@ -28,9 +29,11 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
   const [doc, setDoc] = useState<ManualDocumentRow | null>(null)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [memoOpen, setMemoOpen] = useState(false)
   const [tagInput, setTagInput] = useState('')
   const titleDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tagsDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const notesDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attachInputRef = useRef<HTMLInputElement>(null)
 
   /** URL의 docId가 바뀔 때마다 이전 문서 상태를 비우고 다시 불러옴 (SPA 전환 시 stale 화면 방지) */
@@ -39,6 +42,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
     setDoc(null)
     setLoading(true)
     setInfoOpen(false)
+    setMemoOpen(false)
     setTagInput('')
 
     void (async () => {
@@ -59,24 +63,19 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
       cancelled = true
       if (titleDebounce.current) clearTimeout(titleDebounce.current)
       if (tagsDebounce.current) clearTimeout(tagsDebounce.current)
+      if (notesDebounce.current) clearTimeout(notesDebounce.current)
     }
   }, [docId])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setInfoOpen(false)
+      if (e.key !== 'Escape') return
+      if (infoOpen) setInfoOpen(false)
+      else if (memoOpen) setMemoOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  useEffect(() => {
-    if (infoOpen) document.body.style.overflow = 'hidden'
-    else document.body.style.overflow = ''
-    return () => {
-      document.body.style.overflow = ''
-    }
-  }, [infoOpen])
+  }, [infoOpen, memoOpen])
 
   const attachments = useMemo(() => (doc ? parseAttachments(doc.attachments) : []), [doc])
 
@@ -99,6 +98,14 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
       tagsDebounce.current = null
       persistTags(next)
     }, 400)
+  }
+
+  const scheduleNotes = (text: string) => {
+    if (notesDebounce.current) clearTimeout(notesDebounce.current)
+    notesDebounce.current = setTimeout(() => {
+      notesDebounce.current = null
+      void updateManualDocument(docId, { notes: text })
+    }, 500)
   }
 
   const addTag = (raw: string) => {
@@ -183,7 +190,7 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
           <div className="flex-1" />
           <div className="h-9 w-9 shrink-0 animate-pulse rounded-md bg-slate-100" />
         </header>
-        <main className="mx-auto w-full max-w-3xl px-4 pb-24 pt-4 sm:px-6">
+        <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-4 sm:px-6">
           <div className="mb-6 flex items-center gap-2 text-sm text-slate-400">
             <span
               className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-slate-200 border-t-violet-500"
@@ -220,8 +227,8 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
   }
 
   const metaPanel = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
         <h2 className="m-0 text-sm font-bold text-slate-800">문서 정보</h2>
         <button
           type="button"
@@ -255,6 +262,47 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
             <p className="mt-1.5 m-0 text-[10px] text-slate-400">필요할 때마다 입력·저장하며 목록에서 필터할 수 있습니다.</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-slate-500" htmlFor="manual-cover-hue">
+              책 표지 색 (책장 아이콘)
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                className="h-7 w-7 shrink-0 rounded-md border border-slate-200 shadow-inner"
+                style={{
+                  backgroundColor: `hsl(${doc.cover_hue ?? manualCoverHueFromId(doc.id)} 34% 44%)`,
+                }}
+                title="미리보기"
+              />
+              <input
+                id="manual-cover-hue"
+                type="range"
+                min={0}
+                max={360}
+                value={doc.cover_hue ?? manualCoverHueFromId(doc.id)}
+                onChange={e => {
+                  const v = Math.round(Number(e.target.value))
+                  setDoc(d => (d ? { ...d, cover_hue: v } : null))
+                }}
+                onPointerUp={e => {
+                  const v = Math.round(Number((e.target as HTMLInputElement).value))
+                  void updateManualDocument(docId, { cover_hue: v })
+                }}
+                className="min-w-0 flex-1 accent-violet-600"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setDoc(d => (d ? { ...d, cover_hue: null } : null))
+                  void updateManualDocument(docId, { cover_hue: null })
+                }}
+                className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
+              >
+                자동
+              </button>
+            </div>
+            <p className="mt-1.5 m-0 text-[10px] text-slate-400">슬라이더로 지정하거나 자동은 문서마다 id 기반 색입니다.</p>
           </div>
           <div>
             <p className="m-0 mb-1 text-[11px] font-bold text-slate-500">수정일</p>
@@ -420,35 +468,45 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
     </div>
   )
 
+  const memoPanel = (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
+        <h2 className="m-0 text-sm font-bold text-slate-800">메모 · 요약</h2>
+        <button
+          type="button"
+          onClick={() => setMemoOpen(false)}
+          className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          aria-label="메모 패널 닫기"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col p-2">
+        <label className="sr-only" htmlFor="manual-detail-notes">
+          본문 메모
+        </label>
+        <textarea
+          id="manual-detail-notes"
+          value={doc.notes}
+          onChange={e => {
+            const v = e.target.value
+            setDoc(d => (d ? { ...d, notes: v } : null))
+            scheduleNotes(v)
+          }}
+          placeholder="본문을 읽으며 중요한 부분만 요약·정리해 보세요."
+          className="min-h-[200px] w-full flex-1 resize-none rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-violet-200"
+        />
+      </div>
+    </div>
+  )
+
   return (
-    <div className="relative min-h-screen w-full bg-white">
-      {/* 어두운 오버레이 (패널 열림 시만 클릭 가능) */}
-      <div
-        role="presentation"
-        onClick={() => setInfoOpen(false)}
-        className={`fixed inset-0 z-[55] bg-slate-900/25 transition-opacity duration-300 ${
-          infoOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
-        }`}
-        aria-hidden={!infoOpen}
-      />
-
-      {/* 좌측 슬라이드 패널 */}
-      <aside
-        id="manual-meta-panel"
-        className={`fixed left-0 top-0 z-[70] flex h-full w-[min(100%,380px)] flex-col border-r border-slate-200 bg-white shadow-xl transition-transform duration-300 ease-out ${
-          infoOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-        aria-hidden={!infoOpen}
-      >
-        {metaPanel}
-      </aside>
-
-      {/* 상단 바: 미니멀 토글 + 뒤로 + 삭제 */}
-      <header className="sticky top-0 z-[68] flex w-full items-center gap-1 border-b border-slate-100/90 bg-white/90 px-2 py-2 backdrop-blur-md sm:px-4">
+    <div className="flex min-h-screen w-full flex-col bg-white">
+      <header className="sticky top-0 z-[68] flex w-full shrink-0 items-center gap-1 border-b border-slate-100/90 bg-white/95 px-2 py-2 backdrop-blur-md sm:px-4">
         <button
           type="button"
           onClick={() => setInfoOpen(v => !v)}
-          className="rounded-md p-2 text-slate-400 opacity-50 transition-colors hover:bg-slate-100 hover:text-slate-700 hover:opacity-100"
+          className="rounded-md p-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
           aria-expanded={infoOpen}
           aria-controls="manual-meta-panel"
           title="문서 정보"
@@ -458,42 +516,79 @@ export function ManualDocumentDetail({ docId, onBack }: { docId: string; onBack:
         <button
           type="button"
           onClick={onBack}
-          className="rounded-md p-2 text-slate-400 opacity-70 transition-colors hover:bg-slate-100 hover:text-slate-800 hover:opacity-100"
+          className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
           title="목록으로"
         >
           <ArrowLeft className="h-[18px] w-[18px]" strokeWidth={1.75} />
         </button>
-        <div className="flex-1" />
+        <div className="min-w-0 flex-1" />
+        <button
+          type="button"
+          onClick={() => setMemoOpen(v => !v)}
+          className={`rounded-md p-2 transition-colors hover:bg-slate-100 ${
+            memoOpen ? 'text-violet-700 bg-violet-50' : 'text-slate-600 hover:text-slate-900'
+          }`}
+          aria-expanded={memoOpen}
+          aria-controls="manual-memo-panel"
+          title="메모 · 요약"
+        >
+          <StickyNote className="h-[18px] w-[18px]" strokeWidth={1.75} />
+        </button>
         <button
           type="button"
           onClick={() => void removeDoc()}
-          className="rounded-md p-2 text-slate-400 opacity-50 transition-colors hover:bg-red-50 hover:text-red-600 hover:opacity-100"
+          className="rounded-md p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
           title="삭제"
         >
           <Trash2 className="h-[18px] w-[18px]" strokeWidth={1.75} />
         </button>
       </header>
 
-      {/* 메인: 제목 → 본문 (단일 흐름) */}
-      <main className="mx-auto w-full max-w-3xl px-4 pb-24 pt-2 sm:px-6">
-        <label className="sr-only" htmlFor="manual-detail-title">
-          제목
-        </label>
-        <input
-          id="manual-detail-title"
-          value={doc.title}
-          onChange={e => {
-            const v = e.target.value
-            setDoc(d => (d ? { ...d, title: v } : null))
-            scheduleTitle(v)
-          }}
-          className="mb-1 w-full border-0 border-b border-transparent bg-transparent px-0 py-2 text-3xl font-bold tracking-tight text-slate-900 placeholder:text-slate-300 focus:border-slate-200 focus:outline-none focus:ring-0 sm:text-[2rem] sm:leading-tight"
-          placeholder="제목 없음"
-        />
-        <div className="mt-3 sm:mt-4">
-          <ManualDocEditor doc={doc} onPersistBlocks={onPersistBlocks} />
+      <div className="flex min-h-0 flex-1 w-full">
+        <aside
+          id="manual-meta-panel"
+          className={`shrink-0 overflow-hidden border-r border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-out ${
+            infoOpen ? 'w-[min(380px,100%)]' : 'w-0'
+          }`}
+          aria-hidden={!infoOpen}
+        >
+          <div className="flex h-full min-h-0 w-[min(380px,100vw)] flex-col overflow-hidden">{metaPanel}</div>
+        </aside>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+          <main className="mx-auto w-full max-w-6xl px-4 pb-24 pt-2 sm:px-6">
+            <label className="sr-only" htmlFor="manual-detail-title">
+              제목
+            </label>
+            <input
+              id="manual-detail-title"
+              value={doc.title}
+              onChange={e => {
+                const v = e.target.value
+                setDoc(d => (d ? { ...d, title: v } : null))
+                scheduleTitle(v)
+              }}
+              className="mb-1 w-full border-0 border-b border-transparent bg-transparent px-0 py-2 text-3xl font-bold tracking-tight text-slate-900 placeholder:text-slate-300 focus:border-slate-200 focus:outline-none focus:ring-0 sm:text-[2rem] sm:leading-tight"
+              placeholder="제목 없음"
+            />
+            <div className="mt-3 sm:mt-4">
+              <ManualDocEditor doc={doc} onPersistBlocks={onPersistBlocks} />
+            </div>
+          </main>
         </div>
-      </main>
+
+        <aside
+          id="manual-memo-panel"
+          className={`shrink-0 overflow-hidden border-l border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-out ${
+            memoOpen ? 'w-[min(380px,100%)]' : 'w-0'
+          }`}
+          aria-hidden={!memoOpen}
+        >
+          <div className="flex h-full flex-col overflow-hidden" style={{ width: 'min(380px, 100vw)' }}>
+            {memoPanel}
+          </div>
+        </aside>
+      </div>
     </div>
   )
 }

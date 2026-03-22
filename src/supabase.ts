@@ -1437,12 +1437,13 @@ export async function insertCalendarEvent(eventType: CalendarEventType, eventDat
   return { ...data, id: String(data.id), content: (data.content as Record<string, unknown>) ?? {} } as CalendarEventRow
 }
 
-export async function updateCalendarEvent(id: string, patch: { event_date?: string; title?: string; content?: Record<string, unknown> }): Promise<CalendarEventRow | null> {
+export async function updateCalendarEvent(id: string, patch: { event_date?: string; title?: string; content?: Record<string, unknown>; created_at?: string }): Promise<CalendarEventRow | null> {
   if (!supabase) return null
   const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (patch.event_date !== undefined) payload.event_date = patch.event_date
   if (patch.title !== undefined) payload.title = patch.title
   if (patch.content !== undefined) payload.content = patch.content
+  if (patch.created_at !== undefined) payload.created_at = patch.created_at
   const { data, error } = await supabase.from('calendar_events').update(payload).eq('id', id).select().single()
   if (error) { console.error('[Supabase] updateCalendarEvent 실패:', error.message); return null }
   return { ...data, id: String(data.id), content: (data.content as Record<string, unknown>) ?? {} } as CalendarEventRow
@@ -1467,6 +1468,18 @@ function calendarEventToFortuneRow(ce: CalendarEventRow): ReadingLogRow {
     : String(c?.question ?? ce.title ?? '')
   const eventDate = ce.event_date ?? ce.created_at?.slice(0, 10)
   const num = (v: unknown): number | null => (v == null || v === '') ? null : (typeof v === 'number' ? v : parseInt(String(v), 10) || null)
+  let fortuneType = (c?.fortune_type ?? c?.fortuneType) ? String(c?.fortune_type ?? c?.fortuneType).trim() || null : null
+  let readingKind = (c?.reading_kind ?? c?.readingKind) ? String(c?.reading_kind ?? c?.readingKind).trim() || null : null
+  if (source === 'solution_book') {
+    fortuneType = null
+    if (!readingKind) readingKind = SOLUTION_BOOK_TITLE
+  } else if (fortuneType === SOLUTION_BOOK_TITLE) {
+    readingKind = readingKind || SOLUTION_BOOK_TITLE
+    fortuneType = null
+  }
+  if (!readingKind && typeof c?.deck_name === 'string' && c.deck_name.trim()) {
+    readingKind = c.deck_name.trim()
+  }
   return {
     id: ce.id,
     question,
@@ -1477,7 +1490,8 @@ function calendarEventToFortuneRow(ce: CalendarEventRow): ReadingLogRow {
     notes: (c?.notes as string) ?? null,
     created_at: ce.created_at,
     event_date: eventDate,
-    fortune_type: (c?.fortune_type ?? c?.fortuneType) ? String(c?.fortune_type ?? c?.fortuneType).trim() || null : null,
+    fortune_type: fortuneType,
+    reading_kind: readingKind,
     fortune_score: num(c?.fortune_score ?? c?.fortuneScore),
     fortune_outcome: ((c?.fortune_outcome ?? c?.fortuneOutcome) as string) === 'good' || ((c?.fortune_outcome ?? c?.fortuneOutcome) as string) === 'bad' ? (c?.fortune_outcome ?? c?.fortuneOutcome) as 'good' | 'bad' : null,
     accuracy_score: num(c?.accuracy_score ?? c?.accuracyScore),
@@ -1518,10 +1532,24 @@ export async function fetchFortuneEventsInRange(startDate: string, endDate: stri
 }
 
 /** 점괘용: 새 점괘 기록 저장 (calendar_events에 저장) */
-export async function insertFortuneEvent(question: string, drawnCards: DrawnCardItem[], eventDate?: string): Promise<ReadingLogRow | null> {
-  const date = eventDate ?? new Date().toISOString().slice(0, 10)
+export async function insertFortuneEvent(
+  question: string,
+  drawnCards: DrawnCardItem[],
+  opts?: { eventDate?: string; deckId?: string; deckName?: string },
+): Promise<ReadingLogRow | null> {
+  const date = opts?.eventDate ?? new Date().toISOString().slice(0, 10)
   const payload = drawnCards.map(c => ({ emoji: c.emoji, name_ko: c.name_ko, name_en: c.name_en ?? null }))
-  const content = { source: 'reading', question, drawn_cards: payload, notes: null }
+  const content: Record<string, unknown> = {
+    source: 'reading',
+    question,
+    drawn_cards: payload,
+    notes: null,
+  }
+  if (opts?.deckId) content.deck_id = opts.deckId
+  if (opts?.deckName) {
+    content.deck_name = opts.deckName
+    content.reading_kind = opts.deckName
+  }
   const title = payload.length ? `[점괘] ${payload.map(c => c.name_ko).join(', ')}` : '[점괘]'
   const row = await insertCalendarEvent('fortune', date, title, content)
   if (!row) return null
@@ -1537,7 +1565,7 @@ export async function insertSolutionBookEvent(phrase: string, eventDate?: string
     solution_phrase: phrase,
     drawn_cards: [{ emoji: '📖', name_ko: phrase }],
     notes: null,
-    fortune_type: SOLUTION_BOOK_TITLE,
+    reading_kind: SOLUTION_BOOK_TITLE,
   }
   const row = await insertCalendarEvent('fortune', date, SOLUTION_BOOK_TITLE, content)
   if (!row) return null
@@ -1553,13 +1581,14 @@ export async function insertFortuneFeedback(fortuneFeedback: string, recordDate:
 }
 
 /** 점괘용: 점괘 기록 수정 (calendar_events 우선, 없으면 reading_logs 업데이트) */
-export async function updateFortuneEvent(id: string, patch: { question?: string; notes?: string; created_at?: string; fortune_type?: string | null; fortune_score?: number | null; fortune_outcome?: 'good' | 'bad' | null; accuracy_score?: number | null; related_people?: string | null }): Promise<ReadingLogRow | null> {
+export async function updateFortuneEvent(id: string, patch: { question?: string; notes?: string; created_at?: string; fortune_type?: string | null; reading_kind?: string | null; fortune_score?: number | null; fortune_outcome?: 'good' | 'bad' | null; accuracy_score?: number | null; related_people?: string | null }): Promise<ReadingLogRow | null> {
   const existing = (await fetchCalendarEventsByType('fortune')).find(r => r.id === id)
   if (existing) {
     const c = { ...(existing.content as Record<string, unknown>) }
     if (patch.question !== undefined) c.question = patch.question
     if (patch.notes !== undefined) c.notes = patch.notes?.trim() || null
     if (patch.fortune_type !== undefined) c.fortune_type = patch.fortune_type
+    if (patch.reading_kind !== undefined) c.reading_kind = patch.reading_kind
     if (patch.fortune_score !== undefined) c.fortune_score = patch.fortune_score
     if (patch.fortune_outcome !== undefined) c.fortune_outcome = patch.fortune_outcome
     if (patch.accuracy_score !== undefined) c.accuracy_score = patch.accuracy_score
@@ -1575,7 +1604,12 @@ export async function updateFortuneEvent(id: string, patch: { question?: string;
     } else {
       title = String(c.question || '[점괘]')
     }
-    const updated = await updateCalendarEvent(id, { event_date: eventDate, title, content: c })
+    const updated = await updateCalendarEvent(id, {
+      event_date: eventDate,
+      title,
+      content: c,
+      ...(patch.created_at !== undefined ? { created_at: patch.created_at } : {}),
+    })
     return updated ? calendarEventToFortuneRow(updated) : null
   }
   const legacyUpdated = await updateReadingLog(id, {
@@ -1806,7 +1840,10 @@ export interface ReadingLogRow {
   created_at: string
   /** calendar_events.event_date (YYYY-MM-DD) — 캘린더 표시용, 없으면 created_at 기반 */
   event_date?: string
+  /** 질문 종류 (직장운, 애정운 등) — 해결의 책 전용 라벨은 사용하지 않음 */
   fortune_type?: string | null
+  /** 점괘 종류: 해결의 책, 오라클 덱 이름, 사주·점성술 등 */
+  reading_kind?: string | null
   fortune_score?: number | null
   fortune_outcome?: 'good' | 'bad' | null
   accuracy_score?: number | null
@@ -1847,6 +1884,7 @@ function readingLogRowFromLegacy(r: { id: unknown; question?: unknown; drawn_car
     created_at: String(r.created_at ?? new Date().toISOString()),
     event_date: (r.created_at as string)?.slice(0, 10) ?? undefined,
     fortune_type: null,
+    reading_kind: null,
     fortune_score: null,
     fortune_outcome: null,
     accuracy_score: null,
@@ -2564,6 +2602,10 @@ export interface ManualDocumentRow {
   importance_score: number
   completion_rate: number
   last_viewed_at: string | null
+  /** null이면 책장에서 문서 id 기반 자동 색 */
+  cover_hue: number | null
+  /** 우측 패널 메모·요약 */
+  notes: string
   created_at: string
   updated_at: string
 }
@@ -2574,6 +2616,12 @@ function parseManualRow(r: Record<string, unknown>): ManualDocumentRow {
   const cr = r.completion_rate
   const completion_rate =
     typeof cr === 'number' ? cr : typeof cr === 'string' ? parseFloat(cr) || 0 : Number(cr ?? 0)
+  const chRaw = r.cover_hue
+  let cover_hue: number | null = null
+  if (chRaw != null && chRaw !== '') {
+    const n = Number(chRaw)
+    if (Number.isFinite(n)) cover_hue = Math.max(0, Math.min(360, Math.round(n)))
+  }
   return {
     id: String(r.id),
     user_id: String(r.user_id),
@@ -2586,6 +2634,8 @@ function parseManualRow(r: Record<string, unknown>): ManualDocumentRow {
     importance_score: Math.max(0, Math.min(100, Number(r.importance_score ?? 0))),
     completion_rate: Math.max(0, Math.min(100, completion_rate)),
     last_viewed_at: r.last_viewed_at != null ? String(r.last_viewed_at) : null,
+    cover_hue,
+    notes: typeof r.notes === 'string' ? r.notes : String(r.notes ?? ''),
     created_at: String(r.created_at ?? ''),
     updated_at: String(r.updated_at ?? ''),
   }
@@ -2615,7 +2665,7 @@ export async function fetchManualDocuments(): Promise<ManualDocumentRow[]> {
     const { data, error } = await supabase
       .from('manual_documents')
       .select(
-        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
       )
       .eq('user_id', uid)
       .order('sort_order', { ascending: true })
@@ -2639,7 +2689,7 @@ export async function fetchManualDocumentById(id: string): Promise<ManualDocumen
     const { data, error } = await supabase
       .from('manual_documents')
       .select(
-        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+        'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
       )
       .eq('id', id)
       .eq('user_id', uid)
@@ -2680,9 +2730,11 @@ export async function insertManualDocument(title = '새 문서'): Promise<Manual
       importance_score: 0,
       completion_rate: 0,
       last_viewed_at: null,
+      cover_hue: null,
+      notes: '',
     })
     .select(
-      'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, created_at, updated_at',
+      'id, user_id, title, sort_order, blocks, attachments, category, tags, importance_score, completion_rate, last_viewed_at, cover_hue, notes, created_at, updated_at',
     )
     .single()
   if (error) {
@@ -2704,6 +2756,8 @@ export async function updateManualDocument(
     importance_score?: number
     completion_rate?: number
     last_viewed_at?: string | null
+    cover_hue?: number | null
+    notes?: string
   },
 ): Promise<boolean> {
   if (!supabase) return false
@@ -2719,6 +2773,8 @@ export async function updateManualDocument(
   if (patch.importance_score !== undefined) payload.importance_score = patch.importance_score
   if (patch.completion_rate !== undefined) payload.completion_rate = patch.completion_rate
   if (patch.last_viewed_at !== undefined) payload.last_viewed_at = patch.last_viewed_at
+  if (patch.cover_hue !== undefined) payload.cover_hue = patch.cover_hue
+  if (patch.notes !== undefined) payload.notes = patch.notes
   if (Object.keys(payload).length === 0) return true
   const bumpsUpdated =
     patch.title !== undefined ||
@@ -2728,7 +2784,9 @@ export async function updateManualDocument(
     patch.category !== undefined ||
     patch.tags !== undefined ||
     patch.importance_score !== undefined ||
-    patch.completion_rate !== undefined
+    patch.completion_rate !== undefined ||
+    patch.cover_hue !== undefined ||
+    patch.notes !== undefined
   if (bumpsUpdated) payload.updated_at = new Date().toISOString()
   const { error } = await supabase.from('manual_documents').update(payload).eq('id', id).eq('user_id', uid)
   if (error) {

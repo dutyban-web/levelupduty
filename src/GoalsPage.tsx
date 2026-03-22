@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { kvSet } from './lib/supabase'
 import { GOALS_KV_KEY } from './kvSyncedKeys'
-import { PersonLinkPicker } from './PersonLinkPicker'
-import { GOALS_KV_ENTITY_ID, PERSON_ENTITY } from './personEntityTypes'
 import {
   loadEmotionalLens,
   saveEmotionalLens,
@@ -135,9 +133,6 @@ export function GoalsPage() {
           <strong className="text-violet-800">인생의 목표</strong>를 나란히 두었습니다. 두 영역 사이에
           의도적으로 간격을 두어, 각각에 집중할 수 있게 했습니다.
         </p>
-        <div className="mt-6 max-w-xl">
-          <PersonLinkPicker entityType={PERSON_ENTITY.GOALS_KV} entityId={GOALS_KV_ENTITY_ID} />
-        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-12 lg:grid-cols-2 lg:gap-16 xl:gap-24">

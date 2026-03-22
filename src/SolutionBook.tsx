@@ -9,6 +9,9 @@ import { SOLUTION_BOOK_PHRASES } from './solutionBookPhrases'
 
 const MODAL_Z = 50080
 
+/** 해결의 책 카드와 나의 오라클 덱 카드 세로 길이 맞춤용(동일 값 사용) */
+export const SOLUTION_BOOK_DECK_CARD_HEIGHT_PX = 168
+
 /** 모달·접근성 등 한 줄로 쓸 때 */
 const COVER_INSTRUCTION =
   '답을 얻고 싶은 질문을 충분히 생각한 후 여세요'
@@ -32,7 +35,7 @@ export function SolutionBookDeckCard({
   onOpen: () => void
   isMobile: boolean
 }) {
-  const w = isMobile ? '140px' : '160px'
+  const w = isMobile ? '120px' : '136px'
   return (
     <button
       type="button"
@@ -40,6 +43,9 @@ export function SolutionBookDeckCard({
       className="group relative flex shrink-0 cursor-pointer flex-col overflow-hidden rounded-xl border text-left transition-all"
       style={{
         width: w,
+        height: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+        minHeight: `${SOLUTION_BOOK_DECK_CARD_HEIGHT_PX}px`,
+        boxSizing: 'border-box',
         borderColor: 'rgba(212, 175, 55, 0.35)',
         background:
           'linear-gradient(165deg, #4a0c0c 0%, #320808 42%, #1f0505 100%)',
@@ -54,7 +60,7 @@ export function SolutionBookDeckCard({
         }}
       />
       <div
-        className="relative flex min-h-[132px] flex-col items-center justify-center gap-3 px-3 pb-3 pt-3"
+        className="relative flex min-h-[132px] flex-1 flex-col items-center justify-center gap-3 px-3 pb-3 pt-3"
       >
         <div
           className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 bg-black/30"
@@ -66,24 +72,32 @@ export function SolutionBookDeckCard({
           <BookOpen className="h-7 w-7" strokeWidth={1.75} style={{ color: '#FFEFD5' }} />
         </div>
         <div
-          className="w-full rounded-md px-2 py-2 text-center"
+          className="w-full rounded-md py-2 text-center"
           style={{
+            paddingLeft: isMobile ? '4px' : '8px',
+            paddingRight: isMobile ? '4px' : '8px',
             background: 'rgba(0,0,0,0.42)',
             border: '1px solid rgba(212, 175, 55, 0.2)',
             boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)',
           }}
         >
           <p
-            className="m-0 text-[10px] font-semibold leading-[1.4]"
+            className="m-0 font-semibold"
             style={{
+              fontSize: isMobile ? '7px' : '9px',
+              lineHeight: 1.35,
               color: '#F5EFE6',
               textShadow: '0 1px 2px rgba(0,0,0,0.75)',
               fontFamily: 'system-ui, -apple-system, "Malgun Gothic", sans-serif',
-              letterSpacing: '-0.02em',
+              letterSpacing: '-0.03em',
             }}
           >
             {COVER_INSTRUCTION_LINES.map((line, i) => (
-              <span key={i} className={i === 0 ? 'block' : 'mt-0.5 block'}>
+              <span
+                key={i}
+                className={i === 0 ? 'block' : 'mt-0.5 block'}
+                style={{ whiteSpace: 'nowrap' }}
+              >
                 {line}
               </span>
             ))}
