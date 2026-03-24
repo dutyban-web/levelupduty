@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import { useIsMobile } from './hooks/useIsMobile'
 import { kvSet } from './lib/supabase'
@@ -28,6 +28,8 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
   const [newRoleModel, setNewRoleModel] = useState('')
   const [adding, setAdding] = useState(false)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
+  /** 태세 전환 직후 정체성 선언 모달 */
+  const [declaration, setDeclaration] = useState<IdentityRow | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editRoleModel, setEditRoleModel] = useState('')
@@ -81,6 +83,8 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
       const ok = await updateActiveIdentity(id)
       if (ok) {
         onRefreshActive()
+        const row = identities.find(i => i.id === id)
+        if (row) setDeclaration(row)
         onToast?.('태세가 전환되었습니다.')
       } else {
         onToast?.('태세 전환에 실패했습니다.')
@@ -292,6 +296,71 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
         </div>
           </div>
         </section>
+
+        {declaration && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 400,
+              background: 'rgba(15,23,42,0.55)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+            role="dialog"
+            aria-modal
+            aria-labelledby="identity-declaration-title"
+          >
+            <div
+              style={{
+                maxWidth: 520,
+                width: '100%',
+                background: '#fff',
+                borderRadius: 20,
+                padding: '28px 26px',
+                boxShadow: '0 24px 48px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(124,58,237,0.25)',
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em' }}>IDENTITY DECLARATION</p>
+              <h2 id="identity-declaration-title" style={{ margin: '10px 0 16px', fontSize: 20, fontWeight: 900, color: '#37352F', lineHeight: 1.35 }}>
+                오늘의 존재 방식
+              </h2>
+              <p style={{ margin: 0, fontSize: 15, color: '#37352F', lineHeight: 1.75, fontWeight: 600 }}>
+                나는 오늘{' '}
+                <strong style={{ color: '#7C3AED' }}>[{declaration.name}]</strong> 태세로서,{' '}
+                <strong style={{ color: '#4F46E5' }}>
+                  {declaration.role_model?.trim() || '나만의 방향과 약속'}
+                </strong>
+                을(를) 향해 한 걸음씩 나아가는 존재가 되기로 결정했다.
+              </p>
+              <p style={{ margin: '14px 0 0', fontSize: 12, color: '#787774', lineHeight: 1.55 }}>
+                문장을 소리 내어 읽거나 마음속으로 되새기면, 실행에 대한 의미가 뇌에 각인됩니다.
+              </p>
+              <button
+                type="button"
+                onClick={() => setDeclaration(null)}
+                style={{
+                  marginTop: 22,
+                  width: '100%',
+                  padding: '12px 18px',
+                  borderRadius: 12,
+                  border: 'none',
+                  background: 'linear-gradient(135deg,#7c3aed,#6366f1)',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                확인 · 오늘의 태세로 시작하기
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ③ Master */}
         <section style={actBox}>

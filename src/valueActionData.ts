@@ -201,3 +201,12 @@ export function setQuestValueLink(questId: string, valueActionId: string | null)
 export function getQuestValueLink(questId: string): string | undefined {
   return loadQuestValueLinks()[questId]
 }
+
+/** 행동 자산 표준시간·경제가치 → 퀘스트 예상 EXP·보상 코인 (표시·가이드용) */
+export function computeQuestRewardsFromValue(va: ValueAction): { exp: number; coins: number } {
+  const minutes = Math.max(1, va.standardTimeMinutes)
+  const ev = Math.max(0, va.economicValueKrw)
+  const exp = Math.round(12 + minutes * 0.35 + Math.sqrt(ev + 1) * 0.25 + (va.cognitiveDensity ?? 3) * 2)
+  const coins = Math.max(1, Math.round(ev / 2500 + minutes / 4 + (va.rewardIntensity ?? 3)))
+  return { exp: Math.min(800, exp), coins: Math.min(99999, coins) }
+}

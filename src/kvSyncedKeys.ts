@@ -6,12 +6,27 @@ import { VALUE_ACTION_STORE_KEY, QUEST_VALUE_LINK_KEY } from './valueActionData'
 import { NETWORK_STORE_KEY } from './networkData'
 import { PLAYBOOK_STORE_KEY } from './humanRelationsPlaybookData'
 import { LEVELUP_RPG_KEY } from './levelupRpgProfile'
+import { KINGDOM_KEY } from './kingdomData'
 import { POMODORO_LOG_KEY } from './pomodoroLogData'
 import { MANIFEST_NOTE_BUNDLE_KEY } from './manifestNoteUtils'
 import { MANIFEST_STUDIO_BUNDLE_KEY } from './manifestationStudioData'
 import { TRACKER_BUNDLE_KEY } from './trackerData'
 import { BOARD_EMOTIONAL_LENS_KEY } from './boardEmotionalLensData'
 import { ADVENTURE_JOURNAL_KEY } from './adventureJournalData'
+import { HABIT_ROUTINE_CHAIN_KEY } from './habitRoutineData'
+import { SANCTUARY_KPT_KEY } from './sanctuaryData'
+import { INNER_WORLD_KEY } from './lifeWorldData'
+import { CHRONICLE_STORE_KEY } from './chronicleData'
+import { EXTERNAL_CALENDAR_STORE_KEY } from './externalCalendarData'
+import { SKILL_TREE_KEY } from './skillTreeData'
+import { REWARD_HISTORY_KEY } from './rewardHistoryData'
+import { ACHIEVEMENTS_KEY } from './achievementsData'
+import { VISUALIZATION_ITEMS_KEY } from './rewardShopData'
+import { SIMULATION_WALLET_KEY } from './simulationWalletData'
+import { MORNING_PRESENCE_ACK_KEY } from './presenceData'
+import { IDENTITY_ARCHETYPE_KEY } from './identityArchetypeData'
+import { GARRISON_TACTICAL_ALLY_KEY } from './garrisonTacticalAllyData'
+import { LEGACY_ARCHIVE_KEY } from './legacyArchiveData'
 
 export const GOALS_KV_KEY = 'creative-os-life-goals-v1'
 export const MANIFEST_LOCAL_KEY = 'manifestation_local_v1'
@@ -32,10 +47,25 @@ export const ALL_KV_SYNC_KEYS: string[] = [
   NETWORK_STORE_KEY,
   PLAYBOOK_STORE_KEY,
   LEVELUP_RPG_KEY,
+  KINGDOM_KEY,
   POMODORO_LOG_KEY,
   TRACKER_BUNDLE_KEY,
   BOARD_EMOTIONAL_LENS_KEY,
   ADVENTURE_JOURNAL_KEY,
+  HABIT_ROUTINE_CHAIN_KEY,
+  SANCTUARY_KPT_KEY,
+  INNER_WORLD_KEY,
+  CHRONICLE_STORE_KEY,
+  EXTERNAL_CALENDAR_STORE_KEY,
+  SKILL_TREE_KEY,
+  REWARD_HISTORY_KEY,
+  ACHIEVEMENTS_KEY,
+  VISUALIZATION_ITEMS_KEY,
+  SIMULATION_WALLET_KEY,
+  MORNING_PRESENCE_ACK_KEY,
+  IDENTITY_ARCHETYPE_KEY,
+  GARRISON_TACTICAL_ALLY_KEY,
+  LEGACY_ARCHIVE_KEY,
 ]
 
 function parseStoredValueForMigration(key: string, raw: string): unknown {

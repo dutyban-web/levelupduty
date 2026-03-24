@@ -17,6 +17,7 @@ import {
 } from './levelupRpgProfile'
 import { PersonLinkPicker } from './PersonLinkPicker'
 import { LEVELUP_RPG_ENTITY_ID, PERSON_ENTITY } from './personEntityTypes'
+import { BL_RPG_SYNC, BL_STAT_SPARK } from './questRpgIntegration'
 
 const C = {
   bg: '#F8F8F6',
@@ -166,10 +167,28 @@ export function LevelupRpgPage({
   activeIdentityName,
 }: Props) {
   const [profile, setProfile] = useState<LevelupRpgProfile>(() => loadRpgProfile())
+  const [statSpark, setStatSpark] = useState<{ int: boolean; spr: boolean } | null>(null)
 
   useEffect(() => {
     saveRpgProfile(profile)
   }, [profile])
+
+  useEffect(() => {
+    const onSync = () => setProfile(loadRpgProfile())
+    const onSpark = (e: Event) => {
+      const d = (e as CustomEvent<{ intUp?: boolean; sprUp?: boolean }>).detail
+      if (d?.intUp || d?.sprUp) {
+        setStatSpark({ int: !!d?.intUp, spr: !!d?.sprUp })
+        window.setTimeout(() => setStatSpark(null), 1400)
+      }
+    }
+    window.addEventListener(BL_RPG_SYNC, onSync)
+    window.addEventListener(BL_STAT_SPARK, onSpark)
+    return () => {
+      window.removeEventListener(BL_RPG_SYNC, onSync)
+      window.removeEventListener(BL_STAT_SPARK, onSpark)
+    }
+  }, [])
 
   const syncFromAppIdentity = useCallback(() => {
     if (activeIdentityName?.trim()) {
@@ -292,7 +311,36 @@ export function LevelupRpgPage({
         .lvl-main-grid > * { min-width: 0; }
         .lvl-ghost:focus { border-bottom-color: ${C.purple} !important; }
         .lvl-ghost-area:focus { border-color: ${C.purple}33 !important; }
+        @keyframes bl-stat-spark {
+          0% { opacity: 0; transform: scale(0.85); }
+          30% { opacity: 1; transform: scale(1.05); }
+          100% { opacity: 0; transform: scale(1.15); }
+        }
       `}</style>
+
+      {statSpark && (statSpark.int || statSpark.spr) && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            pointerEvents: 'none',
+            zIndex: 100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            animation: 'bl-stat-spark 1.2s ease forwards',
+            background:
+              'radial-gradient(ellipse 80% 50% at 50% 45%, rgba(251,146,60,0.35) 0%, rgba(168,85,247,0.12) 40%, transparent 70%)',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 44, lineHeight: 1, filter: 'drop-shadow(0 0 18px rgba(251,191,36,0.9))' }}>✨</span>
+            <span style={{ fontSize: 13, fontWeight: 900, color: '#7c3aed', textShadow: '0 0 12px rgba(251,191,36,0.6)' }}>
+              {statSpark.int && statSpark.spr ? 'INT · SPR 상승!' : statSpark.int ? 'INT 상승!' : 'SPR 상승!'}
+            </span>
+          </div>
+        </div>
+      )}
 
       <div style={{ maxWidth: 1240, margin: '0 auto' }}>
         {/* 상단 */}

@@ -1,4 +1,24 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import {
+  loadValueActionStore,
+  activeValueActions,
+  computeQuestRewardsFromValue,
+  setQuestValueLink,
+  getQuestValueLink,
+  type ValueAction,
+} from './valueActionData'
+import {
+  applyQuestCompleteRpgRewards,
+  applyMicroVictoryRpg,
+  applyFocusSessionMpRecovery,
+  applyMpDrainForQuestComplete,
+} from './questRpgIntegration'
+import { SKILL_BRANCHES } from './skillTreeData'
+import { RoutineStreet } from './RoutineStreet'
+import { buildLootEncouragement, type FocusLootState } from './battleFocusNarrative'
+import { QuestTacticalDrillModal } from './QuestTacticalDrillModal'
+import { BattleFocusMode } from './BattleFocusMode'
+import { MapHub } from './MapHub'
 import { useIsMobile } from './hooks/useIsMobile'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { kvSet, kvSetAttempt, kvGet, kvGetAll, kvListTrashedKeys, isSupabaseReady, subscribeKv } from './lib/supabase'
@@ -44,6 +64,28 @@ import { ValueReferencePanel, ValueReferenceMobileFab } from './ValueReferencePa
 import { QUANTUM_FLOW_KEY } from './quantumFlowData'
 import { ACCOUNT_LEDGER_KEY, TRAVEL_TRIP_DETAIL_KEY } from './accountLedgerData'
 import { EVOLUTION_KEY } from './evolutionData'
+import { HABIT_ROUTINE_CHAIN_KEY } from './habitRoutineData'
+import { SanctuaryView } from './SanctuaryView'
+import { SANCTUARY_KPT_KEY } from './sanctuaryData'
+import { LifeWorldHub } from './LifeWorldHub'
+import { ChronicleAnalyticsPage } from './ChronicleAnalyticsPage'
+import { GrowthPage } from './GrowthPage'
+import { BossRaidPage } from './BossRaidPage'
+import { CharacterStatusView } from './CharacterStatusView'
+import { shouldShowMorningPresenceModal } from './presenceData'
+import { applyXpGainToSimulationWallet } from './simulationWalletData'
+import { INNER_WORLD_KEY } from './lifeWorldData'
+import { CHRONICLE_STORE_KEY } from './chronicleData'
+import { EXTERNAL_CALENDAR_STORE_KEY } from './externalCalendarData'
+import { SKILL_TREE_KEY } from './skillTreeData'
+import { REWARD_HISTORY_KEY } from './rewardHistoryData'
+import { ACHIEVEMENTS_KEY } from './achievementsData'
+import { VISUALIZATION_ITEMS_KEY } from './rewardShopData'
+import { SIMULATION_WALLET_KEY } from './simulationWalletData'
+import { MORNING_PRESENCE_ACK_KEY } from './presenceData'
+import { ARCHETYPE_LABEL, IDENTITY_ARCHETYPE_KEY } from './identityArchetypeData'
+import { GARRISON_TACTICAL_ALLY_KEY } from './garrisonTacticalAllyData'
+import { LEGACY_ARCHIVE_KEY, syncLegacyArchiveFromProjects } from './legacyArchiveData'
 import { FragmentPage } from './FragmentPage'
 import { MasterBoardPage } from './MasterBoardPage'
 import { ManualPage } from './ManualPage'
@@ -65,6 +107,7 @@ import {
   CheckCircle2,
   Plus, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown,
   Utensils, Apple, Heart, Timer, Pencil, Lock, Gift, Trash2, Image, File, FileText, FileSpreadsheet, Presentation, CalendarRange, Move, Settings, GripVertical,
+  GitBranch, Zap,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -88,6 +131,8 @@ type PageId =
   | 'master-board'
   | 'manual'
   | 'levelup'
+  | 'growth'
+  | 'raid'
   | 'project'
   | 'value'
   | 'quest'
@@ -98,8 +143,10 @@ type PageId =
   | 'travel'
   | 'fragment'
   | 'trash'
+  | 'inner-world'
+  | 'chronicle'
 
-const PAGE_IDS: PageId[] = ['life', 'tracker', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'account', 'travel', 'fragment', 'trash']
+const PAGE_IDS: PageId[] = ['life', 'tracker', 'goals', 'evolution', 'fortune', 'manifestation', 'act', 'master-board', 'manual', 'levelup', 'growth', 'raid', 'project', 'value', 'quest', 'review', 'quantum', 'network', 'inner-world', 'chronicle', 'account', 'travel', 'fragment', 'trash']
 
 /** 데스크톱 상단 GNB — 한 줄·한 묶음 (Board부터 Note까지 순서 고정, sep = 구분선) */
 type GnbRowItem =
@@ -122,6 +169,8 @@ const GNB_ROW_ITEMS: GnbRowItem[] = [
   { kind: 'sep' },
   { kind: 'link', id: 'value', label: 'Value', emoji: '💎' },
   { kind: 'link', id: 'levelup', label: 'Level', emoji: '⬆️' },
+  { kind: 'link', id: 'growth', label: 'Grow', emoji: '🌳' },
+  { kind: 'link', id: 'raid', label: 'Raid', emoji: '⚔️' },
   { kind: 'link', id: 'project', label: 'Project', emoji: '📁' },
   { kind: 'link', id: 'quest', label: 'Quest', emoji: '⚡', to: '/' },
   { kind: 'sep' },
@@ -130,6 +179,8 @@ const GNB_ROW_ITEMS: GnbRowItem[] = [
   { kind: 'link', id: 'quantum', label: 'Quant', emoji: '✦' },
   { kind: 'sep' },
   { kind: 'link', id: 'network', label: 'Net', emoji: '🌐' },
+  { kind: 'link', id: 'inner-world', label: 'Inner', emoji: '🏯' },
+  { kind: 'link', id: 'chronicle', label: 'Time', emoji: '📜' },
   { kind: 'link', id: 'account', label: 'Acc', emoji: '💰' },
   { kind: 'link', id: 'travel', label: 'Trav', emoji: '✈️' },
   { kind: 'link', id: 'fragment', label: 'Note', emoji: '◇' },
@@ -280,11 +331,15 @@ function MobileBottomNav({ active }: { active: PageId }) {
     { id: 'act', emoji: '🎭', label: 'Act' },
     { id: 'value', emoji: '💎', label: 'Value' },
     { id: 'levelup', emoji: '⬆️', label: 'Level' },
+    { id: 'growth', emoji: '🌳', label: 'Grow' },
+    { id: 'raid', emoji: '⚔️', label: 'Raid' },
     { id: 'project', emoji: '📁', label: 'Proj' },
     { id: 'quest', emoji: '⚡', label: 'Quest' },
     { id: 'review', emoji: '📓', label: 'Review' },
     { id: 'quantum', emoji: '✦', label: 'Quant' },
     { id: 'network', emoji: '🌐', label: 'Net' },
+    { id: 'inner-world', emoji: '🏯', label: 'Inner' },
+    { id: 'chronicle', emoji: '📜', label: 'Time' },
     { id: 'account', emoji: '💰', label: 'Acc' },
     { id: 'travel', emoji: '✈️', label: 'Trav' },
     { id: 'fragment', emoji: '◇', label: 'Note' },
@@ -920,9 +975,12 @@ function QuestTable({
   newProjectId, onNewProjectId,
   newQuestIdentityId, onNewQuestIdentityId,
   newQuestTags, onNewQuestTags,
+  valueActions, selectedValueActionId, onSelectValueAction, rewardPreview,
   adding, onAdd, onToggleComplete, onDelete, onSelectPomodoro, onOpenNote, onQuestNameUpdate, onQuestDeadlineUpdate,
   onQuestStatusUpdate, onQuestTagsUpdate, onMoveQuestUp, onMoveQuestDown,
   onPushQuestNameUndo, onPushQuestDeadlineUndo,
+  onAiSplitQuest,
+  fireToast: fireToastProp,
 }: {
   quests: Card[]
   completed: string[]
@@ -936,6 +994,10 @@ function QuestTable({
   newProjectId: string; onNewProjectId: (v: string) => void
   newQuestIdentityId: string; onNewQuestIdentityId: (v: string) => void
   newQuestTags: string[]; onNewQuestTags: (v: string[]) => void
+  valueActions: ValueAction[]
+  selectedValueActionId: string
+  onSelectValueAction: (id: string) => void
+  rewardPreview: { exp: number; coins: number } | null
   adding: boolean; onAdd: () => void
   onToggleComplete: (id: string, done: boolean) => void
   onDelete: (id: string) => void
@@ -949,8 +1011,11 @@ function QuestTable({
   onMoveQuestDown?: (id: string) => void
   onPushQuestNameUndo?: (id: string, oldName: string, newName: string) => void
   onPushQuestDeadlineUndo?: (id: string, oldVal: string | null, newVal: string | null) => void
+  onAiSplitQuest?: (q: Card) => void
+  fireToast?: (msg: string) => void
 }) {
-  type ViewMode = 'table' | 'kanban' | 'group_area' | 'group_project'
+  const fireToast = fireToastProp ?? (() => {})
+  type ViewMode = 'table' | 'kanban' | 'group_area' | 'group_project' | 'street'
   type SortBy = 'due_date' | 'custom' | 'priority'
   const [viewMode, setViewMode] = useState<ViewMode>('table')
   const [sortBy, setSortBy] = useState<SortBy>('custom')
@@ -1049,18 +1114,20 @@ function QuestTable({
       {/* 보기 모드 + 정렬 + 태그 필터 */}
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
         <div style={{ display: 'flex', gap: '4px' }}>
-          {(['table', 'kanban', 'group_area', 'group_project'] as ViewMode[]).map(m => (
+          {(['table', 'kanban', 'group_area', 'group_project', 'street'] as ViewMode[]).map(m => (
             <button key={m} onClick={() => setViewMode(m)} style={{ padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', backgroundColor: viewMode === m ? '#6366f1' : '#FFFFFF', color: viewMode === m ? '#fff' : '#9B9A97', border: '1px solid rgba(0,0,0,0.06)' }}>
-              {m === 'table' ? '표' : m === 'kanban' ? '칸반' : m === 'group_area' ? 'Area별' : 'Project별'}
+              {m === 'table' ? '표' : m === 'kanban' ? '칸반' : m === 'group_area' ? 'Area별' : m === 'group_project' ? 'Project별' : '루틴 거리'}
             </button>
           ))}
         </div>
+        {viewMode !== 'street' && (
         <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)} style={{ padding: '5px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.06)', fontSize: '11px', color: '#37352F', backgroundColor: '#FFFFFF' }}>
           <option value="custom">커스텀 순</option>
           <option value="due_date">마감일 순</option>
           <option value="priority">중요도 순</option>
         </select>
-        {allTags.length > 0 && (
+        )}
+        {viewMode !== 'street' && allTags.length > 0 && (
           <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={{ padding: '5px 10px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.06)', fontSize: '11px', color: '#37352F', backgroundColor: '#FFFFFF' }}>
             <option value="">태그 필터</option>
             {allTags.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1069,6 +1136,7 @@ function QuestTable({
       </div>
 
       {/* 필터 탭 + 컬럼 설정 */}
+      {viewMode !== 'street' && (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
         <div style={{ display: 'flex', gap: '6px' }}>
           {QUEST_FILTER_TABS.map(t => (
@@ -1100,6 +1168,13 @@ function QuestTable({
           )}
         </div>
       </div>
+      )}
+
+      {viewMode === 'street' && (
+        <div style={{ marginBottom: '20px' }}>
+          <RoutineStreet fireToast={fireToast} />
+        </div>
+      )}
 
       {/* 칸반 뷰 */}
       {viewMode === 'kanban' && (
@@ -1246,6 +1321,31 @@ function QuestTable({
                               style={{ width: '100%', backgroundColor: '#F1F1EF', border: '1px solid #6366f1', borderRadius: '6px', padding: '4px 8px', fontSize: '13px', color: '#37352F', outline: 'none' }} />
                           ) : (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              {onAiSplitQuest && (
+                                <button
+                                  type="button"
+                                  title="AI 쪼개기 · 5-Whys 후 하위 퀘스트"
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    onAiSplitQuest(q)
+                                  }}
+                                  style={{
+                                    flexShrink: 0,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: 26,
+                                    height: 26,
+                                    borderRadius: 8,
+                                    border: '1px solid rgba(99,102,241,0.35)',
+                                    background: 'rgba(99,102,241,0.06)',
+                                    color: '#6366f1',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <GitBranch size={14} strokeWidth={2.25} />
+                                </button>
+                              )}
                               <span
                                 onClick={() => {
                                   const proj = projects.find(p => String(p.id) === String(q.projectId))
@@ -1466,6 +1566,21 @@ function QuestTable({
             <option value="">Identity (선택)</option>
             {identities.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
           </select>
+          <select
+            value={selectedValueActionId}
+            onChange={e => {
+              const id = e.target.value
+              onSelectValueAction(id)
+              const va = valueActions.find(v => v.id === id)
+              if (va) onNewTitle(va.actionName)
+            }}
+            style={{ padding: '9px 12px', borderRadius: '9px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: '#F1F1EF', color: selectedValueActionId ? '#37352F' : '#9B9A97', fontSize: '12px', outline: 'none', maxWidth: 200 }}
+          >
+            <option value="">행동 자산 (선택)</option>
+            {valueActions.map(va => (
+              <option key={va.id} value={va.id}>{va.actionName}</option>
+            ))}
+          </select>
           <TagInput tags={newQuestTags} onChange={onNewQuestTags} placeholder="태그 (엔터)" />
           <button
             onClick={onAdd}
@@ -1475,6 +1590,11 @@ function QuestTable({
             {adding ? '추가 중…' : '+ 추가'}
           </button>
         </div>
+        {rewardPreview && (
+          <p style={{ margin: 0, fontSize: 11, color: '#6366f1', fontWeight: 600 }}>
+            행동 자산 기준 예상: EXP {rewardPreview.exp} · 보상 코인 {rewardPreview.coins} (완료 시 가이드)
+          </p>
+        )}
       </div>
     </div>
   )
@@ -2366,6 +2486,16 @@ export default function App() {
   const [selectedProjects, setSelectedProjects] = useState<string[]>([])
   const [selectedQuests, setSelectedQuests] = useState<string[]>([])
   const [focusOpen, setFocusOpen] = useState(false)
+  const [sanctuaryOpen, setSanctuaryOpen] = useState(false)
+  /** `battle_focus_ui_v1`: '0'이면 클래식 PomodoroModal, 그 외 전투 UI */
+  const [battleFocusUi, setBattleFocusUi] = useState(() => {
+    try {
+      return localStorage.getItem('battle_focus_ui_v1') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const [focusLoot, setFocusLoot] = useState<FocusLootState>({ status: 'idle' })
   const [workspaceArchiveKind, setWorkspaceArchiveKind] = useState<WorkspaceArchiveKind | null>(null)
   const [isZenMode, setIsZenMode] = useState(false)
   const [noteTarget, setNoteTarget] = useState<NoteTarget | null>(null)
@@ -2374,7 +2504,8 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const questView = searchParams.get('questView') === 'journal' ? 'journal' : 'board'
+  const questViewParam = searchParams.get('questView')
+  const questView = questViewParam === 'journal' ? 'journal' : questViewParam === 'map' ? 'map' : 'board'
   const pathSeg = location.pathname.replace(/^\//, '').split('/')[0] || ''
   const pathPage = pathSeg === '' ? 'quest' : pathSeg
   const activePage = (PAGE_IDS.includes(pathPage as PageId) ? pathPage : 'quest') as PageId
@@ -2442,17 +2573,37 @@ export default function App() {
   const [newQuestProjectId, setNewQuestProjectId] = useState<string>('')
   const [newQuestIdentityId, setNewQuestIdentityId] = useState<string>('')
   const [newQuestTags, setNewQuestTags] = useState<string[]>([])
+  const [newQuestValueActionId, setNewQuestValueActionId] = useState<string>('')
+  const [drillQuest, setDrillQuest] = useState<Card | null>(null)
+  const [microVictoryLabel, setMicroVictoryLabel] = useState('')
+  const [microVictoryFx, setMicroVictoryFx] = useState(false)
   const [addingQuest, setAddingQuest] = useState(false)
+
+  const valueActionList = useMemo(() => activeValueActions(loadValueActionStore().items), [activePage, calendarRefreshKey])
+  const questValueRewardPreview = useMemo(() => {
+    if (!newQuestValueActionId) return null
+    const va = valueActionList.find(v => v.id === newQuestValueActionId)
+    return va ? computeQuestRewardsFromValue(va) : null
+  }, [newQuestValueActionId, valueActionList])
+
   const pomodoroStartRef = useRef<number | null>(null)
   const pomodoroSessionProcessedRef = useRef(false) // 동일 세션 daily_logs 중복 누적 방지
   const focusQuestProjectIdRef = useRef<string | null>(null)
   const focusQuestAreaIdRef = useRef<string | null>(null)
   const [focusQuestId, setFocusQuestId] = useState<string | null>(null)
 
+  const focusLinkedValueAction = useMemo((): ValueAction | null => {
+    if (!focusQuestId) return null
+    const vid = getQuestValueLink(focusQuestId)
+    if (!vid) return null
+    return valueActionList.find(v => v.id === vid) ?? null
+  }, [focusQuestId, valueActionList])
+
   // ── XP / 레벨 ──
   const [xpState, setXpState] = useState<XpState>(() => loadXp())
   const [levelUpAnim, setLevelUpAnim] = useState(false)
   const [levelUpNewLv, setLevelUpNewLv] = useState(1)
+  const [morningPresenceOpen, setMorningPresenceOpen] = useState(() => shouldShowMorningPresenceModal())
 
   // ── Toast ──
   const [toastVisible, setToastVisible] = useState(false)
@@ -2614,7 +2765,7 @@ export default function App() {
         for (const k of trashed) {
           try { localStorage.removeItem(k) } catch { /* ignore */ }
         }
-        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, FRAGMENT_KEY]
+        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, HABIT_ROUTINE_CHAIN_KEY, SANCTUARY_KPT_KEY, INNER_WORLD_KEY, CHRONICLE_STORE_KEY, EXTERNAL_CALENDAR_STORE_KEY, SKILL_TREE_KEY, REWARD_HISTORY_KEY, ACHIEVEMENTS_KEY, VISUALIZATION_ITEMS_KEY, SIMULATION_WALLET_KEY, MORNING_PRESENCE_ACK_KEY, IDENTITY_ARCHETYPE_KEY, FRAGMENT_KEY, GARRISON_TACTICAL_ALLY_KEY, LEGACY_ARCHIVE_KEY]
         passThrough.forEach(k => { if (all[k] !== undefined && all[k] !== null) localStorage.setItem(k, JSON.stringify(all[k])) })
         hydrateLocalStorageFromKvRecord(all)
         await migrateLocalToKvIfMissing(all)
@@ -2677,6 +2828,18 @@ export default function App() {
     return () => { channel?.unsubscribe() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    try {
+      syncLegacyArchiveFromProjects(
+        projects,
+        userQuests.map(q => ({ id: q.id, name: q.name, projectId: q.projectId })),
+        completedQuests,
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [projects, userQuests, completedQuests])
 
   timerSecRef.current = timerSec
   const prevFocusQuestIdRef = useRef<string | null>(null)
@@ -2818,6 +2981,7 @@ export default function App() {
     const oldScore = row.time_score_applied ?? 0
     const delta = newScore - oldScore
     if (delta === 0) return
+    if (delta > 0) applyXpGainToSimulationWallet(delta)
     setXpState(prev => {
       const next = { totalXp: Math.max(0, prev.totalXp + delta) }
       saveXp(next)
@@ -2829,6 +2993,7 @@ export default function App() {
   // ── XP 가감 (토글: 체크 시 +, 해제 시 -) — totalXp 기반 절대 계산 ──
   function adjustXp(delta: number) {
     if (delta === 0) return
+    if (delta > 0) applyXpGainToSimulationWallet(delta)
     setXpState(prev => {
       const newTotalXp = Math.max(0, prev.totalXp + delta)
       const { currentLevel } = calculateLevel(newTotalXp)
@@ -2845,7 +3010,9 @@ export default function App() {
 
   // ── XP 수동 편집 (Override): 총 누적 XP 직접 수정 ──
   function handleEditTotalXp(newTotalXp: number) {
+    const old = xpState.totalXp
     const next: XpState = { totalXp: Math.max(0, newTotalXp) }
+    if (next.totalXp > old) applyXpGainToSimulationWallet(next.totalXp - old)
     setXpState(next)
     saveXp(next)
   }
@@ -2854,6 +3021,8 @@ export default function App() {
   function handleEditCurrentLevelXp(newCurrentLevelXp: number) {
     const calc = calculateLevel(xpState.totalXp)
     const newTotalXp = Math.max(0, calc.baseXpForCurrentLevel + newCurrentLevelXp)
+    const old = xpState.totalXp
+    if (newTotalXp > old) applyXpGainToSimulationWallet(newTotalXp - old)
     const next: XpState = { totalXp: newTotalXp }
     setXpState(next)
     saveXp(next)
@@ -2898,11 +3067,60 @@ export default function App() {
       localStorage.setItem(COMPLETED_KEY, JSON.stringify(next))
       kvSet(COMPLETED_KEY, next)
       if (isDone) {
-        fireToast('체크 해제 — -20 XP')
-        adjustXp(-XP_PER_QUEST)
+        let sub = XP_PER_QUEST
+        const uLink = getQuestValueLink(id)
+        if (uLink) {
+          const va = loadValueActionStore().items.find(x => x.id === uLink && x.is_deleted !== true)
+          if (va) {
+            const { exp: est } = computeQuestRewardsFromValue(va)
+            sub += Math.min(40, Math.max(0, Math.round(est / 25)))
+          }
+        }
+        fireToast(`체크 해제 — -${sub} XP`)
+        adjustXp(-sub)
       } else {
-        fireToast('Quest Clear! ✓  +20 XP')
-        adjustXp(XP_PER_QUEST)
+        const link = getQuestValueLink(id)
+        let xpGain = XP_PER_QUEST
+        if (link) {
+          const va = loadValueActionStore().items.find(x => x.id === link && x.is_deleted !== true)
+          if (va) {
+            const { exp: est } = computeQuestRewardsFromValue(va)
+            const bonus = Math.min(40, Math.max(0, Math.round(est / 25)))
+            xpGain += bonus
+          }
+        }
+        fireToast(`Quest Clear! ✓  +${xpGain} XP`)
+        adjustXp(xpGain)
+        {
+          const q = userQuests.find(x => x.id === id)
+          const userLevel = calculateLevel(xpState.totalXp).currentLevel
+          if (q) {
+            const mpCost = applyMpDrainForQuestComplete(q, userLevel)
+            if (mpCost > 0) fireToast(`MP −${mpCost} (고난도·보스 부담)`)
+          }
+          const proj = q?.projectId ? projects.find(p => p.id === q.projectId) : null
+          const area = proj ? areas.find(a => a.id === proj.area_id) : null
+          const activeIdent = activeIdentityId ? identities.find(i => i.id === activeIdentityId) : null
+          const r = applyQuestCompleteRpgRewards({
+            areaName: area?.name,
+            projectName: proj?.name,
+            tags: q?.tags,
+            identityId: activeIdentityId,
+            identityName: activeIdent?.name,
+          })
+          if (r.skillBranch && r.skillXpAdded != null) {
+            const br = SKILL_BRANCHES.find(b => b.id === r.skillBranch)
+            fireToast(
+              `스킬 XP +${r.skillXpAdded} (${br?.label ?? r.skillBranch})${r.skillLevelUp ? ' · 티어 상승!' : ''}`,
+            )
+          }
+          if (r.skillArchetype != null && r.archetypeXpAdded != null) {
+            const al = ARCHETYPE_LABEL[r.skillArchetype]
+            fireToast(
+              `원형 XP +${r.archetypeXpAdded} (${al.emoji} ${al.label})${r.archetypeLevelUp ? ' · 티어 상승!' : ''}`,
+            )
+          }
+        }
       }
       return next
     })
@@ -3083,17 +3301,25 @@ export default function App() {
     return elapsed
   }
 
-  async function addUserQuest() {
-    const title = newQuestTitle.trim()
-    if (!title || !_sbClient) return
-    if (!newQuestAreaId) { fireToast('Vision Area를 먼저 선택해주세요!'); return }
-    if (!newQuestProjectId) { fireToast('Real Projects를 먼저 선택해주세요!'); return }
-    setAddingQuest(true)
-    const projectId = newQuestProjectId  // 반드시 string
-    const payload: Record<string, unknown> = { title, category: newQuestCat, is_completed: false }
+  async function insertQuestRow(
+    title: string,
+    projectId: string,
+    opts?: {
+      category?: CatId
+      identityId?: string | null
+      tags?: string[]
+      linkValueId?: string | null
+    },
+  ): Promise<string | null> {
+    const t = title.trim()
+    if (!t || !_sbClient) return null
+    const cat = opts?.category ?? newQuestCat
+    const payload: Record<string, unknown> = { title: t, category: cat, is_completed: false }
     if (projectId) payload.project_id = projectId
-    if (newQuestIdentityId) payload.identity_id = newQuestIdentityId
-    if (newQuestTags.length) payload.tags = newQuestTags
+    const iden = opts?.identityId !== undefined ? opts.identityId : newQuestIdentityId
+    if (iden) payload.identity_id = iden
+    const tags = opts?.tags ?? []
+    if (tags.length) payload.tags = tags
     const { data, error } = await _sbClient
       .from('quests')
       .insert(payload)
@@ -3101,16 +3327,100 @@ export default function App() {
       .single()
     if (error) {
       fireToast(`퀘스트 추가 실패: ${error.message}`)
-    } else if (data) {
-      const catOpt = CAT_OPTS.find(c => c.id === newQuestCat) ?? CAT_OPTS[0]
-      const newCard: Card = { id: String(data.id), name: title, sub: newQuestCat, emoji: catOpt.emoji, projectId: String(projectId), identityId: newQuestIdentityId || null, tags: [...newQuestTags], pomodoroCount: 0 }
-      setUserQuests(prev => [...prev, newCard])
+      return null
+    }
+    if (!data) return null
+    const qid = String(data.id)
+    const catOpt = CAT_OPTS.find(c => c.id === cat) ?? CAT_OPTS[0]
+    const newCard: Card = {
+      id: qid,
+      name: t,
+      sub: cat,
+      emoji: catOpt.emoji,
+      projectId: String(projectId),
+      identityId: iden || null,
+      tags: [...tags],
+      pomodoroCount: 0,
+    }
+    setUserQuests(prev => [...prev, newCard])
+    const vLink = opts?.linkValueId
+    if (vLink) {
+      setQuestValueLink(qid, vLink)
+      const va = loadValueActionStore().items.find(x => x.id === vLink && x.is_deleted !== true) as ValueAction | undefined
+      if (va) {
+        const { exp, coins } = computeQuestRewardsFromValue(va)
+        fireToast(`행동 자산 연결됨 · 예상 EXP ${exp} · 보상 코인 ${coins}`)
+      }
+    }
+    return qid
+  }
+
+  async function addUserQuest() {
+    const title = newQuestTitle.trim()
+    if (!title || !_sbClient) return
+    if (!newQuestAreaId) { fireToast('Vision Area를 먼저 선택해주세요!'); return }
+    if (!newQuestProjectId) { fireToast('Real Projects를 먼저 선택해주세요!'); return }
+    setAddingQuest(true)
+    const linkId = newQuestValueActionId || null
+    const qid = await insertQuestRow(title, newQuestProjectId, {
+      tags: [...newQuestTags],
+      identityId: newQuestIdentityId || null,
+      linkValueId: linkId,
+    })
+    setAddingQuest(false)
+    if (qid) {
       setNewQuestTitle('')
       setNewQuestProjectId('')
       setNewQuestIdentityId('')
       setNewQuestTags([])
+      setNewQuestValueActionId('')
     }
-    setAddingQuest(false)
+  }
+
+  const MICRO_VICTORY_XP = 6
+
+  function completeMicroVictory(overrideLabel?: string) {
+    const label = (overrideLabel ?? microVictoryLabel).trim()
+    if (!label) {
+      fireToast('2분 미만 행동을 한 줄로 적어 주세요.')
+      return
+    }
+    adjustXp(MICRO_VICTORY_XP)
+    applyMicroVictoryRpg()
+    setMicroVictoryFx(true)
+    window.setTimeout(() => setMicroVictoryFx(false), 1600)
+    fireToast(`Lv.0 빅토리 ✓ "${label}" · SP↑ · +${MICRO_VICTORY_XP} XP`)
+    if (!overrideLabel) setMicroVictoryLabel('')
+  }
+
+  /** 월드 맵 퀵슬롯 → 몰입 모달 */
+  function openBattleFocusFromMap(questId: string) {
+    setFocusLoot({ status: 'idle' })
+    setFocusQuestId(questId)
+    setFocusOpen(true)
+    window.setTimeout(() => handleReset(), 0)
+  }
+
+  function runMapTwoMinuteBoot() {
+    completeMicroVictory('노트북 열기')
+  }
+
+  async function commitTacticalDrill(titles: string[]) {
+    const parent = drillQuest
+    if (!parent?.projectId) {
+      fireToast('부모 퀘스트에 프로젝트가 연결되어 있어야 합니다.')
+      return
+    }
+    const pid = String(parent.projectId)
+    const tagBase = parent.name.slice(0, 28)
+    for (const t of titles) {
+      await insertQuestRow(t, pid, {
+        tags: ['WBS', tagBase],
+        identityId: parent.identityId ?? null,
+      })
+    }
+    fireToast('AI 쪼개기: 하위 퀘스트 5개를 추가했습니다.')
+    setDrillQuest(null)
   }
 
   // ── 사용자 퀘스트 삭제 ──
@@ -3225,6 +3535,7 @@ export default function App() {
       updateQuestRemainingTime(focusQuestId, toSave)
       setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: toSave } : q))
     }
+    setFocusLoot({ status: 'idle' })
     setFocusOpen(false)
     handleReset()
   }
@@ -3236,6 +3547,7 @@ export default function App() {
     setTimerDone(true)
     if (pomodoroSessionProcessedRef.current) return
     pomodoroSessionProcessedRef.current = true
+    if (battleFocusUi) setFocusLoot({ status: 'loading' })
     const elapsed = isOvertime ? timerTotal + overtimeSec : timerTotal - timerSec
     const elapsedClamped = Math.max(0, elapsed)
     const today = new Date().toISOString().split('T')[0]
@@ -3254,16 +3566,51 @@ export default function App() {
       incrementQuestPomodoroCount(focusQuestId)
       setUserQuests(prev => prev.map(q => q.id === focusQuestId ? { ...q, remainingTimeSec: 0, pomodoroCount: (q.pomodoroCount ?? 0) + 1 } : q))
     }
+
+    let identityLabel =
+      identities.find(i => String(i.id) === String(activeIdentityId))?.name?.trim() ?? '선택한 태세'
+
+    const pushFocusLootReady = (p: {
+      xpGain: number
+      coins: number
+      identityName: string
+      error?: string
+    }) => {
+      if (!battleFocusUi) return
+      setFocusLoot({
+        status: 'ready',
+        xpGain: p.xpGain,
+        coins: p.coins,
+        identityName: p.identityName,
+        message: buildLootEncouragement(p.identityName, p.xpGain),
+        error: p.error,
+      })
+    }
+
     if (elapsedClamped > 0) {
+      applyFocusSessionMpRecovery(elapsedClamped)
       const qMeta = focusQuestId ? userQuests.find(q => q.id === focusQuestId) : null
       const nowComplete = new Date()
       const startTimeLocal = `${String(nowComplete.getHours()).padStart(2, '0')}:${String(nowComplete.getMinutes()).padStart(2, '0')}`
+
+      const linkId = focusQuestId ? getQuestValueLink(focusQuestId) : undefined
+      let coins = Math.max(1, Math.round(elapsedClamped / 90))
+      if (linkId) {
+        const va = valueActionList.find(v => v.id === linkId)
+        if (va) coins = computeQuestRewardsFromValue(va).coins
+      }
+
       const result = await addFocusSession(elapsedClamped, {
         questId: focusQuestId ?? undefined,
         questTitle: qMeta?.name,
       })
       if ('xpGain' in result) {
-        fireToast(`축하합니다! ${result.xpGain} XP를 획득했습니다. (${result.identityName} 태세)`)
+        identityLabel = result.identityName?.trim() || identityLabel
+        if (battleFocusUi) {
+          pushFocusLootReady({ xpGain: result.xpGain, coins, identityName: identityLabel })
+        } else {
+          fireToast(`축하합니다! ${result.xpGain} XP를 획득했습니다. (${result.identityName} 태세)`)
+        }
         fetchIdentities().then(rows => setIdentities(rows))
         appendPomodoroLog({
           date: today,
@@ -3278,7 +3625,11 @@ export default function App() {
           remoteId: result.focusLogId,
         })
       } else {
-        fireToast(result.error || 'XP 적립에 실패했습니다.')
+        if (battleFocusUi) {
+          pushFocusLootReady({ xpGain: 0, coins, identityName: identityLabel, error: result.error || 'XP 적립에 실패했습니다.' })
+        } else {
+          fireToast(result.error || 'XP 적립에 실패했습니다.')
+        }
         appendPomodoroLog({
           date: today,
           startTimeLocal,
@@ -3289,7 +3640,10 @@ export default function App() {
           source: 'session',
         })
       }
+    } else if (battleFocusUi) {
+      pushFocusLootReady({ xpGain: 0, coins: 0, identityName: identityLabel })
     }
+
     recordFocusSession(Math.round(timerTotal / 60))
     setIsOvertime(false)
     setOvertimeSec(0)
@@ -3301,6 +3655,7 @@ export default function App() {
     const extendSec = 300
     pomodoroSessionProcessedRef.current = false
     pomodoroStartRef.current = Date.now()
+    setFocusLoot({ status: 'idle' })
     setTimerDone(false)
     setIsOvertime(false)
     setOvertimeSec(0)
@@ -3438,6 +3793,18 @@ export default function App() {
         {/* ── Toast ── */}
         <Toast msg={toastMsg} visible={toastVisible} />
 
+        {morningPresenceOpen && (
+          <CharacterStatusView
+            identities={identities}
+            activeIdentityId={activeIdentityId}
+            onSelectIdentity={async id => {
+              const ok = await updateActiveIdentity(id)
+              if (ok) setActiveIdentityId(id)
+            }}
+            onClose={() => setMorningPresenceOpen(false)}
+          />
+        )}
+
         {workspaceArchiveKind != null && (
           <WorkspaceDataArchiveModal
             open
@@ -3517,25 +3884,73 @@ export default function App() {
           />
         )}
 
-        {/* ── 포모도로 모달 ── */}
+        {/* ── 포모도로 모달 (전투 UI 또는 클래식) ── */}
         {focusOpen && !isZenMode && (
-          <PomodoroModal
-            seconds={timerSec} totalSec={timerTotal}
-            running={timerRunning} finished={timerDone}
-            isOvertime={isOvertime} overtimeSec={overtimeSec}
-            quests={userQuests}
-            areas={areas}
+          battleFocusUi ? (
+            <BattleFocusMode
+              open={focusOpen}
+              quests={userQuests}
+              areas={areas}
+              projects={projects}
+              focusQuestId={focusQuestId}
+              onSelectQuest={handleSelectFocusQuest}
+              seconds={timerSec}
+              totalSec={timerTotal}
+              running={timerRunning}
+              finished={timerDone}
+              isOvertime={isOvertime}
+              overtimeSec={overtimeSec}
+              onPlayPause={handlePlayPause}
+              onReset={handleReset}
+              onAdjust={adjustTime}
+              onSetDefault={setTo25Min}
+              onComplete={handleComplete}
+              onExtend={handleExtend}
+              onClose={handleCloseModal}
+              onEnterZen={enterZen}
+              activeIdentityId={activeIdentityId}
+              linkedValueAction={focusLinkedValueAction}
+              focusLoot={focusLoot}
+              onTabBlurWarning={() => fireToast('다른 탭으로 전환했습니다. 집중이 흐트러질 수 있습니다.')}
+              identities={identities}
+              fireToast={fireToast}
+              onSelectIdentity={async (id) => {
+                const ok = await updateActiveIdentity(id)
+                if (ok) setActiveIdentityId(id)
+              }}
+            />
+          ) : (
+            <PomodoroModal
+              seconds={timerSec} totalSec={timerTotal}
+              running={timerRunning} finished={timerDone}
+              isOvertime={isOvertime} overtimeSec={overtimeSec}
+              quests={userQuests}
+              areas={areas}
+              projects={projects}
+              focusQuestId={focusQuestId}
+              onSelectQuest={handleSelectFocusQuest}
+              onPlayPause={handlePlayPause}
+              onReset={handleReset}
+              onAdjust={adjustTime}
+              onSetDefault={setTo25Min}
+              onClose={handleCloseModal}
+              onEnterZen={enterZen}
+              onComplete={handleComplete}
+              onExtend={handleExtend}
+            />
+          )
+        )}
+
+        {sanctuaryOpen && (
+          <SanctuaryView
+            onClose={() => setSanctuaryOpen(false)}
+            quests={userQuests.map(q => ({ id: q.id, name: q.name, identityId: q.identityId ?? null }))}
+            completedQuestIds={completedQuests}
+            activeIdentityId={activeIdentityId}
+            identities={identities}
             projects={projects}
-            focusQuestId={focusQuestId}
-            onSelectQuest={handleSelectFocusQuest}
-            onPlayPause={handlePlayPause}
-            onReset={handleReset}
-            onAdjust={adjustTime}
-            onSetDefault={setTo25Min}
-            onClose={handleCloseModal}
-            onEnterZen={enterZen}
-            onComplete={handleComplete}
-            onExtend={handleExtend}
+            adjustXp={adjustXp}
+            fireToast={fireToast}
           />
         )}
 
@@ -3892,6 +4307,15 @@ export default function App() {
               />
             )
           })()}
+          {activePage === 'growth' && <GrowthPage />}
+          {activePage === 'raid' && (
+            <BossRaidPage
+              projects={projects}
+              quests={userQuests}
+              completedQuestIds={completedQuests}
+              onStrikeQuest={id => toggleComplete(id)}
+            />
+          )}
           {activePage === 'account' && <AccountLedgerPage />}
           {activePage === 'fragment' && <FragmentPage />}
           {activePage === 'trash' && <TrashPage />}
@@ -3953,6 +4377,16 @@ export default function App() {
           )}
           {activePage === 'value' && <ValuePage />}
           {activePage === 'network' && <NetworkPage />}
+          {activePage === 'inner-world' && (
+            <LifeWorldHub adjustXp={adjustXp} fireToast={fireToast} />
+          )}
+          {activePage === 'chronicle' && (
+            <ChronicleAnalyticsPage
+              userQuests={userQuests}
+              projects={projects}
+              completedQuestIds={completedQuests}
+            />
+          )}
           {activePage === 'quest' && (
             <div style={{ maxWidth: '1800px', margin: '0 auto', padding: isMobile ? '16px 14px 24px' : '36px 48px' }}>
               <div
@@ -3973,7 +4407,7 @@ export default function App() {
                   onClick={() => {
                     setSearchParams(prev => {
                       const n = new URLSearchParams(prev)
-                      n.delete('questView')
+                      n.set('questView', 'board')
                       return n
                     }, { replace: true })
                   }}
@@ -3989,6 +4423,30 @@ export default function App() {
                   }}
                 >
                   퀘스트 보드
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={questView === 'map'}
+                  onClick={() => {
+                    setSearchParams(prev => {
+                      const n = new URLSearchParams(prev)
+                      n.set('questView', 'map')
+                      return n
+                    }, { replace: true })
+                  }}
+                  style={{
+                    padding: '10px 18px',
+                    borderRadius: 12,
+                    border: questView === 'map' ? '2px solid #0ea5e9' : '1px solid rgba(0,0,0,0.08)',
+                    background: questView === 'map' ? 'rgba(14,165,233,0.12)' : '#FFFFFF',
+                    color: questView === 'map' ? '#0369a1' : '#787774',
+                    fontSize: 13,
+                    fontWeight: questView === 'map' ? 800 : 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  월드 맵
                 </button>
                 <button
                   type="button"
@@ -4277,10 +4735,12 @@ export default function App() {
                 <div>
                   <p style={{ margin: '0 0 4px', fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.12em', textTransform: 'uppercase' }}>오늘의 핵심</p>
                   <h2 style={{ margin: 0, fontSize: isMobile ? '22px' : '26px', fontWeight: 800, color: '#37352F', lineHeight: 1.15 }}>
-                    퀘스트
+                    {questView === 'map' ? '월드 맵' : '퀘스트'}
                   </h2>
                   <p style={{ margin: '8px 0 0', fontSize: '13px', color: '#787774', maxWidth: '520px' }}>
-                    이 화면의 중심입니다. 목록을 채우고 하나씩 완료해 나가세요.
+                    {questView === 'map'
+                      ? 'Vision·프로젝트가 거점으로 배치됩니다. 거점을 눌러 퀘스트 인벤토리를 열고 몰입을 무장하세요.'
+                      : '이 화면의 중심입니다. 목록을 채우고 하나씩 완료해 나가세요.'}
                   </p>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -4295,6 +4755,83 @@ export default function App() {
                   </span>
                 </div>
               </div>
+              {questView === 'board' && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginBottom: 12,
+                  padding: '8px 12px',
+                  borderRadius: 12,
+                  border: '1px dashed rgba(99,102,241,0.35)',
+                  background: 'rgba(99,102,241,0.04)',
+                }}
+              >
+                <Zap size={14} style={{ color: '#7c3aed', flexShrink: 0 }} aria-hidden />
+                <span style={{ fontSize: 11, fontWeight: 800, color: '#5b21b6' }}>Lv.0 · 2분 실험</span>
+                <input
+                  value={microVictoryLabel}
+                  onChange={e => setMicroVictoryLabel(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') completeMicroVictory()
+                  }}
+                  placeholder="예: 운동복 입기, 커서 켜기"
+                  style={{
+                    flex: 1,
+                    minWidth: 140,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    fontSize: 12,
+                    background: '#fff',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => completeMicroVictory()}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: 'linear-gradient(135deg,#a78bfa,#6366f1)',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                >
+                  완료
+                </button>
+                {microVictoryFx && (
+                  <span style={{ fontSize: 11, fontWeight: 800, color: '#34d399', animation: 'pulse 0.6s ease' }}>+SP · +EXP</span>
+                )}
+              </div>
+              )}
+
+              {questView === 'map' ? (
+                <MapHub
+                  areas={areas}
+                  projects={projects}
+                  quests={userQuests}
+                  completedQuestIds={completedQuests}
+                  identities={identities}
+                  activeIdentityId={activeIdentityId}
+                  onOpenNote={(id, title) => setNoteTarget({ table: 'quests', id, title, meta: undefined })}
+                  onToggleQuestComplete={(id, done) => {
+                    const isDone = completedQuests.includes(id)
+                    if (done !== isDone) toggleComplete(id)
+                  }}
+                  onDeleteQuest={removeUserQuest}
+                  onStartFocus={openBattleFocusFromMap}
+                  onTwoMinuteBoot={runMapTwoMinuteBoot}
+                  onMicroBoot={label => completeMicroVictory(label)}
+                  fireToast={fireToast}
+                  onSanctuary={() => setSanctuaryOpen(true)}
+                  onOpenAchievementHall={() => navigate('/growth?tab=achievements')}
+                />
+              ) : (
               <QuestTable
                 quests={userQuests}
                 completed={completedQuests}
@@ -4314,6 +4851,10 @@ export default function App() {
                 onNewQuestIdentityId={setNewQuestIdentityId}
                 newQuestTags={newQuestTags}
                 onNewQuestTags={setNewQuestTags}
+                valueActions={valueActionList}
+                selectedValueActionId={newQuestValueActionId}
+                onSelectValueAction={setNewQuestValueActionId}
+                rewardPreview={questValueRewardPreview}
                 adding={addingQuest}
                 onAdd={addUserQuest}
                 onToggleComplete={toggleComplete}
@@ -4324,6 +4865,7 @@ export default function App() {
                 onQuestDeadlineUpdate={(id, deadline) => setUserQuests(prev => prev.map(q => q.id === id ? { ...q, deadline: deadline ?? undefined } : q))}
                 onQuestStatusUpdate={(id, status) => { updateQuestStatus(id, status); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, status } : q)) }}
                 onQuestTagsUpdate={(id, tags) => { updateQuestTags(id, tags); setUserQuests(prev => prev.map(q => q.id === id ? { ...q, tags } : q)) }}
+                onAiSplitQuest={q => setDrillQuest(q)}
                 onMoveQuestUp={(id) => {
                   const idx = userQuests.findIndex(q => q.id === id)
                   if (idx <= 0) return
@@ -4344,7 +4886,9 @@ export default function App() {
                 }}
                 onPushQuestNameUndo={pushQuestNameUndo}
                 onPushQuestDeadlineUndo={pushQuestDeadlineUndo}
+                fireToast={fireToast}
               />
+              )}
             </div>
 
             {/* Focus CTA — 퀘스트 바로 아래 */}
@@ -4355,7 +4899,7 @@ export default function App() {
                 </p>
               )}
               <button
-                onClick={() => { setFocusOpen(true); handleReset() }}
+                onClick={() => { setFocusLoot({ status: 'idle' }); setFocusOpen(true); handleReset() }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '10px',
                   padding: '17px 52px', borderRadius: '16px', border: 'none',
@@ -4373,6 +4917,30 @@ export default function App() {
               <p style={{ margin: 0, fontSize: '11px', color: '#AEAAA4' }}>
                 ▶ 재생 버튼 누르면 자동으로 젠 모드 진입 · ESC로 복귀
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !battleFocusUi
+                  setBattleFocusUi(next)
+                  try {
+                    localStorage.setItem('battle_focus_ui_v1', next ? '1' : '0')
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  border: 'none',
+                  background: 'none',
+                  fontSize: '11px',
+                  color: '#9B9A97',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                }}
+              >
+                {battleFocusUi ? '클래식 타이머 UI로 전환' : '전투(보스) UI로 전환'}
+              </button>
             </div>
 
             {/* ── 스스로에게 줄 보상함 (Level Rewards) ── */}
@@ -4604,6 +5172,12 @@ export default function App() {
                 )}
               </div>
               <ValueReferenceMobileFab quests={userQuests.map(q => ({ id: q.id, name: q.name }))} />
+              <QuestTacticalDrillModal
+                open={!!drillQuest}
+                quest={drillQuest ? { id: drillQuest.id, name: drillQuest.name } : null}
+                onClose={() => setDrillQuest(null)}
+                onCommit={titles => void commitTacticalDrill(titles)}
+              />
             </div>
           )}
         </div>{/* end body wrapper */}
