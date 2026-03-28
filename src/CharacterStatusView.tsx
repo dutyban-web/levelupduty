@@ -1,5 +1,6 @@
 /**
- * 오늘의 존재 방식 — 아침 모달 + 픽셀 HP/MP
+ * 원형(분석가·창작자·자본가·모험가) + 태세 선택 + HP/MP — 현재 앱 기동 시에는 띄우지 않음.
+ * Act 태세 전환의 상위 개념(존재 방식) UI로 재사용할 때 참고.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { IdentityRow } from './supabase'

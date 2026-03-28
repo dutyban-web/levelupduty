@@ -103,6 +103,9 @@ export function saveTrackerBundle(b: TrackerBundle): void {
     localStorage.setItem(TRACKER_BUNDLE_KEY, JSON.stringify(payload))
     void kvSet(TRACKER_BUNDLE_KEY, payload)
   } catch { /* quota */ }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('tracker-bundle-changed'))
+  }
 }
 
 export function logsForDateRange(logs: TrackerLog[], start: string, end: string): TrackerLog[] {

@@ -65,7 +65,7 @@ export async function enrichUnifiedFavoritesFromSources(): Promise<{ updated: nu
         const p = personMap.get(e.refId)
         if (p) {
           title = p.display_name?.trim() || '이름 없음'
-          subtitle = '통합 인물 DB'
+          subtitle = '인물'
           href = '/master-board?warehouse=people'
         }
         break

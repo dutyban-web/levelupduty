@@ -79,10 +79,10 @@ export default function UnifiedFavoritesPage({ refreshKey = 0 }: { refreshKey?: 
         <div>
           <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 800, color: '#37352F', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Bookmark size={20} className="text-amber-600" aria-hidden />
-            통합 즐겨찾기
+            즐겨찾기
           </h3>
           <p style={{ margin: 0, fontSize: 13, color: '#787774', lineHeight: 1.6 }}>
-            Manual·작업 순서도·통합 인물 등에서 <strong style={{ color: '#b45309' }}>별표</strong>로 넣은 항목이 여기 모입니다.
+            Manual·작업 순서도·인물 등에서 <strong style={{ color: '#b45309' }}>별표</strong>로 넣은 항목이 여기 모입니다.
             Board → 데이터 창고에서 언제든 열 수 있습니다.
           </p>
         </div>
@@ -178,7 +178,7 @@ export default function UnifiedFavoritesPage({ refreshKey = 0 }: { refreshKey?: 
           <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#57534e' }}>아직 즐겨찾기가 없습니다</p>
           <p style={{ margin: '8px 0 0', fontSize: 12, color: '#787774', lineHeight: 1.5 }}>
             <Link to="/manual" style={{ color: '#4F46E5', fontWeight: 700 }}>Manual</Link> 문서,{' '}
-            <Link to="/value" style={{ color: '#4F46E5', fontWeight: 700 }}>Value</Link> 순서도, 통합 인물 DB 등에서 별표를 눌러 추가해 보세요.
+            <Link to="/value" style={{ color: '#4F46E5', fontWeight: 700 }}>Value</Link> 순서도, 인물 등에서 별표를 눌러 추가해 보세요.
           </p>
         </div>
       )}

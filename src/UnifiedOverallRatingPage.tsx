@@ -103,7 +103,7 @@ export default function UnifiedOverallRatingPage() {
       }}
     >
       <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 800, color: '#37352F' }}>
-        통합 레이팅
+        레이팅
       </h3>
       <p style={{ margin: '0 0 14px', fontSize: 13, color: '#787774', lineHeight: 1.6 }}>
         데이터에 붙은 별점을 <strong style={{ color: '#4F46E5' }}>카드</strong>로 모아 보입니다. 아래에서{' '}

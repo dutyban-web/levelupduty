@@ -343,7 +343,7 @@ export function UnifiedCalendar({ userQuests, refreshTrigger = 0 }: { userQuests
   return (
     <div style={{ maxWidth: '1600px', margin: '0 auto', padding: isMobile ? '14px 12px' : '28px 44px' }}>
       <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>📅 통합 캘린더</h1>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: '#37352F' }}>📅 캘린더</h1>
         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#787774' }}>퀘스트 마감일, 저널, 운세, 결산, 시공편지 도착일을 한눈에 확인하세요</p>
         {(() => {
           const now = new Date()
@@ -717,7 +717,7 @@ export function BeautifulLifeSection({
   )
 }
 
-/** Master Board 맨 아래 — 통합 캘린더 · 통합 인물 DB · 통합 레이팅 · 원본(통합 태그) · 통합 즐겨찾기. HashRouter: `?warehouse=` | `people` | `rating` | `sources` | `favorites` */
+/** Master Board 맨 아래 — 캘린더 · 인물 · 레이팅 · 태그 · 즐겨찾기. HashRouter: `?warehouse=` | `people` | `rating` | `sources` | `favorites` */
 export function MasterBoardWarehouseSection({
   userQuests,
   calendarRefreshKey,
@@ -776,9 +776,9 @@ export function MasterBoardWarehouseSection({
     >
       <div style={{ marginBottom: 20 }}>
         <p style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', color: '#9B9A97' }}>데이터 창고</p>
-        <h2 style={{ margin: '6px 0 4px', fontSize: 18, fontWeight: 800, color: '#37352F' }}>통합 캘린더 · 인물 DB · 레이팅 · 원본 · 즐겨찾기</h2>
+        <h2 style={{ margin: '6px 0 4px', fontSize: 18, fontWeight: 800, color: '#37352F' }}>캘린더,인물,레이팅,태그,즐겨찾기</h2>
         <p style={{ margin: 0, fontSize: 13, color: '#787774', lineHeight: 1.5 }}>
-          퀘스트·저널·운세·결산·시공편지까지 한눈에. 인물은 DB에서 연결하고, 레이팅·원본·각 화면에서 별표로 넣은
+          퀘스트·저널·운세·결산·시공편지까지 한눈에. 인물은 DB에서 연결하고, 레이팅·태그·각 화면에서 별표로 넣은
           즐겨찾기를 한곳에서 카드로 모아 봅니다.
         </p>
       </div>
@@ -789,35 +789,35 @@ export function MasterBoardWarehouseSection({
           background: tab === 'calendar' ? 'rgba(99,102,241,0.1)' : 'transparent',
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'calendar' ? 600 : 500,
           color: tab === 'calendar' ? '#4F46E5' : '#787774',
-        }}>통합 캘린더</button>
+        }}>캘린더</button>
         <button type="button" onClick={() => setTab('people')} style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'people' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
           background: tab === 'people' ? 'rgba(99,102,241,0.1)' : 'transparent',
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'people' ? 600 : 500,
           color: tab === 'people' ? '#4F46E5' : '#787774',
-        }}>통합 인물 DB</button>
+        }}>인물</button>
         <button type="button" onClick={() => setTab('rating')} style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'rating' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
           background: tab === 'rating' ? 'rgba(99,102,241,0.1)' : 'transparent',
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'rating' ? 600 : 500,
           color: tab === 'rating' ? '#4F46E5' : '#787774',
-        }}>통합 레이팅</button>
+        }}>레이팅</button>
         <button type="button" onClick={() => setTab('sources')} title="전역 태그 색인" style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'sources' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
           background: tab === 'sources' ? 'rgba(99,102,241,0.1)' : 'transparent',
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'sources' ? 600 : 500,
           color: tab === 'sources' ? '#4F46E5' : '#787774',
-        }}>원본</button>
+        }}>태그</button>
         <button type="button" onClick={() => setTab('favorites')} title="별표로 모은 항목" style={{
           padding: '8px 16px', borderRadius: '8px',
           border: tab === 'favorites' ? '1px solid #6366f1' : '1px solid rgba(0,0,0,0.08)',
           background: tab === 'favorites' ? 'rgba(99,102,241,0.1)' : 'transparent',
           cursor: 'pointer', fontSize: '13px', fontWeight: tab === 'favorites' ? 600 : 500,
           color: tab === 'favorites' ? '#4F46E5' : '#787774',
-        }}>통합 즐겨찾기</button>
+        }}>즐겨찾기</button>
       </div>
       {tab === 'calendar' ? (
         <UnifiedCalendar userQuests={userQuests} refreshTrigger={calendarRefreshKey} />

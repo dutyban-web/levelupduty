@@ -1,5 +1,6 @@
 /**
- * 오늘의 존재 방식 — 아침 첫 접속 시 확인
+ * 존재 방식(원형·태세 ack) — 로컬/kv 보관용.
+ * 기동 시 전체 화면 모달은 사용하지 않음(태세는 Act에서 전환, 원형은 그 상위 개념으로만 활용).
  */
 import { kvSet } from './lib/supabase'
 import type { IdentityArchetype } from './identityArchetypeData'
@@ -39,8 +40,9 @@ export function loadMorningPresenceAck(): MorningPresenceAck | null {
   }
 }
 
+/** @deprecated 앱 첫 화면 모달 비활성화 — 항상 false */
 export function shouldShowMorningPresenceModal(): boolean {
-  return loadMorningPresenceAck() === null
+  return false
 }
 
 export function acknowledgeMorningPresence(state: Omit<MorningPresenceAck, 'dateYmd'>): void {

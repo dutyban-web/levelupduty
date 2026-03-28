@@ -65,6 +65,9 @@ export function savePomodoroLog(store: PomodoroLogStore): void {
   } catch {
     /* quota */
   }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('pomodoro-log-changed'))
+  }
 }
 
 export function appendPomodoroLog(part: Omit<PomodoroLogEntry, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): PomodoroLogEntry {

@@ -44,9 +44,12 @@ export function BossRaidView({
 
   useEffect(() => {
     const sync = () => {
-      const st = loadSkillTreeState()
-      setRaidMult(raidDamageMultiplierFromSkillTree(st))
-      setFxTier(raidSkillEffectTier(st))
+      // 동기 dispatch(스킬 저장 등)가 부모 업데이트와 겹칠 때 setState 경고 방지
+      queueMicrotask(() => {
+        const st = loadSkillTreeState()
+        setRaidMult(raidDamageMultiplierFromSkillTree(st))
+        setFxTier(raidSkillEffectTier(st))
+      })
     }
     sync()
     window.addEventListener(BL_SKILL_TREE_SYNC, sync)

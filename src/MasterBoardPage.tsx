@@ -309,7 +309,7 @@ export function MasterBoardPage({
           <div style={{ ...cardStyle, borderLeft: '4px solid #0ea5e9' }}>
             <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#9B9A97' }}>Life</p>
             <p style={{ margin: '12px 0 0', fontSize: 15, fontWeight: 800, color: '#37352F' }}>저널 캘린더</p>
-            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#787774' }}>통합 캘린더·인물 DB는 이 페이지 맨 아래 창고</p>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#787774' }}>캘린더·인물은 이 페이지 맨 아래 데이터 창고</p>
             <p style={{ margin: '6px 0 0', fontSize: 12, color: '#6366f1', fontWeight: 700 }}>Life →</p>
           </div>
         </Link>

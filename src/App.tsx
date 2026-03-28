@@ -61,6 +61,7 @@ import { GoalsPage } from './GoalsPage'
 import { NetworkPage } from './NetworkPage'
 import { ValuePage } from './ValuePage'
 import { ValueReferencePanel, ValueReferenceMobileFab } from './ValueReferencePanel'
+import { QuestDailyTimebox } from './QuestDailyTimebox'
 import { QUANTUM_FLOW_KEY } from './quantumFlowData'
 import { ACCOUNT_LEDGER_KEY, TRAVEL_TRIP_DETAIL_KEY } from './accountLedgerData'
 import { EVOLUTION_KEY } from './evolutionData'
@@ -71,8 +72,6 @@ import { LifeWorldHub } from './LifeWorldHub'
 import { ChronicleAnalyticsPage } from './ChronicleAnalyticsPage'
 import { GrowthPage } from './GrowthPage'
 import { BossRaidPage } from './BossRaidPage'
-import { CharacterStatusView } from './CharacterStatusView'
-import { shouldShowMorningPresenceModal } from './presenceData'
 import { applyXpGainToSimulationWallet } from './simulationWalletData'
 import { INNER_WORLD_KEY } from './lifeWorldData'
 import { CHRONICLE_STORE_KEY } from './chronicleData'
@@ -2603,8 +2602,6 @@ export default function App() {
   const [xpState, setXpState] = useState<XpState>(() => loadXp())
   const [levelUpAnim, setLevelUpAnim] = useState(false)
   const [levelUpNewLv, setLevelUpNewLv] = useState(1)
-  const [morningPresenceOpen, setMorningPresenceOpen] = useState(() => shouldShowMorningPresenceModal())
-
   // ── Toast ──
   const [toastVisible, setToastVisible] = useState(false)
   const [toastMsg, setToastMsg] = useState('')
@@ -3061,69 +3058,71 @@ export default function App() {
 
   // ── 퀘스트 완료 토글 (체크 ON: +XP, 체크 OFF: -XP) ──
   function toggleComplete(id: string) {
+    const delta = { isDone: false }
     setCompletedQuests(prev => {
       const isDone = prev.includes(id)
       const next = isDone ? prev.filter(x => x !== id) : [...prev, id]
+      delta.isDone = isDone
       localStorage.setItem(COMPLETED_KEY, JSON.stringify(next))
-      kvSet(COMPLETED_KEY, next)
-      if (isDone) {
-        let sub = XP_PER_QUEST
-        const uLink = getQuestValueLink(id)
-        if (uLink) {
-          const va = loadValueActionStore().items.find(x => x.id === uLink && x.is_deleted !== true)
-          if (va) {
-            const { exp: est } = computeQuestRewardsFromValue(va)
-            sub += Math.min(40, Math.max(0, Math.round(est / 25)))
-          }
-        }
-        fireToast(`체크 해제 — -${sub} XP`)
-        adjustXp(-sub)
-      } else {
-        const link = getQuestValueLink(id)
-        let xpGain = XP_PER_QUEST
-        if (link) {
-          const va = loadValueActionStore().items.find(x => x.id === link && x.is_deleted !== true)
-          if (va) {
-            const { exp: est } = computeQuestRewardsFromValue(va)
-            const bonus = Math.min(40, Math.max(0, Math.round(est / 25)))
-            xpGain += bonus
-          }
-        }
-        fireToast(`Quest Clear! ✓  +${xpGain} XP`)
-        adjustXp(xpGain)
-        {
-          const q = userQuests.find(x => x.id === id)
-          const userLevel = calculateLevel(xpState.totalXp).currentLevel
-          if (q) {
-            const mpCost = applyMpDrainForQuestComplete(q, userLevel)
-            if (mpCost > 0) fireToast(`MP −${mpCost} (고난도·보스 부담)`)
-          }
-          const proj = q?.projectId ? projects.find(p => p.id === q.projectId) : null
-          const area = proj ? areas.find(a => a.id === proj.area_id) : null
-          const activeIdent = activeIdentityId ? identities.find(i => i.id === activeIdentityId) : null
-          const r = applyQuestCompleteRpgRewards({
-            areaName: area?.name,
-            projectName: proj?.name,
-            tags: q?.tags,
-            identityId: activeIdentityId,
-            identityName: activeIdent?.name,
-          })
-          if (r.skillBranch && r.skillXpAdded != null) {
-            const br = SKILL_BRANCHES.find(b => b.id === r.skillBranch)
-            fireToast(
-              `스킬 XP +${r.skillXpAdded} (${br?.label ?? r.skillBranch})${r.skillLevelUp ? ' · 티어 상승!' : ''}`,
-            )
-          }
-          if (r.skillArchetype != null && r.archetypeXpAdded != null) {
-            const al = ARCHETYPE_LABEL[r.skillArchetype]
-            fireToast(
-              `원형 XP +${r.archetypeXpAdded} (${al.emoji} ${al.label})${r.archetypeLevelUp ? ' · 티어 상승!' : ''}`,
-            )
-          }
-        }
-      }
+      void kvSet(COMPLETED_KEY, next)
       return next
     })
+    // 업데이터 밖에서만 부수 효과 (스킬 트리 sync 등) — 렌더/업데이터 중 다른 컴포넌트 setState 방지
+    const { isDone } = delta
+    if (isDone) {
+      let sub = XP_PER_QUEST
+      const uLink = getQuestValueLink(id)
+      if (uLink) {
+        const va = loadValueActionStore().items.find(x => x.id === uLink && x.is_deleted !== true)
+        if (va) {
+          const { exp: est } = computeQuestRewardsFromValue(va)
+          sub += Math.min(40, Math.max(0, Math.round(est / 25)))
+        }
+      }
+      fireToast(`체크 해제 — -${sub} XP`)
+      adjustXp(-sub)
+    } else {
+      const link = getQuestValueLink(id)
+      let xpGain = XP_PER_QUEST
+      if (link) {
+        const va = loadValueActionStore().items.find(x => x.id === link && x.is_deleted !== true)
+        if (va) {
+          const { exp: est } = computeQuestRewardsFromValue(va)
+          const bonus = Math.min(40, Math.max(0, Math.round(est / 25)))
+          xpGain += bonus
+        }
+      }
+      fireToast(`Quest Clear! ✓  +${xpGain} XP`)
+      adjustXp(xpGain)
+      const q = userQuests.find(x => x.id === id)
+      const userLevel = calculateLevel(xpState.totalXp).currentLevel
+      if (q) {
+        const mpCost = applyMpDrainForQuestComplete(q, userLevel)
+        if (mpCost > 0) fireToast(`MP −${mpCost} (고난도·보스 부담)`)
+      }
+      const proj = q?.projectId ? projects.find(p => p.id === q.projectId) : null
+      const area = proj ? areas.find(a => a.id === proj.area_id) : null
+      const activeIdent = activeIdentityId ? identities.find(i => i.id === activeIdentityId) : null
+      const r = applyQuestCompleteRpgRewards({
+        areaName: area?.name,
+        projectName: proj?.name,
+        tags: q?.tags,
+        identityId: activeIdentityId,
+        identityName: activeIdent?.name,
+      })
+      if (r.skillBranch && r.skillXpAdded != null) {
+        const br = SKILL_BRANCHES.find(b => b.id === r.skillBranch)
+        fireToast(
+          `스킬 XP +${r.skillXpAdded} (${br?.label ?? r.skillBranch})${r.skillLevelUp ? ' · 티어 상승!' : ''}`,
+        )
+      }
+      if (r.skillArchetype != null && r.archetypeXpAdded != null) {
+        const al = ARCHETYPE_LABEL[r.skillArchetype]
+        fireToast(
+          `원형 XP +${r.archetypeXpAdded} (${al.emoji} ${al.label})${r.archetypeLevelUp ? ' · 티어 상승!' : ''}`,
+        )
+      }
+    }
   }
 
   // ── Area CRUD ──
@@ -3792,18 +3791,6 @@ export default function App() {
 
         {/* ── Toast ── */}
         <Toast msg={toastMsg} visible={toastVisible} />
-
-        {morningPresenceOpen && (
-          <CharacterStatusView
-            identities={identities}
-            activeIdentityId={activeIdentityId}
-            onSelectIdentity={async id => {
-              const ok = await updateActiveIdentity(id)
-              if (ok) setActiveIdentityId(id)
-            }}
-            onClose={() => setMorningPresenceOpen(false)}
-          />
-        )}
 
         {workspaceArchiveKind != null && (
           <WorkspaceDataArchiveModal
@@ -4474,6 +4461,22 @@ export default function App() {
                 </button>
               </div>
               <div style={{ display: 'flex', gap: isMobile ? 0 : 20, alignItems: 'flex-start', width: '100%' }}>
+                {!isMobile && (
+                  <aside
+                    style={{
+                      width: 300,
+                      flexShrink: 0,
+                      position: 'sticky',
+                      top: 56,
+                      alignSelf: 'flex-start',
+                      maxHeight: 'calc(100vh - 72px)',
+                      overflowY: 'auto',
+                      paddingBottom: 24,
+                    }}
+                  >
+                    <ValueReferencePanel quests={userQuests.map(q => ({ id: q.id, name: q.name }))} />
+                  </aside>
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
 
             {questView === 'journal' ? (
@@ -5154,7 +5157,7 @@ export default function App() {
             )}
 
                 </div>
-                {!isMobile && (
+                {!isMobile && questView === 'board' && (
                   <aside
                     style={{
                       width: 300,
@@ -5167,7 +5170,7 @@ export default function App() {
                       paddingBottom: 24,
                     }}
                   >
-                    <ValueReferencePanel quests={userQuests.map(q => ({ id: q.id, name: q.name }))} />
+                    <QuestDailyTimebox onOpenFullTracker={() => setActivePage('tracker')} />
                   </aside>
                 )}
               </div>

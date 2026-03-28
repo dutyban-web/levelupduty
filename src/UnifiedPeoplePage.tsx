@@ -83,7 +83,7 @@ export function UnifiedPeoplePage() {
         <span className="text-[10px] font-extrabold tracking-[0.2em] text-violet-600">BEAUTIFUL LIFE</span>
         <h1 className="mt-2 flex items-center gap-2 text-2xl font-black text-slate-900">
           <Users className="h-8 w-8 text-violet-600" />
-          통합 인물 DB
+          인물
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Manual·저널·Goals·점괘·퀘스트 등에서 <strong className="text-violet-800">같은 인물</strong>을 가리킬 때 여기를
@@ -155,7 +155,7 @@ export function UnifiedPeoplePage() {
                     kind="network_person"
                     refId={r.id}
                     title={r.display_name?.trim() || '이름 없음'}
-                    subtitle="통합 인물 DB"
+                    subtitle="인물"
                     href="/master-board?warehouse=people"
                   />
                   <button

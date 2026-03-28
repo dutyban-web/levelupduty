@@ -238,7 +238,7 @@ export function UnifiedTagSourcesPage({ refreshKey = 0 }: { refreshKey?: number 
         <span className="text-[10px] font-extrabold tracking-[0.2em] text-amber-700">DATA WAREHOUSE</span>
         <h1 className="mt-1 flex flex-wrap items-center gap-2 text-xl font-black text-slate-900 sm:text-2xl">
           <Tags className="h-7 w-7 shrink-0 text-amber-600 sm:h-8 sm:w-8" />
-          원본 · 통합 태그
+          태그
         </h1>
         <p className="mt-1 max-w-3xl text-[11px] leading-snug text-slate-600 sm:text-xs">
           태그에 <code className="rounded bg-slate-100 px-1 text-[10px]">/</code>를 넣으면 경로 그룹으로 잡힙니다.{' '}
