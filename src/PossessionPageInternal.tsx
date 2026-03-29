@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { useIsMobile } from './hooks/useIsMobile'
 import { kvSet } from './lib/supabase'
@@ -9,8 +9,70 @@ import {
   updateActiveIdentity,
   type IdentityRow,
 } from './supabase'
-import { ACT_ROLE_REF_KEY, ACT_MASTER_KEY } from './kvSyncedKeys'
+import { ACT_ROLE_REF_KEY, ACT_MASTER_KEY, ACT_WAY_OF_BEING_KEY } from './kvSyncedKeys'
 import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from './syncIndicatorBus'
+import { ARCHETYPE_LABEL, type IdentityArchetype } from './identityArchetypeData'
+
+const MAX_COVER_DATA_URL_CHARS = 900_000
+
+type ActRoleCard = {
+  id: string
+  title: string
+  body: string
+  coverDataUrl?: string | null
+}
+
+function newRoleCard(): ActRoleCard {
+  return { id: crypto.randomUUID(), title: '', body: '', coverDataUrl: null }
+}
+
+function loadWayOfBeingFromStorage(): IdentityArchetype | null {
+  try {
+    const raw = localStorage.getItem(ACT_WAY_OF_BEING_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as { archetype?: string | null }
+    const a = p.archetype
+    if (a === 'analyst' || a === 'creator' || a === 'capitalist' || a === 'adventurer') return a
+    return null
+  } catch {
+    return null
+  }
+}
+
+function saveWayOfBeingToStorage(a: IdentityArchetype | null) {
+  const payload = { archetype: a }
+  try {
+    localStorage.setItem(ACT_WAY_OF_BEING_KEY, JSON.stringify(payload))
+    void kvSet(ACT_WAY_OF_BEING_KEY, payload)
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadRoleCardsFromStorage(): ActRoleCard[] {
+  try {
+    const raw = localStorage.getItem(ACT_ROLE_REF_KEY)
+    if (!raw) return [newRoleCard()]
+    const p = JSON.parse(raw) as { version?: number; blocks?: unknown[]; text?: string }
+    if (p && p.version === 2 && Array.isArray(p.blocks) && p.blocks.length > 0) {
+      return p.blocks.map((x): ActRoleCard => {
+        const b = x as Record<string, unknown>
+        return {
+          id: typeof b.id === 'string' ? b.id : crypto.randomUUID(),
+          title: typeof b.title === 'string' ? b.title : '',
+          body: typeof b.body === 'string' ? b.body : '',
+          coverDataUrl: typeof b.coverDataUrl === 'string' ? b.coverDataUrl : null,
+        }
+      })
+    }
+    if (p && typeof p.text === 'string' && p.text.trim()) {
+      return [{ id: crypto.randomUUID(), title: '역할 노트', body: p.text, coverDataUrl: null }]
+    }
+    return [newRoleCard()]
+  } catch {
+    return [newRoleCard()]
+  }
+}
 
 // ═══════════════════════════════════════ IDENTITY PAGE ══════════════════════════
 export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefreshActive, onToast, onOptimisticIdentityPatch }: {
@@ -22,7 +84,9 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
   onOptimisticIdentityPatch?: (id: string, name: string, role_model: string | null) => void
 }) {
   const isMobile = useIsMobile()
-  const [roleRefText, setRoleRefText] = useState('')
+  const [roleCards, setRoleCards] = useState<ActRoleCard[]>(() => loadRoleCardsFromStorage())
+  const [selectedWay, setSelectedWay] = useState<IdentityArchetype | null>(() => loadWayOfBeingFromStorage())
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [masterText, setMasterText] = useState('')
   const [newName, setNewName] = useState('')
   const [newRoleModel, setNewRoleModel] = useState('')
@@ -47,23 +111,101 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
         }
         return ''
       }
-      setRoleRefText(readAct(ACT_ROLE_REF_KEY))
+      setRoleCards(loadRoleCardsFromStorage())
+      setSelectedWay(loadWayOfBeingFromStorage())
       setMasterText(readAct(ACT_MASTER_KEY))
     } catch {
       /* ignore */
     }
   }, [])
 
-  const persistRoleRef = useCallback((v: string) => {
-    setRoleRefText(v)
+  const flushRoleCards = useCallback((blocks: ActRoleCard[]) => {
     try {
-      const payload = { text: v }
+      const payload = { version: 2 as const, blocks }
       localStorage.setItem(ACT_ROLE_REF_KEY, JSON.stringify(payload))
       void kvSet(ACT_ROLE_REF_KEY, payload)
     } catch {
       /* ignore */
     }
   }, [])
+
+  const schedulePersistRoleCards = useCallback(
+    (next: ActRoleCard[]) => {
+      if (persistTimer.current) clearTimeout(persistTimer.current)
+      persistTimer.current = setTimeout(() => flushRoleCards(next), 320)
+    },
+    [flushRoleCards],
+  )
+
+  useEffect(
+    () => () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current)
+    },
+    [],
+  )
+
+  const setWayOfBeing = useCallback((a: IdentityArchetype | null) => {
+    setSelectedWay(a)
+    saveWayOfBeingToStorage(a)
+    if (a === null) onToast?.('존재 방식 선택을 비웠습니다.')
+  }, [onToast])
+
+  const patchRoleCard = useCallback(
+    (id: string, patch: Partial<Pick<ActRoleCard, 'title' | 'body' | 'coverDataUrl'>>) => {
+      setRoleCards(prev => {
+        const next = prev.map(c => (c.id === id ? { ...c, ...patch } : c))
+        schedulePersistRoleCards(next)
+        return next
+      })
+    },
+    [schedulePersistRoleCards],
+  )
+
+  const addRoleCard = useCallback(() => {
+    const card = newRoleCard()
+    setRoleCards(prev => {
+      const next = [...prev, card]
+      flushRoleCards(next)
+      return next
+    })
+  }, [flushRoleCards])
+
+  const removeRoleCard = useCallback(
+    (id: string) => {
+      if (!window.confirm('이 카드를 삭제할까요?')) return
+      setRoleCards(prev => {
+        if (prev.length <= 1) {
+          onToast?.('카드는 최소 1개 유지됩니다.')
+          return prev
+        }
+        const next = prev.filter(c => c.id !== id)
+        flushRoleCards(next)
+        return next
+      })
+    },
+    [flushRoleCards, onToast],
+  )
+
+  const onCoverPick = useCallback(
+    (cardId: string, file: File | undefined) => {
+      if (!file || !file.type.startsWith('image/')) return
+      const reader = new FileReader()
+      reader.onload = () => {
+        const data = typeof reader.result === 'string' ? reader.result : ''
+        if (data.length > MAX_COVER_DATA_URL_CHARS) {
+          onToast?.('이미지가 너무 큽니다. 더 작은 파일로 시도해 주세요.')
+          return
+        }
+        setRoleCards(prev => {
+          const next = prev.map(c => (c.id === cardId ? { ...c, coverDataUrl: data } : c))
+          flushRoleCards(next)
+          return next
+        })
+      }
+      reader.readAsDataURL(file)
+    },
+    [flushRoleCards, onToast],
+  )
 
   const persistMaster = useCallback((v: string) => {
     setMasterText(v)
@@ -170,36 +312,252 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
       <div style={{ marginBottom: '24px' }}>
         <span style={{ fontSize: '10px', fontWeight: 800, color: '#7C3AED', letterSpacing: '0.2em', textTransform: 'uppercase' }}>🎭 Act</span>
         <h1 style={{ margin: '8px 0 0', fontSize: 'clamp(22px, 4vw, 28px)', fontWeight: 900, color: '#37352F' }}>Act</h1>
-        <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>역할참조 · 정체성 · Master를 한 화면에서 정리합니다</p>
+        <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#787774' }}>존재 방식 · 역할창조 · 정체성 · Master를 한 화면에서 정리합니다</p>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {/* ① 역할참조 */}
+        {/* ⓪ 존재 방식 (4원형) */}
         <section style={actBox}>
-          <span style={{ fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em' }}>ROLE REF</span>
-          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>역할참조</h2>
-          <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
-            지금 맡은 역할·참고할 롤모델·기대 행동을 적어 두세요. (Supabase app_kv 동기화)
+          <span style={{ fontSize: '10px', fontWeight: 800, color: '#a855f7', letterSpacing: '0.14em' }}>WAY OF BEING</span>
+          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>존재 방식</h2>
+          <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#787774', lineHeight: 1.55 }}>
+            오늘의 상위 방향(분석가·창작자·자본가·모험가)을 고릅니다. 태세(정체성)보다 한 겉단 — 역할창조·집중 흐름을 잡을 때 참고합니다.
           </p>
-          <textarea
-            value={roleRefText}
-            onChange={e => persistRoleRef(e.target.value)}
-            placeholder="예: 팀에서의 역할, 본받고 싶은 사람, 이 역할에서 지켜야 할 태도…"
+          <div
             style={{
-              width: '100%',
-              minHeight: '120px',
-              padding: '12px 14px',
-              fontSize: '14px',
-              lineHeight: 1.55,
-              borderRadius: '12px',
-              border: '1px solid rgba(0,0,0,0.08)',
-              backgroundColor: '#fafafa',
-              color: '#37352F',
-              resize: 'vertical',
-              fontFamily: 'inherit',
-              boxSizing: 'border-box',
+              display: 'grid',
+              gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+              gap: 10,
+              marginBottom: 12,
             }}
-          />
+          >
+            {(Object.keys(ARCHETYPE_LABEL) as IdentityArchetype[]).map(k => {
+              const meta = ARCHETYPE_LABEL[k]
+              const on = selectedWay === k
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setWayOfBeing(on ? null : k)}
+                  style={{
+                    padding: '14px 10px',
+                    borderRadius: 14,
+                    border: on ? '2px solid #a855f7' : '1px solid rgba(0,0,0,0.08)',
+                    background: on ? 'linear-gradient(180deg, rgba(168,85,247,0.12), #fff)' : '#fafafa',
+                    color: on ? '#6b21a8' : '#57534e',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    textAlign: 'center',
+                    boxShadow: on ? '0 4px 14px rgba(168,85,247,0.2)' : 'none',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                  }}
+                >
+                  <div style={{ fontSize: 22, marginBottom: 4 }}>{meta.emoji}</div>
+                  <div>{meta.label}</div>
+                  <div style={{ fontSize: 10, fontWeight: 600, marginTop: 6, opacity: 0.88, lineHeight: 1.35 }}>{meta.blurb}</div>
+                </button>
+              )
+            })}
+          </div>
+          <p style={{ margin: 0, fontSize: 11, color: '#a8a29e' }}>
+            같은 카드를 다시 누르면 선택이 해제됩니다. app_kv에 동기화됩니다.
+          </p>
+        </section>
+
+        {/* ① 역할창조 — 노션형 카드 블록 */}
+        <section style={actBox}>
+          <span style={{ fontSize: '10px', fontWeight: 800, color: '#6366f1', letterSpacing: '0.12em' }}>ROLE CREATE</span>
+          <h2 style={{ margin: '6px 0 8px', fontSize: '20px', fontWeight: 900, color: '#37352F' }}>역할창조</h2>
+          <p style={{ margin: '0 0 16px', fontSize: '13px', color: '#787774', lineHeight: 1.5 }}>
+            카드마다 표지 이미지와 제목·본문을 쌓아 두세요. Notion 페이지처럼 블록을 나눠 역할·롤모델·기대 행동을 정리할 수 있습니다. (Supabase app_kv 동기화)
+          </p>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 16,
+            }}
+          >
+            {roleCards.map((card, idx) => {
+              const placeholderGrad = [
+                'linear-gradient(145deg, #e0e7ff 0%, #eef2ff 50%, #f8fafc 100%)',
+                'linear-gradient(145deg, #fce7f3 0%, #fdf2f8 50%, #fafafa 100%)',
+                'linear-gradient(145deg, #d1fae5 0%, #ecfdf5 50%, #f9fafb 100%)',
+                'linear-gradient(145deg, #fef3c7 0%, #fffbeb 50%, #fafaf9 100%)',
+              ][idx % 4]
+              return (
+                <article
+                  key={card.id}
+                  style={{
+                    borderRadius: 14,
+                    border: '1px solid rgba(0,0,0,0.07)',
+                    overflow: 'hidden',
+                    backgroundColor: '#fff',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'relative',
+                      height: 132,
+                      background: card.coverDataUrl ? '#1c1917' : placeholderGrad,
+                    }}
+                  >
+                    {card.coverDataUrl ? (
+                      <img
+                        src={card.coverDataUrl}
+                        alt=""
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          height: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 36,
+                          opacity: 0.35,
+                          color: '#64748b',
+                        }}
+                      >
+                        🖼
+                      </div>
+                    )}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: 8,
+                        right: 8,
+                        display: 'flex',
+                        gap: 6,
+                        flexWrap: 'wrap',
+                        justifyContent: 'flex-end',
+                      }}
+                    >
+                      <label
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          background: 'rgba(15,23,42,0.72)',
+                          color: '#fff',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          border: '1px solid rgba(255,255,255,0.2)',
+                        }}
+                      >
+                        표지
+                        <input
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={e => {
+                            onCoverPick(card.id, e.target.files?.[0])
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                      {card.coverDataUrl && (
+                        <button
+                          type="button"
+                          onClick={() => patchRoleCard(card.id, { coverDataUrl: null })}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: 8,
+                            background: 'rgba(255,255,255,0.92)',
+                            color: '#57534e',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            border: '1px solid rgba(0,0,0,0.08)',
+                          }}
+                        >
+                          표지 제거
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ padding: '14px 14px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <input
+                      value={card.title}
+                      onChange={e => patchRoleCard(card.id, { title: e.target.value })}
+                      placeholder="제목 없음"
+                      style={{
+                        width: '100%',
+                        border: 'none',
+                        outline: 'none',
+                        fontSize: 17,
+                        fontWeight: 800,
+                        color: '#37352F',
+                        background: 'transparent',
+                        fontFamily: 'inherit',
+                      }}
+                    />
+                    <textarea
+                      value={card.body}
+                      onChange={e => patchRoleCard(card.id, { body: e.target.value })}
+                      placeholder="역할, 롤모델, 이 역할에서 지키고 싶은 태도…"
+                      style={{
+                        width: '100%',
+                        minHeight: 100,
+                        border: 'none',
+                        outline: 'none',
+                        fontSize: 14,
+                        lineHeight: 1.55,
+                        color: '#44403c',
+                        background: 'rgba(0,0,0,0.02)',
+                        borderRadius: 10,
+                        padding: '10px 12px',
+                        resize: 'vertical',
+                        fontFamily: 'inherit',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => removeRoleCard(card.id)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(239,68,68,0.35)',
+                          background: 'rgba(254,242,242,0.9)',
+                          color: '#b91c1c',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        카드 삭제
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={addRoleCard}
+            style={{
+              marginTop: 14,
+              width: '100%',
+              padding: '12px 16px',
+              borderRadius: 12,
+              border: '2px dashed rgba(99,102,241,0.35)',
+              background: 'rgba(99,102,241,0.06)',
+              color: '#4f46e5',
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            + 블록 추가
+          </button>
         </section>
 
         {/* ② 정체성 */}

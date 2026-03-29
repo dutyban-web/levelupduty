@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react'
 import {
   loadValueActionStore,
   activeValueActions,
@@ -16,6 +16,7 @@ import {
 import { SKILL_BRANCHES } from './skillTreeData'
 import { RoutineStreet } from './RoutineStreet'
 import { buildLootEncouragement, type FocusLootState } from './battleFocusNarrative'
+import { OtpVerifyScreen } from './components/OtpVerifyScreen'
 import { QuestTacticalDrillModal } from './QuestTacticalDrillModal'
 import { BattleFocusMode } from './BattleFocusMode'
 import { MapHub } from './MapHub'
@@ -26,7 +27,7 @@ import { TrashPage } from './TrashPage'
 import { CALENDAR_KEY, loadCalendar, BeautifulLifeSection } from './CalendarLifeSection'
 import { PossessionPage } from './PossessionPageInternal'
 import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from './syncIndicatorBus'
-import { hydrateLocalStorageFromKvRecord, migrateLocalToKvIfMissing } from './kvSyncedKeys'
+import { hydrateLocalStorageFromKvRecord, migrateLocalToKvIfMissing, ACT_WAY_OF_BEING_KEY } from './kvSyncedKeys'
 import {
   supabase as _sbClient,
   fetchUserStats, upsertUserStats,
@@ -37,7 +38,7 @@ import {
   fetchDailyLog, upsertDailyLog, upsertDailyLogFortune, updateDailyLogPomodoros, updateQuestPomodoroCount, setDailyLogTime, updateDailyLogTimeScore,
   fetchLevelRewards, insertLevelReward, claimLevelReward,
   setAreaTimeSpent, setProjectTimeSpent, setQuestTimeSpent,
-  signIn, signOut, getSession, onAuthStateChange,
+  signIn, signOut, getSession, onAuthStateChange, sendEmailOtp,
   insertJournalNote, updateJournalNote, deleteJournalNote,
   fetchProjects, insertProject, updateProject, deleteProject, addProjectTimeSpent,
   fetchAreas, insertArea, updateArea, deleteArea, addAreaTimeSpent, updateAreaSortOrder, updateProjectSortOrder,
@@ -1627,19 +1628,43 @@ function persistStats(stats: StatDef[]) {
 // ── LoginView — 시네마틱 / 미니멀 (설명·브랜딩 문구 없음) ─────────────────────
 const LOGIN_BG_URL = '/login-bg-surf.png'
 
-function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
+function LoginView({ otpGateRef }: { otpGateRef: MutableRefObject<'none' | 'password_ok' | 'otp_sent'> }) {
+  const [step, setStep] = useState<'login' | 'otp'>('login')
   const [email, setEmail] = useState('')
+  const [otpEmail, setOtpEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true); setError('')
-    const result = await signIn(email, password)
-    if (result.error) { setError(result.error); setLoading(false) }
-    else if (result.session) onLogin(result.session)
-    else { setError('로그인 실패'); setLoading(false) }
+    // 비밀번호 로그인이 세션을 켜기 전에 gate를 세워 onAuthStateChange가 앱 진입을 막음
+    otpGateRef.current = 'password_ok'
+    setLoading(true)
+    setError('')
+    try {
+      const result = await signIn(email, password)
+      if (result.error) {
+        otpGateRef.current = 'none'
+        setError(result.error)
+        return
+      }
+      if (!result.session) {
+        otpGateRef.current = 'none'
+        setError('로그인 실패')
+        return
+      }
+      await signOut()
+      await sendEmailOtp(email.trim())
+      setOtpEmail(email.trim())
+      setStep('otp')
+    } catch (err) {
+      otpGateRef.current = 'none'
+      const msg = err instanceof Error ? err.message : '인증 메일을 보내지 못했습니다.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const fontSans = "'Noto Sans KR', system-ui, sans-serif"
@@ -1682,57 +1707,74 @@ function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
           borderRadius: '2px',
           animation: 'authPanelGlow 5s ease-in-out infinite',
         }}>
-          <form className="login-minimal" onSubmit={handleSubmit} autoComplete="on">
-            <input
-              type="email"
-              name="email"
-              required
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="Email"
-              autoComplete="username"
-              aria-label="Email"
-              style={inp}
-              onFocus={e => { e.target.style.borderColor = 'rgba(226, 214, 180, 0.45)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.5)' }}
-              onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.18)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.35)' }}
-            />
-            <input
-              type="password"
-              name="password"
-              required
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Password"
-              autoComplete="current-password"
-              aria-label="Password"
-              style={inp}
-              onFocus={e => { e.target.style.borderColor = 'rgba(226, 214, 180, 0.45)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.5)' }}
-              onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.18)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.35)' }}
-            />
-            {error && (
-              <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#fca5a5', textAlign: 'center', fontWeight: 500, lineHeight: 1.5 }}>{error}</p>
-            )}
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%', padding: '14px 16px', marginTop: '6px',
-                borderRadius: '2px',
-                border: '1px solid rgba(255,255,255,0.12)',
-                cursor: loading ? 'default' : 'pointer',
-                fontFamily: fontSans,
-                fontSize: '14px', fontWeight: 600,
-                letterSpacing: '0.06em',
-                color: '#e8e4dc',
-                background: loading ? 'rgba(35,38,48,0.95)' : 'rgba(28,32,42,0.95)',
-                transition: 'background 0.2s, border-color 0.2s',
+          {step === 'login' ? (
+            <form className="login-minimal" onSubmit={handleSubmit} autoComplete="on">
+              <input
+                type="email"
+                name="email"
+                required
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="Email"
+                autoComplete="username"
+                aria-label="Email"
+                style={inp}
+                onFocus={e => { e.target.style.borderColor = 'rgba(226, 214, 180, 0.45)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.5)' }}
+                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.18)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.35)' }}
+              />
+              <input
+                type="password"
+                name="password"
+                required
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password"
+                autoComplete="current-password"
+                aria-label="Password"
+                style={inp}
+                onFocus={e => { e.target.style.borderColor = 'rgba(226, 214, 180, 0.45)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.5)' }}
+                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.18)'; e.target.style.backgroundColor = 'rgba(0,0,0,0.35)' }}
+              />
+              {error && (
+                <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#fca5a5', textAlign: 'center', fontWeight: 500, lineHeight: 1.5 }}>{error}</p>
+              )}
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  width: '100%', padding: '14px 16px', marginTop: '6px',
+                  borderRadius: '2px',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  cursor: loading ? 'default' : 'pointer',
+                  fontFamily: fontSans,
+                  fontSize: '14px', fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  color: '#e8e4dc',
+                  background: loading ? 'rgba(35,38,48,0.95)' : 'rgba(28,32,42,0.95)',
+                  transition: 'background 0.2s, border-color 0.2s',
+                }}
+                onMouseEnter={e => { if (!loading) { e.currentTarget.style.background = 'rgba(38,42,54,0.98)'; e.currentTarget.style.borderColor = 'rgba(212, 175, 120, 0.35)' } }}
+                onMouseLeave={e => { if (!loading) { e.currentTarget.style.background = 'rgba(28,32,42,0.95)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)' } }}
+              >
+                {loading ? '…' : '입장'}
+              </button>
+            </form>
+          ) : (
+            <OtpVerifyScreen
+              email={otpEmail}
+              prepareVerify={() => { otpGateRef.current = 'none' }}
+              onSuccess={() => {
+                /* 세션은 verifyOtp 후 onAuthStateChange에서 반영 */
               }}
-              onMouseEnter={e => { if (!loading) { e.currentTarget.style.background = 'rgba(38,42,54,0.98)'; e.currentTarget.style.borderColor = 'rgba(212, 175, 120, 0.35)' } }}
-              onMouseLeave={e => { if (!loading) { e.currentTarget.style.background = 'rgba(28,32,42,0.95)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)' } }}
-            >
-              {loading ? '…' : '입장'}
-            </button>
-          </form>
+              onBack={() => {
+                otpGateRef.current = 'none'
+                setStep('login')
+                setOtpEmail('')
+                setPassword('')
+                setError('')
+              }}
+            />
+          )}
         </div>
       </div>
     </>
@@ -2481,6 +2523,8 @@ const FORCE_RECOVER_HIDE_KEY = 'creative_os_force_recover_ui_hidden_v1'
 export default function App() {
   // ── Auth ──
   const [session, setSession] = useState<Session | null | 'loading'>('loading')
+  /** 비밀번호 로그인 직후 세션은 OTP 완료 전까지 앱에 반영하지 않음 */
+  const otpGateRef = useRef<'none' | 'password_ok' | 'otp_sent'>('none')
 
   const [selectedProjects, setSelectedProjects] = useState<string[]>([])
   const [selectedQuests, setSelectedQuests] = useState<string[]>([])
@@ -2655,7 +2699,14 @@ export default function App() {
       if (!cancelled) setSession(s)
     })
     const unsub = onAuthStateChange(s => {
-      if (!cancelled) setSession(s)
+      if (cancelled) return
+      if (otpGateRef.current === 'password_ok') {
+        if (s) return
+        otpGateRef.current = 'otp_sent'
+        setSession(null)
+        return
+      }
+      setSession(s)
     })
     return () => {
       cancelled = true
@@ -2762,7 +2813,7 @@ export default function App() {
         for (const k of trashed) {
           try { localStorage.removeItem(k) } catch { /* ignore */ }
         }
-        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, HABIT_ROUTINE_CHAIN_KEY, SANCTUARY_KPT_KEY, INNER_WORLD_KEY, CHRONICLE_STORE_KEY, EXTERNAL_CALENDAR_STORE_KEY, SKILL_TREE_KEY, REWARD_HISTORY_KEY, ACHIEVEMENTS_KEY, VISUALIZATION_ITEMS_KEY, SIMULATION_WALLET_KEY, MORNING_PRESENCE_ACK_KEY, IDENTITY_ARCHETYPE_KEY, FRAGMENT_KEY, GARRISON_TACTICAL_ALLY_KEY, LEGACY_ARCHIVE_KEY]
+        const passThrough = [WORLDS_KEY, SAJU_KEY, CALENDAR_KEY, TRAVEL_KEY, TRAVEL_TRIP_ORDER_KEY, TRAVEL_TRIP_DETAIL_KEY, GOURMET_KEY, TRAVEL_EXPENSE_CATEGORIES_KEY, TRAVEL_RETROSPECTIVE_TEMPLATES_KEY, PROJECT_WORKSPACE_KEY, PROJECT_HUB_PREFS_KEY, SETTLEMENT_KEY, QUANTUM_FLOW_KEY, ACCOUNT_LEDGER_KEY, EVOLUTION_KEY, HABIT_ROUTINE_CHAIN_KEY, SANCTUARY_KPT_KEY, INNER_WORLD_KEY, CHRONICLE_STORE_KEY, EXTERNAL_CALENDAR_STORE_KEY, SKILL_TREE_KEY, REWARD_HISTORY_KEY, ACHIEVEMENTS_KEY, VISUALIZATION_ITEMS_KEY, SIMULATION_WALLET_KEY, MORNING_PRESENCE_ACK_KEY, IDENTITY_ARCHETYPE_KEY, ACT_WAY_OF_BEING_KEY, FRAGMENT_KEY, GARRISON_TACTICAL_ALLY_KEY, LEGACY_ARCHIVE_KEY]
         passThrough.forEach(k => { if (all[k] !== undefined && all[k] !== null) localStorage.setItem(k, JSON.stringify(all[k])) })
         hydrateLocalStorageFromKvRecord(all)
         await migrateLocalToKvIfMissing(all)
@@ -3753,7 +3804,7 @@ export default function App() {
     )
   }
   if (!session) {
-    return <LoginView onLogin={s => setSession(s)} />
+    return <LoginView otpGateRef={otpGateRef} />
   }
 
   return (
@@ -4128,7 +4179,7 @@ export default function App() {
               )}
               <button
                 type="button"
-                onClick={async () => { await signOut(); setSession(null) }}
+                onClick={async () => { otpGateRef.current = 'none'; await signOut(); setSession(null) }}
                 title="로그아웃"
                 style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.06)', backgroundColor: 'transparent', color: '#9B9A97', fontSize: '11px', cursor: 'pointer', transition: 'all 0.15s' }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = '#f87171'; e.currentTarget.style.color = '#f87171' }}

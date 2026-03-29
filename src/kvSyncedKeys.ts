@@ -33,6 +33,8 @@ export const MANIFEST_LOCAL_KEY = 'manifestation_local_v1'
 export const MANIFEST_ACHIEVED_KEY = 'manifestation_achieved_v1'
 export const ACT_ROLE_REF_KEY = 'act-role-reference-v1'
 export const ACT_MASTER_KEY = 'act-master-area-v1'
+/** Act — 상위 존재 방식(4원형) 선택값 */
+export const ACT_WAY_OF_BEING_KEY = 'act-way-of-being-v1'
 
 export const ALL_KV_SYNC_KEYS: string[] = [
   GOALS_KV_KEY,
@@ -42,6 +44,7 @@ export const ALL_KV_SYNC_KEYS: string[] = [
   MANIFEST_NOTE_BUNDLE_KEY,
   ACT_ROLE_REF_KEY,
   ACT_MASTER_KEY,
+  ACT_WAY_OF_BEING_KEY,
   VALUE_ACTION_STORE_KEY,
   QUEST_VALUE_LINK_KEY,
   NETWORK_STORE_KEY,
@@ -74,6 +77,7 @@ function parseStoredValueForMigration(key: string, raw: string): unknown {
   } catch {
     if (key === GOALS_KV_KEY) return { text: raw }
     if (key === ACT_ROLE_REF_KEY || key === ACT_MASTER_KEY) return { text: raw }
+    if (key === ACT_WAY_OF_BEING_KEY) return { archetype: null }
     if (key === BOARD_EMOTIONAL_LENS_KEY) {
       return { past_pain: '', past_joy: '', present_pain: '', present_joy: '' }
     }

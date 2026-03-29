@@ -13,6 +13,7 @@ import {
 } from '@dnd-kit/core'
 import {
   arrayMove,
+  rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -28,6 +29,8 @@ import {
   deleteManualSite,
   type ManualSiteRow,
 } from './supabase'
+import { ManualSiteCard } from './components/ManualSiteCard'
+import { ManualSiteList, splitManualSitesByYouTube } from './components/ManualSiteList'
 
 function hrefFromUrl(raw: string): string {
   const t = raw.trim()
@@ -59,6 +62,7 @@ function SortableSiteCard({
   const [note, setNote] = useState(site.note ?? '')
   const [category, setCategory] = useState(site.category)
   const [saving, setSaving] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => {
     setTitle(site.title)
@@ -118,89 +122,110 @@ function SortableSiteCard({
       {...attributes}
       className="list-none rounded-2xl border border-teal-200/90 bg-white/95 p-3 shadow-sm sm:p-4"
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <div
-          {...listeners}
-          className="flex h-10 w-10 shrink-0 cursor-grab touch-manipulation items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 active:cursor-grabbing"
-          title="드래그하여 순서 변경"
+      <div className="flex flex-col gap-2">
+        <div className="relative min-w-0">
+          <div
+            {...listeners}
+            className="absolute left-2 top-2 z-10 flex h-9 w-9 cursor-grab touch-manipulation items-center justify-center rounded-lg border border-slate-200/90 bg-white/95 text-slate-500 shadow-sm backdrop-blur-sm hover:bg-slate-50 active:cursor-grabbing"
+            title="드래그하여 순서 변경"
+          >
+            <GripVertical className="h-4 w-4" />
+          </div>
+          <ManualSiteCard
+            site={{
+              ...site,
+              title,
+              url,
+              category,
+              note: note.trim() ? note.trim() : null,
+            }}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => setDetailsOpen(o => !o)}
+          aria-expanded={detailsOpen}
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 text-xs font-bold text-slate-700 transition hover:border-teal-200 hover:bg-teal-50/80 hover:text-teal-900"
         >
-          <GripVertical className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="block min-w-0">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">표시 이름</span>
-              <input
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="예: 지인 인스타"
-              />
-            </label>
-            <label className="block min-w-0 sm:col-span-1">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">URL</span>
-              <input
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="https://..."
-                spellCheck={false}
-              />
-            </label>
+          {detailsOpen ? '접기' : '상세 · 편집'}
+        </button>
+        {detailsOpen && (
+          <div className="space-y-3 border-t border-slate-100 pt-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block min-w-0">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">표시 이름</span>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="예: 지인 인스타"
+                />
+              </label>
+              <label className="block min-w-0 sm:col-span-1">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">URL</span>
+                <input
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="https://..."
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block min-w-0">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">구분 (선택)</span>
+                <input
+                  value={category}
+                  onChange={e => setCategory(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="예: SNS, 유튜브, 업무"
+                />
+              </label>
+              <label className="block min-w-0 sm:col-span-1">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">메모</span>
+                <input
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="참고용 짧은 메모"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={openLink}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100 sm:flex-none"
+                title="새 탭에서 열기"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                열기
+              </button>
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saving}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900 hover:bg-violet-100 disabled:opacity-60 sm:flex-none"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                {saving ? '저장…' : '저장'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void remove()}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-900 hover:bg-red-100 sm:flex-none"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                삭제
+              </button>
+            </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="block min-w-0">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">구분 (선택)</span>
-              <input
-                value={category}
-                onChange={e => setCategory(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="예: SNS, 유튜브, 업무"
-              />
-            </label>
-            <label className="block min-w-0 sm:col-span-1">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">메모</span>
-              <input
-                value={note}
-                onChange={e => setNote(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="참고용 짧은 메모"
-              />
-            </label>
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:flex-col sm:items-stretch">
-          <button
-            type="button"
-            onClick={openLink}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100"
-            title="새 탭에서 열기"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            열기
-          </button>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900 hover:bg-violet-100 disabled:opacity-60"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {saving ? '저장…' : '저장'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void remove()}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-900 hover:bg-red-100"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            삭제
-          </button>
-        </div>
+        )}
       </div>
     </li>
   )
@@ -221,6 +246,7 @@ function SiteCardStatic({
   const [note, setNote] = useState(site.note ?? '')
   const [category, setCategory] = useState(site.category)
   const [saving, setSaving] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => {
     setTitle(site.title)
@@ -275,88 +301,111 @@ function SiteCardStatic({
 
   return (
     <li className="list-none rounded-2xl border border-teal-200/90 bg-white/95 p-3 shadow-sm sm:p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-slate-400"
-          title="필터 중에는 순서 변경 불가"
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-2 sm:gap-3">
+          <div
+            className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-slate-400"
+            title="필터 중에는 순서 변경 불가"
+          >
+            <Link2 className="h-4 w-4" />
+          </div>
+          <div className="relative min-w-0 flex-1">
+            <ManualSiteCard
+              site={{
+                ...site,
+                title,
+                url,
+                category,
+                note: note.trim() ? note.trim() : null,
+              }}
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDetailsOpen(o => !o)}
+          aria-expanded={detailsOpen}
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 text-xs font-bold text-slate-700 transition hover:border-teal-200 hover:bg-teal-50/80 hover:text-teal-900"
         >
-          <Link2 className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="block min-w-0">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">표시 이름</span>
-              <input
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="예: 지인 인스타"
-              />
-            </label>
-            <label className="block min-w-0 sm:col-span-1">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">URL</span>
-              <input
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="https://..."
-                spellCheck={false}
-              />
-            </label>
+          {detailsOpen ? '접기' : '상세 · 편집'}
+        </button>
+        {detailsOpen && (
+          <div className="space-y-3 border-t border-slate-100 pt-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block min-w-0">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">표시 이름</span>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="예: 지인 인스타"
+                />
+              </label>
+              <label className="block min-w-0 sm:col-span-1">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">URL</span>
+                <input
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="https://..."
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block min-w-0">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">구분 (선택)</span>
+                <input
+                  value={category}
+                  onChange={e => setCategory(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="예: SNS, 유튜브, 업무"
+                />
+              </label>
+              <label className="block min-w-0 sm:col-span-1">
+                <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">메모</span>
+                <input
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  onBlur={() => void save()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                  placeholder="참고용 짧은 메모"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={openLink}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100 sm:flex-none"
+                title="새 탭에서 열기"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                열기
+              </button>
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saving}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900 hover:bg-violet-100 disabled:opacity-60 sm:flex-none"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                {saving ? '저장…' : '저장'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void remove()}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-900 hover:bg-red-100 sm:flex-none"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                삭제
+              </button>
+            </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="block min-w-0">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">구분 (선택)</span>
-              <input
-                value={category}
-                onChange={e => setCategory(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="예: SNS, 유튜브, 업무"
-              />
-            </label>
-            <label className="block min-w-0 sm:col-span-1">
-              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-slate-500">메모</span>
-              <input
-                value={note}
-                onChange={e => setNote(e.target.value)}
-                onBlur={() => void save()}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                placeholder="참고용 짧은 메모"
-              />
-            </label>
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:flex-col sm:items-stretch">
-          <button
-            type="button"
-            onClick={openLink}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100"
-            title="새 탭에서 열기"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            열기
-          </button>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900 hover:bg-violet-100 disabled:opacity-60"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {saving ? '저장…' : '저장'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void remove()}
-            className="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-900 hover:bg-red-100"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            삭제
-          </button>
-        </div>
+        )}
       </div>
     </li>
   )
@@ -393,6 +442,8 @@ export function ManualSitesPanel() {
     return sites.filter(x => (x.category ?? '').trim() === selectedCategory)
   }, [sites, selectedCategory])
 
+  const { youtubeSites, otherSites } = useMemo(() => splitManualSitesByYouTube(filtered), [filtered])
+
   const dragEnabled = !selectedCategory
 
   const sensors = useSensors(
@@ -404,11 +455,30 @@ export function ManualSitesPanel() {
     if (!dragEnabled) return
     const { active, over } = e
     if (!over || active.id === over.id) return
-    const oldIdx = filtered.findIndex(s => s.id === active.id)
-    const newIdx = filtered.findIndex(s => s.id === over.id)
-    if (oldIdx < 0 || newIdx < 0) return
-    const nextOrder = arrayMove(filtered, oldIdx, newIdx)
-    const withSortOrder = nextOrder.map((s, i) => ({ ...s, sort_order: i }))
+
+    const { youtubeSites: yt, otherSites: ot } = splitManualSitesByYouTube(filtered)
+    const activeId = String(active.id)
+    const overId = String(over.id)
+
+    const inYt = (id: string) => yt.some(s => s.id === id)
+    let merged: ManualSiteRow[]
+    if (inYt(activeId) && inYt(overId)) {
+      const oldIdx = yt.findIndex(s => s.id === activeId)
+      const newIdx = yt.findIndex(s => s.id === overId)
+      if (oldIdx < 0 || newIdx < 0) return
+      const movedYt = arrayMove(yt, oldIdx, newIdx)
+      merged = [...movedYt, ...ot]
+    } else if (!inYt(activeId) && !inYt(overId)) {
+      const oldIdx = ot.findIndex(s => s.id === activeId)
+      const newIdx = ot.findIndex(s => s.id === overId)
+      if (oldIdx < 0 || newIdx < 0) return
+      const movedOt = arrayMove(ot, oldIdx, newIdx)
+      merged = [...yt, ...movedOt]
+    } else {
+      return
+    }
+
+    const withSortOrder = merged.map((s, i) => ({ ...s, sort_order: i }))
     const previous = sites
     setSites(withSortOrder)
     void (async () => {
@@ -492,20 +562,38 @@ export function ManualSitesPanel() {
         </div>
       ) : dragEnabled ? (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-          <SortableContext items={filtered.map(s => s.id)} strategy={verticalListSortingStrategy}>
-            <ul className="m-0 flex list-none flex-col gap-3 p-0">
-              {filtered.map(s => (
-                <SortableSiteCard key={s.id} site={s} onSaved={onSaved} onDeleted={onDeleted} />
-              ))}
-            </ul>
-          </SortableContext>
+          <div className="flex flex-col gap-8">
+            {youtubeSites.length > 0 && (
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-teal-900/90">YouTube · {youtubeSites.length}</h3>
+                <SortableContext items={youtubeSites.map(s => s.id)} strategy={rectSortingStrategy}>
+                  <ul className="m-0 grid list-none grid-cols-2 gap-2 p-0 sm:grid-cols-3 sm:gap-2.5 lg:grid-cols-5 lg:gap-3">
+                    {youtubeSites.map(s => (
+                      <SortableSiteCard key={s.id} site={s} onSaved={onSaved} onDeleted={onDeleted} />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </section>
+            )}
+            {otherSites.length > 0 && (
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-teal-900/90">링크 · {otherSites.length}</h3>
+                <SortableContext items={otherSites.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                  <ul className="m-0 flex list-none flex-col gap-3 p-0">
+                    {otherSites.map(s => (
+                      <SortableSiteCard key={s.id} site={s} onSaved={onSaved} onDeleted={onDeleted} />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </section>
+            )}
+          </div>
         </DndContext>
       ) : (
-        <ul className="m-0 flex list-none flex-col gap-3 p-0">
-          {filtered.map(s => (
-            <SiteCardStatic key={s.id} site={s} onSaved={onSaved} onDeleted={onDeleted} />
-          ))}
-        </ul>
+        <ManualSiteList
+          sites={filtered}
+          renderItem={s => <SiteCardStatic site={s} onSaved={onSaved} onDeleted={onDeleted} />}
+        />
       )}
     </div>
   )

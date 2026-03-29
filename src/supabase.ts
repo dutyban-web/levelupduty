@@ -24,6 +24,28 @@ export async function signOut(): Promise<void> {
   await supabase.auth.signOut()
 }
 
+/** 이메일 OTP 발송 (기존 가입 이메일만 — shouldCreateUser: false) */
+export async function sendEmailOtp(email: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase 클라이언트가 없습니다.')
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: false },
+  })
+  if (error) throw error
+}
+
+/** 이메일 OTP 검증 */
+export async function verifyEmailOtp(email: string, token: string) {
+  if (!supabase) throw new Error('Supabase 클라이언트가 없습니다.')
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'email',
+  })
+  if (error) throw error
+  return data
+}
+
 export async function getSession(): Promise<Session | null> {
   if (!supabase) return null
   const { data } = await supabase.auth.getSession()
