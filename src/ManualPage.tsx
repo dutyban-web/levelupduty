@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { FileText, GripVertical, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { ManualDocumentDetail } from './ManualDocumentDetail'
+import { ManualKeysPanel } from './ManualKeysPanel'
 import { ManualSitesPanel } from './ManualSitesPanel'
 import {
   supabase,
@@ -214,8 +215,11 @@ export function ManualPage() {
   const navigate = useNavigate()
   const pathParts = useMemo(() => location.pathname.replace(/^\//, '').split('/').filter(Boolean), [location.pathname])
   const isSitesRoute = pathParts[0] === 'manual' && pathParts[1] === 'sites'
+  const isKeysRoute = pathParts[0] === 'manual' && pathParts[1] === 'keys'
   const routeDocId =
-    pathParts[0] === 'manual' && pathParts[1] && pathParts[1] !== 'sites' ? pathParts[1] : null
+    pathParts[0] === 'manual' && pathParts[1] && pathParts[1] !== 'sites' && pathParts[1] !== 'keys'
+      ? pathParts[1]
+      : null
 
   const [docs, setDocs] = useState<ManualDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -232,12 +236,13 @@ export function ManualPage() {
     return list
   }, [])
 
-  /** 문서 목록 URL일 때만 책장 로드 (사이트 탭·문서 상세에서는 생략) */
+  /** 문서 목록 URL일 때만 책장 로드 (사이트·Key 탭·문서 상세에서는 생략) */
   useEffect(() => {
     if (routeDocId) return
     if (isSitesRoute) return
+    if (isKeysRoute) return
     void reload()
-  }, [routeDocId, isSitesRoute, reload])
+  }, [routeDocId, isSitesRoute, isKeysRoute, reload])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -380,6 +385,11 @@ export function ManualPage() {
               <>
                 북마크, 지인 SNS, 유튜브 영상 등 자주 여는 링크를 정리합니다. 구분(예: SNS, 유튜브)으로 묶어 두면 찾기 쉽습니다.
               </>
+            ) : isKeysRoute ? (
+              <>
+                사이트 가입일, 앱 시리얼·라이선스 키 등을 <strong className="text-indigo-700">날짜·분류별 시트</strong>로
+                저장합니다. 민감한 값은 이 기기·계정에만 저장되니 공유 화면에서는 주의하세요.
+              </>
             ) : (
               <>
                 매뉴얼·체크리스트·업무 문서를 한곳에서 관리합니다. 책을 열면 본문을 노션처럼 편집하고, 탐색기에서{' '}
@@ -391,12 +401,22 @@ export function ManualPage() {
             <Link
               to="/manual"
               className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-bold transition-colors ${
-                !isSitesRoute
+                !isSitesRoute && !isKeysRoute
                   ? 'bg-violet-600 text-white shadow-sm'
                   : 'border border-violet-200 bg-white text-violet-800 hover:bg-violet-50'
               }`}
             >
-              문서
+              매뉴얼
+            </Link>
+            <Link
+              to="/manual/keys"
+              className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-bold transition-colors ${
+                isKeysRoute
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'border border-indigo-200 bg-white text-indigo-900 hover:bg-indigo-50'
+              }`}
+            >
+              Key
             </Link>
             <Link
               to="/manual/sites"
@@ -410,7 +430,7 @@ export function ManualPage() {
             </Link>
           </nav>
         </div>
-        {!isSitesRoute && (
+        {!isSitesRoute && !isKeysRoute && (
           <button
             type="button"
             onClick={addDoc}
@@ -424,6 +444,8 @@ export function ManualPage() {
 
       {isSitesRoute ? (
         <ManualSitesPanel />
+      ) : isKeysRoute ? (
+        <ManualKeysPanel />
       ) : (
         <>
       <div className="mb-4 rounded-2xl border border-violet-200/80 bg-violet-50/95 px-3 py-3 shadow-sm sm:px-4">

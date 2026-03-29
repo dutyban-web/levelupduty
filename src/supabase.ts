@@ -2968,3 +2968,148 @@ export async function deleteManualSite(id: string): Promise<boolean> {
   }
   return true
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  manual_keys — Manual 키·시리얼·가입 정보 시트 (RLS: 본인만)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface ManualKeyRow {
+  id: string
+  user_id: string
+  entry_date: string
+  category: string
+  name: string
+  key_text: string
+  note: string | null
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+function parseManualKeyRow(r: Record<string, unknown>): ManualKeyRow {
+  const ed = r.entry_date
+  const entryDate =
+    typeof ed === 'string'
+      ? ed.slice(0, 10)
+      : ed instanceof Date
+        ? ed.toISOString().slice(0, 10)
+        : String(ed ?? '').slice(0, 10)
+  return {
+    id: String(r.id ?? ''),
+    user_id: String(r.user_id ?? ''),
+    entry_date: entryDate || new Date().toISOString().slice(0, 10),
+    category: String(r.category ?? ''),
+    name: String(r.name ?? ''),
+    key_text: String(r.key_text ?? ''),
+    note: r.note != null && String(r.note).trim() !== '' ? String(r.note) : null,
+    sort_order: Number(r.sort_order ?? 0),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  }
+}
+
+export async function fetchManualKeys(): Promise<ManualKeyRow[]> {
+  if (!supabase) return []
+  const uid = await _manualUserId()
+  if (!uid) return []
+  try {
+    const { data, error } = await supabase
+      .from('manual_keys')
+      .select('id, user_id, entry_date, category, name, key_text, note, sort_order, created_at, updated_at')
+      .eq('user_id', uid)
+      .order('sort_order', { ascending: true })
+      .order('entry_date', { ascending: false })
+    if (error || !data) {
+      if (error) console.error('[Supabase] fetchManualKeys 실패:', error.message)
+      return []
+    }
+    return data.map(r => parseManualKeyRow(r as Record<string, unknown>))
+  } catch (e) {
+    console.error('[Supabase] fetchManualKeys 예외:', e)
+    return []
+  }
+}
+
+export async function insertManualKey(
+  payload: {
+    entry_date?: string
+    category?: string
+    name?: string
+    key_text?: string
+    note?: string | null
+  } = {},
+): Promise<ManualKeyRow | null> {
+  if (!supabase) return null
+  const uid = await _manualUserId()
+  if (!uid) {
+    console.error('[Supabase] insertManualKey: 로그인 필요')
+    return null
+  }
+  const { count } = await supabase
+    .from('manual_keys')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', uid)
+  const sortOrder = count ?? 0
+  const today = new Date().toISOString().slice(0, 10)
+  const { data, error } = await supabase
+    .from('manual_keys')
+    .insert({
+      user_id: uid,
+      entry_date: (payload.entry_date ?? today).trim().slice(0, 10) || today,
+      category: (payload.category ?? '').trim(),
+      name: (payload.name ?? '새 항목').trim() || '새 항목',
+      key_text: (payload.key_text ?? '').trim(),
+      note: payload.note != null && String(payload.note).trim() !== '' ? String(payload.note).trim() : null,
+      sort_order: sortOrder,
+    })
+    .select('id, user_id, entry_date, category, name, key_text, note, sort_order, created_at, updated_at')
+    .single()
+  if (error) {
+    console.error('[Supabase] insertManualKey 실패:', error.message)
+    return null
+  }
+  return parseManualKeyRow(data as Record<string, unknown>)
+}
+
+export async function updateManualKey(
+  id: string,
+  patch: {
+    entry_date?: string
+    category?: string
+    name?: string
+    key_text?: string
+    note?: string | null
+    sort_order?: number
+  },
+): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const p: Record<string, unknown> = {}
+  if (patch.entry_date !== undefined) p.entry_date = patch.entry_date.trim().slice(0, 10)
+  if (patch.category !== undefined) p.category = patch.category
+  if (patch.name !== undefined) p.name = patch.name
+  if (patch.key_text !== undefined) p.key_text = patch.key_text
+  if (patch.note !== undefined) p.note = patch.note
+  if (patch.sort_order !== undefined) p.sort_order = patch.sort_order
+  if (Object.keys(p).length === 0) return true
+  p.updated_at = new Date().toISOString()
+  const { error } = await supabase.from('manual_keys').update(p).eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] updateManualKey 실패:', error.message)
+    return false
+  }
+  return true
+}
+
+export async function deleteManualKey(id: string): Promise<boolean> {
+  if (!supabase) return false
+  const uid = await _manualUserId()
+  if (!uid) return false
+  const { error } = await supabase.from('manual_keys').delete().eq('id', id).eq('user_id', uid)
+  if (error) {
+    console.error('[Supabase] deleteManualKey 실패:', error.message)
+    return false
+  }
+  return true
+}
