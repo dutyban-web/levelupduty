@@ -1,7 +1,7 @@
 /**
  * Quest 화면용 — 행동 자산(Value) 참조 패널 + 퀘스트 연결
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   loadValueActionStore,
@@ -11,9 +11,137 @@ import {
   uniqueIdentities,
   type ValueActionStore,
 } from './valueActionData'
-import { Gem, ChevronRight, Link2, X } from 'lucide-react'
+import { Gem, ChevronRight, Link2, Plus, Trash2, X } from 'lucide-react'
 
 export type QuestRef = { id: string; name: string }
+
+const QUEST_CHECKLIST_KEY = 'quest_sidebar_checklist_v1'
+
+type QuickCheckItem = { id: string; text: string; done: boolean }
+
+function newChecklistId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `qcl-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+function loadQuickChecklist(): QuickCheckItem[] {
+  try {
+    const raw = localStorage.getItem(QUEST_CHECKLIST_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === 'object')
+      .map((x, i) => ({
+        id: typeof x.id === 'string' && x.id ? x.id : `legacy-${i}-${newChecklistId()}`,
+        text: String(x.text ?? ''),
+        done: Boolean(x.done),
+      }))
+  } catch {
+    return []
+  }
+}
+
+function saveQuickChecklist(items: QuickCheckItem[]) {
+  try {
+    localStorage.setItem(QUEST_CHECKLIST_KEY, JSON.stringify(items))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Quest 우측 패널 상단 — 단순 체크리스트 (로컬 저장) */
+function QuestQuickChecklist() {
+  const [items, setItems] = useState<QuickCheckItem[]>(loadQuickChecklist)
+
+  useEffect(() => {
+    saveQuickChecklist(items)
+  }, [items])
+
+  const add = () => {
+    setItems(prev => [...prev, { id: newChecklistId(), text: '', done: false }])
+  }
+
+  const remove = (id: string) => {
+    setItems(prev => prev.filter(x => x.id !== id))
+  }
+
+  const toggle = (id: string) => {
+    setItems(prev => prev.map(x => (x.id === id ? { ...x, done: !x.done } : x)))
+  }
+
+  const setText = (id: string, text: string) => {
+    setItems(prev => prev.map(x => (x.id === id ? { ...x, text } : x)))
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/90 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black text-slate-700">체크리스트</span>
+        <button
+          type="button"
+          onClick={add}
+          className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-50"
+        >
+          <Plus className="w-3 h-3" />
+          추가
+        </button>
+      </div>
+      <ul className="list-none m-0 p-2 space-y-1.5 max-h-[200px] overflow-y-auto">
+        {items.length === 0 ? (
+          <li className="text-[10px] text-slate-400 text-center py-3 px-2">항목을 추가해 두고 퀘스트 전에 가볍게 체크해 보세요.</li>
+        ) : (
+          items.map(row => (
+            <li
+              key={row.id}
+              className={`flex items-start gap-2 rounded-xl px-2 py-1.5 transition-colors ${
+                row.done
+                  ? 'border border-slate-600/90 bg-slate-700'
+                  : 'border border-violet-100 bg-white shadow-sm ring-1 ring-violet-100/70'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={row.done}
+                onChange={() => toggle(row.id)}
+                className={`mt-0.5 h-4 w-4 shrink-0 rounded focus:ring-2 focus:ring-offset-0 ${
+                  row.done
+                    ? 'border-slate-500 accent-emerald-400 focus:ring-emerald-400/40'
+                    : 'border-violet-200 accent-violet-600 focus:ring-violet-300'
+                }`}
+                aria-label="완료"
+              />
+              <input
+                type="text"
+                value={row.text}
+                onChange={e => setText(row.id, e.target.value)}
+                placeholder="할 일"
+                className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] outline-none focus:ring-0 ${
+                  row.done
+                    ? 'text-slate-400 line-through decoration-2 decoration-slate-500 placeholder:text-slate-500'
+                    : 'font-semibold text-slate-900 placeholder:text-slate-400'
+                }`}
+              />
+              <button
+                type="button"
+                onClick={() => remove(row.id)}
+                className={`shrink-0 rounded p-0.5 ${
+                  row.done
+                    ? 'text-slate-500 hover:bg-slate-600 hover:text-red-300'
+                    : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
+                }`}
+                title="삭제"
+                aria-label="삭제"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+    </div>
+  )
+}
 
 type Props = {
   quests: QuestRef[]
@@ -55,7 +183,9 @@ export function ValueReferencePanel({ quests, onClose }: Props) {
   }
 
   return (
-    <div className="rounded-2xl border border-violet-200/80 bg-gradient-to-b from-white to-violet-50/40 shadow-md overflow-hidden">
+    <div className="space-y-3">
+      <QuestQuickChecklist />
+      <div className="rounded-2xl border border-violet-200/80 bg-gradient-to-b from-white to-violet-50/40 shadow-md overflow-hidden">
       <div className="px-3 py-2.5 border-b border-violet-100 flex items-center justify-between gap-2 bg-violet-50/80">
         <div className="flex items-center gap-2 min-w-0">
           <Gem className="w-4 h-4 text-violet-600 shrink-0" />
@@ -187,6 +317,7 @@ export function ValueReferencePanel({ quests, onClose }: Props) {
             </ul>
           )}
         </div>
+      </div>
       </div>
     </div>
   )
