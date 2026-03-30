@@ -1,8 +1,25 @@
 /**
  * Quest 화면용 — 행동 자산(Value) 참조 패널 + 퀘스트 연결
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type SyntheticEvent } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import {
   loadValueActionStore,
   loadQuestValueLinks,
@@ -11,17 +28,41 @@ import {
   uniqueIdentities,
   type ValueActionStore,
 } from './valueActionData'
-import { Gem, ChevronRight, Link2, Plus, Trash2, X } from 'lucide-react'
+import {
+  Calendar,
+  CheckCircle2,
+  Gem,
+  ChevronRight,
+  GripVertical,
+  Link2,
+  ListTodo,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react'
 
 export type QuestRef = { id: string; name: string }
 
 const QUEST_CHECKLIST_KEY = 'quest_sidebar_checklist_v1'
 
-type QuickCheckItem = { id: string; text: string; done: boolean }
+type ChecklistFilter = 'all' | 'pending' | 'done'
+
+type QuickCheckItem = { id: string; text: string; done: boolean; entry_date: string }
+
+function todayYmd(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
 function newChecklistId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `qcl-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+function normalizeOrder(items: QuickCheckItem[]): QuickCheckItem[] {
+  const pending = items.filter(i => !i.done)
+  const done = items.filter(i => i.done)
+  return [...pending, ...done]
 }
 
 function loadQuickChecklist(): QuickCheckItem[] {
@@ -30,13 +71,21 @@ function loadQuickChecklist(): QuickCheckItem[] {
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed
+    const t = todayYmd()
+    const mapped = parsed
       .filter((x): x is Record<string, unknown> => x != null && typeof x === 'object')
-      .map((x, i) => ({
-        id: typeof x.id === 'string' && x.id ? x.id : `legacy-${i}-${newChecklistId()}`,
-        text: String(x.text ?? ''),
-        done: Boolean(x.done),
-      }))
+      .map((x, i) => {
+        const ed = x.entry_date
+        const entryDate =
+          typeof ed === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ed) ? ed : t
+        return {
+          id: typeof x.id === 'string' && x.id ? x.id : `legacy-${i}-${newChecklistId()}`,
+          text: String(x.text ?? ''),
+          done: Boolean(x.done),
+          entry_date: entryDate,
+        }
+      })
+    return normalizeOrder(mapped)
   } catch {
     return []
   }
@@ -50,16 +99,222 @@ function saveQuickChecklist(items: QuickCheckItem[]) {
   }
 }
 
-/** Quest 우측 패널 상단 — 단순 체크리스트 (로컬 저장) */
+function stopDnD(e: SyntheticEvent) {
+  e.stopPropagation()
+}
+
+function SortableCheckRow({
+  row,
+  showDates,
+  onToggle,
+  onRemove,
+  onText,
+  onDate,
+}: {
+  row: QuickCheckItem
+  showDates: boolean
+  onToggle: (id: string) => void
+  onRemove: (id: string) => void
+  onText: (id: string, text: string) => void
+  onDate: (id: string, date: string) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.id })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.88 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  } as CSSProperties
+
+  const dateInp =
+    'shrink-0 rounded-md border px-1 py-0.5 text-[10px] leading-tight min-w-[6.5rem] max-w-[7.5rem] ' +
+    (row.done
+      ? 'border-slate-500 bg-slate-600 text-slate-200 [color-scheme:dark]'
+      : 'border-violet-200 bg-white text-slate-800')
+
+  const shortDate = (() => {
+    const [, m, d] = row.entry_date.slice(0, 10).split('-')
+    if (!m || !d) return row.entry_date
+    return `${Number(m)}/${Number(d)}`
+  })()
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-start gap-1.5 rounded-xl px-1.5 py-1.5 transition-colors ${
+        row.done
+          ? 'border border-slate-600/90 bg-slate-700 shadow-inner'
+          : 'border border-violet-100 bg-white shadow-sm ring-1 ring-violet-100/80'
+      }`}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        className={`touch-none mt-0.5 flex h-7 w-6 shrink-0 cursor-grab touch-manipulation items-center justify-center rounded-md active:cursor-grabbing ${
+          row.done ? 'text-slate-400 hover:bg-slate-600' : 'text-slate-400 hover:bg-violet-50'
+        }`}
+        title="끌어서 순서 변경"
+        aria-label="순서 변경"
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+      {showDates ? (
+        <input
+          type="date"
+          value={row.entry_date.slice(0, 10)}
+          onChange={e => onDate(row.id, e.target.value)}
+          onPointerDown={stopDnD}
+          onClick={stopDnD}
+          className={dateInp}
+          title="날짜"
+          aria-label="날짜"
+        />
+      ) : (
+        <span
+          className={`mt-1 shrink-0 min-w-[2.25rem] text-center text-[9px] font-bold tabular-nums ${
+            row.done ? 'text-slate-500' : 'text-violet-600/90'
+          }`}
+          title={`날짜 ${row.entry_date.slice(0, 10)} — 상단에서 날짜 입력을 펼치면 수정`}
+        >
+          {shortDate}
+        </span>
+      )}
+      <input
+        type="checkbox"
+        checked={row.done}
+        onChange={() => onToggle(row.id)}
+        onPointerDown={stopDnD}
+        onClick={stopDnD}
+        className={`mt-1 h-4 w-4 shrink-0 cursor-pointer rounded focus:ring-2 focus:ring-offset-0 ${
+          row.done
+            ? 'border-slate-500 accent-emerald-400 focus:ring-emerald-400/40'
+            : 'border-violet-300 accent-violet-600 focus:ring-violet-300'
+        }`}
+        aria-label="완료"
+      />
+      <input
+        type="text"
+        value={row.text}
+        onChange={e => onText(row.id, e.target.value)}
+        onPointerDown={stopDnD}
+        onClick={stopDnD}
+        placeholder="할 일"
+        className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] outline-none focus:ring-0 ${
+          row.done
+            ? 'text-slate-400 line-through decoration-2 decoration-slate-500 placeholder:text-slate-500'
+            : 'font-semibold text-slate-900 placeholder:text-slate-400'
+        }`}
+      />
+      {!row.done ? (
+        <button
+          type="button"
+          onClick={() => onToggle(row.id)}
+          onPointerDown={stopDnD}
+          className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-extrabold text-emerald-800 hover:bg-emerald-100"
+          title="완료 처리"
+        >
+          <CheckCircle2 className="h-3 w-3" />
+          완료
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onToggle(row.id)}
+          onPointerDown={stopDnD}
+          className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded-md border border-slate-500 bg-slate-600 px-1.5 py-0.5 text-[9px] font-bold text-slate-200 hover:bg-slate-500"
+          title="진행 중으로 되돌리기"
+        >
+          <RotateCcw className="h-3 w-3" />
+          취소
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => onRemove(row.id)}
+        onPointerDown={stopDnD}
+        className={`mt-0.5 shrink-0 rounded p-0.5 ${
+          row.done
+            ? 'text-slate-500 hover:bg-slate-600 hover:text-red-300'
+            : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
+        }`}
+        title="삭제"
+        aria-label="삭제"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    </li>
+  )
+}
+
+function ChecklistBlock({
+  title,
+  list,
+  showDates,
+  onDragEnd,
+  onToggle,
+  onRemove,
+  onText,
+  onDate,
+}: {
+  title?: string
+  list: QuickCheckItem[]
+  showDates: boolean
+  onDragEnd: (e: DragEndEvent) => void
+  onToggle: (id: string) => void
+  onRemove: (id: string) => void
+  onText: (id: string, text: string) => void
+  onDate: (id: string, date: string) => void
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  if (list.length === 0) return null
+  return (
+    <div className="space-y-1">
+      {title && (
+        <p className="m-0 px-1 text-[9px] font-extrabold uppercase tracking-wider text-slate-400">{title}</p>
+      )}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={list.map(i => i.id)} strategy={verticalListSortingStrategy}>
+          <ul className="m-0 list-none space-y-1.5 p-0">
+            {list.map(row => (
+              <SortableCheckRow
+                key={row.id}
+                row={row}
+                showDates={showDates}
+                onToggle={onToggle}
+                onRemove={onRemove}
+                onText={onText}
+                onDate={onDate}
+              />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
+    </div>
+  )
+}
+
+/** Quest 우측 패널 상단 — 체크리스트 (로컬 저장, 드래그 정렬, 날짜, 완료 하단·필터) */
 function QuestQuickChecklist() {
   const [items, setItems] = useState<QuickCheckItem[]>(loadQuickChecklist)
+  const [filterMode, setFilterMode] = useState<ChecklistFilter>('all')
+  /** false면 날짜는 M/D 짧게만 표시, true면 date 입력 필드 */
+  const [showDates, setShowDates] = useState(false)
 
   useEffect(() => {
     saveQuickChecklist(items)
   }, [items])
 
+  const pending = useMemo(() => items.filter(i => !i.done), [items])
+  const done = useMemo(() => items.filter(i => i.done), [items])
+
   const add = () => {
-    setItems(prev => [...prev, { id: newChecklistId(), text: '', done: false }])
+    const row: QuickCheckItem = { id: newChecklistId(), text: '', done: false, entry_date: todayYmd() }
+    setItems(prev => normalizeOrder([...prev.filter(i => !i.done), row, ...prev.filter(i => i.done)]))
   }
 
   const remove = (id: string) => {
@@ -67,78 +322,178 @@ function QuestQuickChecklist() {
   }
 
   const toggle = (id: string) => {
-    setItems(prev => prev.map(x => (x.id === id ? { ...x, done: !x.done } : x)))
+    setItems(prev => {
+      const i = prev.findIndex(x => x.id === id)
+      if (i < 0) return prev
+      const copy = [...prev]
+      const [it] = copy.splice(i, 1)
+      it.done = !it.done
+      if (it.done) copy.push(it)
+      else {
+        const fd = copy.findIndex(x => x.done)
+        if (fd === -1) copy.push(it)
+        else copy.splice(fd, 0, it)
+      }
+      return copy
+    })
   }
 
   const setText = (id: string, text: string) => {
     setItems(prev => prev.map(x => (x.id === id ? { ...x, text } : x)))
   }
 
+  const setDate = (id: string, entry_date: string) => {
+    const d = entry_date.slice(0, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return
+    setItems(prev => prev.map(x => (x.id === id ? { ...x, entry_date: d } : x)))
+  }
+
+  const reorderPending = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const np = [...pending]
+    const oi = np.findIndex(x => x.id === String(active.id))
+    const ni = np.findIndex(x => x.id === String(over.id))
+    if (oi < 0 || ni < 0) return
+    const moved = arrayMove(np, oi, ni)
+    setItems([...moved, ...done])
+  }
+
+  const reorderDone = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const nd = [...done]
+    const oi = nd.findIndex(x => x.id === String(active.id))
+    const ni = nd.findIndex(x => x.id === String(over.id))
+    if (oi < 0 || ni < 0) return
+    const moved = arrayMove(nd, oi, ni)
+    setItems([...pending, ...moved])
+  }
+
+  const emptyMessage =
+    filterMode === 'done'
+      ? '완료된 항목이 없습니다.'
+      : filterMode === 'pending'
+        ? '진행 중인 항목이 없습니다.'
+        : '항목을 추가해 두고 퀘스트 전에 가볍게 체크해 보세요.'
+
   return (
     <div className="rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden">
-      <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/90 flex items-center justify-between gap-2">
+      <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/90 flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] font-black text-slate-700">체크리스트</span>
-        <button
-          type="button"
-          onClick={add}
-          className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-50"
-        >
-          <Plus className="w-3 h-3" />
-          추가
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setShowDates(v => !v)}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border text-slate-600 transition-colors ${
+              showDates
+                ? 'border-amber-300 bg-amber-50 text-amber-900'
+                : 'border-slate-200 bg-white hover:bg-slate-50'
+            }`}
+            title={showDates ? '날짜 입력 접기' : '날짜 입력 펼치기'}
+            aria-label={showDates ? '날짜 입력 접기' : '날짜 입력 펼치기'}
+            aria-pressed={showDates}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterMode(m => (m === 'pending' ? 'all' : 'pending'))}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border text-slate-600 transition-colors ${
+              filterMode === 'pending'
+                ? 'border-violet-300 bg-violet-100 text-violet-800'
+                : 'border-slate-200 bg-white hover:bg-slate-50'
+            }`}
+            title="진행 중만 보기"
+            aria-label="진행 중만 보기"
+            aria-pressed={filterMode === 'pending'}
+          >
+            <ListTodo className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterMode(m => (m === 'done' ? 'all' : 'done'))}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border text-slate-600 transition-colors ${
+              filterMode === 'done'
+                ? 'border-emerald-300 bg-emerald-100 text-emerald-800'
+                : 'border-slate-200 bg-white hover:bg-slate-50'
+            }`}
+            title="완료만 보기"
+            aria-label="완료만 보기"
+            aria-pressed={filterMode === 'done'}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={add}
+            className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-50"
+          >
+            <Plus className="w-3 h-3" />
+            추가
+          </button>
+        </div>
       </div>
-      <ul className="list-none m-0 p-2 space-y-1.5 max-h-[200px] overflow-y-auto">
+      <div className="p-2 space-y-3">
         {items.length === 0 ? (
-          <li className="text-[10px] text-slate-400 text-center py-3 px-2">항목을 추가해 두고 퀘스트 전에 가볍게 체크해 보세요.</li>
+          <p className="m-0 text-[10px] text-slate-400 text-center py-3 px-2">{emptyMessage}</p>
+        ) : filterMode === 'all' ? (
+          <>
+            {pending.length > 0 && (
+              <ChecklistBlock
+                list={pending}
+                showDates={showDates}
+                onDragEnd={reorderPending}
+                onToggle={toggle}
+                onRemove={remove}
+                onText={setText}
+                onDate={setDate}
+              />
+            )}
+            {pending.length > 0 && done.length > 0 && (
+              <div className="border-t border-slate-100 pt-2" role="separator" aria-hidden />
+            )}
+            {done.length > 0 && (
+              <ChecklistBlock
+                title="완료"
+                list={done}
+                showDates={showDates}
+                onDragEnd={reorderDone}
+                onToggle={toggle}
+                onRemove={remove}
+                onText={setText}
+                onDate={setDate}
+              />
+            )}
+          </>
+        ) : filterMode === 'pending' ? (
+          pending.length === 0 ? (
+            <p className="m-0 text-[10px] text-slate-400 text-center py-3 px-2">{emptyMessage}</p>
+          ) : (
+            <ChecklistBlock
+              list={pending}
+              showDates={showDates}
+              onDragEnd={reorderPending}
+              onToggle={toggle}
+              onRemove={remove}
+              onText={setText}
+              onDate={setDate}
+            />
+          )
+        ) : done.length === 0 ? (
+          <p className="m-0 text-[10px] text-slate-400 text-center py-3 px-2">{emptyMessage}</p>
         ) : (
-          items.map(row => (
-            <li
-              key={row.id}
-              className={`flex items-start gap-2 rounded-xl px-2 py-1.5 transition-colors ${
-                row.done
-                  ? 'border border-slate-600/90 bg-slate-700'
-                  : 'border border-violet-100 bg-white shadow-sm ring-1 ring-violet-100/70'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={row.done}
-                onChange={() => toggle(row.id)}
-                className={`mt-0.5 h-4 w-4 shrink-0 rounded focus:ring-2 focus:ring-offset-0 ${
-                  row.done
-                    ? 'border-slate-500 accent-emerald-400 focus:ring-emerald-400/40'
-                    : 'border-violet-200 accent-violet-600 focus:ring-violet-300'
-                }`}
-                aria-label="완료"
-              />
-              <input
-                type="text"
-                value={row.text}
-                onChange={e => setText(row.id, e.target.value)}
-                placeholder="할 일"
-                className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] outline-none focus:ring-0 ${
-                  row.done
-                    ? 'text-slate-400 line-through decoration-2 decoration-slate-500 placeholder:text-slate-500'
-                    : 'font-semibold text-slate-900 placeholder:text-slate-400'
-                }`}
-              />
-              <button
-                type="button"
-                onClick={() => remove(row.id)}
-                className={`shrink-0 rounded p-0.5 ${
-                  row.done
-                    ? 'text-slate-500 hover:bg-slate-600 hover:text-red-300'
-                    : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
-                }`}
-                title="삭제"
-                aria-label="삭제"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </li>
-          ))
+          <ChecklistBlock
+            list={done}
+            showDates={showDates}
+            onDragEnd={reorderDone}
+            onToggle={toggle}
+            onRemove={remove}
+            onText={setText}
+            onDate={setDate}
+          />
         )}
-      </ul>
+      </div>
     </div>
   )
 }

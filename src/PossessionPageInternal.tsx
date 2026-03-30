@@ -283,7 +283,7 @@ export function PossessionPage({ identities, activeIdentityId, onRefresh, onRefr
       scheduleSyncIdle(SYNC_IDLE_MS)
     } else {
       onRefresh()
-      emitAppSyncStatus('error')
+      emitAppSyncStatus('error', { errorCode: 'IDENTITY_UPDATE', errorDetail: '태세(Identity) 저장에 실패했습니다.' })
     }
   }
 

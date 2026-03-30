@@ -13,13 +13,41 @@
  */
 
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js'
-import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from '../syncIndicatorBus'
+import { appSyncErrorFromUnknown, emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from '../syncIndicatorBus'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 
+/** 느린 응답·모바일 네트워크에서 조기 실패 줄이기 (브라우저/프록시 한도는 별도) */
+const SUPABASE_FETCH_TIMEOUT_MS = 90_000
+
+function createTimeoutFetch(timeoutMs: number) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    const upstream = init?.signal
+    const onUpstreamAbort = () => {
+      clearTimeout(timer)
+      ctrl.abort()
+    }
+    if (upstream) {
+      if (upstream.aborted) {
+        clearTimeout(timer)
+        return Promise.reject(new DOMException('Aborted', 'AbortError'))
+      }
+      upstream.addEventListener('abort', onUpstreamAbort, { once: true })
+    }
+    return fetch(input, { ...init, signal: ctrl.signal }).finally(() => {
+      clearTimeout(timer)
+      upstream?.removeEventListener('abort', onUpstreamAbort)
+    })
+  }
+}
+
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      global: { fetch: createTimeoutFetch(SUPABASE_FETCH_TIMEOUT_MS) },
+    })
   : null
 
 export const isSupabaseReady = Boolean(supabase)
@@ -78,7 +106,7 @@ export async function kvSet<T>(key: string, value: T): Promise<void> {
     await upsertAppKvRow(key, value)
   } catch (error) {
     console.warn('[Supabase] kvSet error:', error, { key })
-    emitAppSyncStatus('error')
+    emitAppSyncStatus('error', appSyncErrorFromUnknown(error, 'KV_SET'))
   }
 }
 
@@ -209,7 +237,7 @@ export async function kvSoftDelete(key: string): Promise<boolean> {
     return true
   } catch (e) {
     console.warn('[Supabase] kvSoftDelete error:', e, { key })
-    emitAppSyncStatus('error')
+    emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'KV_SOFT_DELETE'))
     return false
   }
 }
@@ -250,7 +278,7 @@ export async function kvRestore(key: string): Promise<boolean> {
     return true
   } catch (e) {
     console.warn('[Supabase] kvRestore error:', e, { key })
-    emitAppSyncStatus('error')
+    emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'KV_RESTORE'))
     return false
   }
 }
@@ -283,7 +311,7 @@ export async function kvPermanentDelete(key: string): Promise<boolean> {
     return true
   } catch (e) {
     console.warn('[Supabase] kvPermanentDelete error:', e, { key })
-    emitAppSyncStatus('error')
+    emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'KV_PERMANENT_DELETE'))
     return false
   }
 }

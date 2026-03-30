@@ -40,7 +40,7 @@ import { UnifiedTagSourcesPage } from './UnifiedTagSourcesPage'
 import { PomodoroWeeklyCalendar } from './PomodoroWeeklyCalendar'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
-import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from './syncIndicatorBus'
+import { emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS, appSyncErrorFromUnknown } from './syncIndicatorBus'
 import { X, Trash2, CalendarDays, Plus, ChevronLeft, ChevronRight } from 'lucide-react'
 
 /** Quest card fields used by Life calendar (matches App `Card` for these props) */
@@ -992,11 +992,11 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
           scheduleSyncIdle(SYNC_IDLE_MS)
         } else {
           setNotes(prev => prev.filter(n => n.id !== tempId))
-          emitAppSyncStatus('error')
+          emitAppSyncStatus('error', { errorCode: 'JOURNAL_INSERT', errorDetail: '저널 추가 응답이 비어 있습니다.' })
         }
-      } catch {
+      } catch (e) {
         setNotes(prev => prev.filter(n => n.id !== tempId))
-        emitAppSyncStatus('error')
+        emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'JOURNAL_INSERT'))
       }
     } else {
       const prevSnap = notes.find(n => n.id === editorNoteId)
@@ -1009,9 +1009,9 @@ function JournalCalendarPage({ onOpenNote, onJournalChange }: { onOpenNote: (id:
         refreshJournal()
         emitAppSyncStatus('synced')
         scheduleSyncIdle(SYNC_IDLE_MS)
-      } catch {
+      } catch (e) {
         if (prevSnap) setNotes(prev => prev.map(n => n.id === editorNoteId ? prevSnap : n))
-        emitAppSyncStatus('error')
+        emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'JOURNAL_UPDATE'))
       }
     }
   }

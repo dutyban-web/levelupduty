@@ -26,7 +26,7 @@ import { kvSet, kvSetAttempt, kvGet, kvGetAll, kvListTrashedKeys, isSupabaseRead
 import { TrashPage } from './TrashPage'
 import { CALENDAR_KEY, loadCalendar, BeautifulLifeSection } from './CalendarLifeSection'
 import { PossessionPage } from './PossessionPageInternal'
-import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS } from './syncIndicatorBus'
+import { subscribeAppSyncStatus, emitAppSyncStatus, scheduleSyncIdle, SYNC_IDLE_MS, appSyncErrorFromUnknown } from './syncIndicatorBus'
 import { hydrateLocalStorageFromKvRecord, migrateLocalToKvIfMissing, ACT_WAY_OF_BEING_KEY } from './kvSyncedKeys'
 import {
   supabase as _sbClient,
@@ -2667,10 +2667,13 @@ export default function App() {
   // ── Supabase 동기화: 평소 UI 없음, 실패 시에만 코너에 1회성 고정 알림 ──
   const [syncError, setSyncError] = useState<string | null>(null)
 
-  useEffect(() => subscribeAppSyncStatus(s => {
+  useEffect(() => subscribeAppSyncStatus((s, err) => {
     if (s === 'synced') setSyncError(null)
     if (s === 'error') {
-      setSyncError(prev => prev ?? '동기화에 실패했습니다. 네트워크와 로그인 상태를 확인해 주세요.')
+      const base = '동기화에 실패했습니다. 네트워크와 로그인 상태를 확인해 주세요.'
+      const codeLine = err?.errorCode ? `\n코드: ${err.errorCode}` : ''
+      const detailLine = err?.errorDetail ? `\n${err.errorDetail}` : ''
+      setSyncError(prev => prev ?? `${base}${codeLine}${detailLine}`)
     }
   }), [])
 
@@ -2730,9 +2733,23 @@ export default function App() {
   //    worlds / saju / calendar / travel / gourmet → app_kv (KV 스토어)
   useEffect(() => {
     if (!isSupabaseReady) return
-    emitAppSyncStatus('syncing')
+    let cancelled = false
+    const maxAttempts = 3
+    const retryBackoffMs = [3500, 10000]
 
-    Promise.all([
+    void (async () => {
+      emitAppSyncStatus('syncing')
+      let lastErr: unknown
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (cancelled) return
+        if (attempt > 0) {
+          await new Promise<void>(resolve => {
+            setTimeout(resolve, retryBackoffMs[attempt - 1] ?? 5000)
+          })
+          if (cancelled) return
+        }
+        try {
+          await Promise.all([
       // ① user_stats 테이블에서 레벨·경험치·스탯 가져오기
       fetchUserStats().then(row => {
         if (!row) return
@@ -2832,11 +2849,22 @@ export default function App() {
         }
         localStorage.setItem('cal_store_migrated_v1', '1')
       })(),
-    ])
-      .then(() => { emitAppSyncStatus('synced'); scheduleSyncIdle(SYNC_IDLE_MS) })
-      .catch(() => { emitAppSyncStatus('error') })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+          ])
+          if (cancelled) return
+          emitAppSyncStatus('synced')
+          scheduleSyncIdle(SYNC_IDLE_MS)
+          return
+        } catch (e) {
+          lastErr = e
+          console.warn('[App] initial sync attempt failed', attempt + 1, '/', maxAttempts, e)
+        }
+      }
+      if (cancelled) return
+      emitAppSyncStatus('error', appSyncErrorFromUnknown(lastErr, 'INIT_SYNC'))
+    })()
+
+    return () => { cancelled = true }
+  }, [isSupabaseReady])
 
   // ── Supabase 실시간 구독 (다른 기기 변경 → 자동 반영) ──
   useEffect(() => {
@@ -2953,14 +2981,38 @@ export default function App() {
       }
     }
     try {
-      const keys: string[] = []
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i)
-        if (k && (k.startsWith('creative_os_') || k.startsWith('creative-os-'))) keys.push(k)
+      /** localStorage 키 수집 — 동기화 지연을 감안해 최대 5초 폴링 */
+      const collectKeys = (): string[] => {
+        const result: string[] = []
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i)
+          if (k && (k.startsWith('creative_os_') || k.startsWith('creative-os-'))) result.push(k)
+        }
+        return result
       }
+
+      let keys: string[] = collectKeys()
+
+      if (keys.length === 0) {
+        // 동기화가 아직 진행 중일 수 있으므로 300ms 간격으로 최대 5초 재시도
+        const INTERVAL_MS = 300
+        const MAX_WAIT_MS = 5000
+        let waited = 0
+        await new Promise<void>((resolve) => {
+          const timer = setInterval(() => {
+            waited += INTERVAL_MS
+            keys = collectKeys()
+            if (keys.length > 0 || waited >= MAX_WAIT_MS) {
+              clearInterval(timer)
+              resolve()
+            }
+          }, INTERVAL_MS)
+        })
+      }
+
       keys.sort()
       if (keys.length === 0) {
-        alert('localStorage에 creative_os_* · creative-os-* 키가 없습니다.')
+        alert('localStorage에 creative_os_* · creative-os-* 키가 없습니다.\n(5초간 재시도했으나 키를 찾지 못했습니다.)')
         return
       }
 
@@ -2998,7 +3050,7 @@ export default function App() {
       const summary = `총 ${total}개 중 ${ok}개 성공, ${fail}개 실패`
 
       if (fail > 0) {
-        emitAppSyncStatus('error')
+        emitAppSyncStatus('error', { errorCode: 'FORCE_RECOVER_PARTIAL', errorDetail: summary })
         alert(`${summary}\n\n실패한 항목은 개발자 도구 콘솔에 상세 로그가 있습니다.`)
         return
       }
@@ -3013,7 +3065,7 @@ export default function App() {
       window.location.reload()
     } catch (e) {
       console.error('[forceRecover] unexpected', e)
-      emitAppSyncStatus('error')
+      emitAppSyncStatus('error', appSyncErrorFromUnknown(e, 'FORCE_RECOVER'))
       alert('업로드 처리 중 예외가 발생했습니다. 콘솔을 확인하세요.')
     } finally {
       kvRecoveringRef.current = false
@@ -4221,7 +4273,7 @@ export default function App() {
                 boxShadow: '0 0 0 2px rgba(239,68,68,0.25)',
               }}
             />
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#991b1b', lineHeight: 1.45 }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#991b1b', lineHeight: 1.45, whiteSpace: 'pre-line' }}>
               {syncError}
             </span>
             <button
